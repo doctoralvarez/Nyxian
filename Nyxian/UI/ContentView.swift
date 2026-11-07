@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.5.0
+ Fork doctoralvarez/Nyxian — version 1.6.0
  Changelog:
+  - 1.6.0 (2026-11-07): ForkSDKPatches — the iOS 27 SDK declares @State as a
+    macro (SwiftUIMacros.StateMacro) next to the State property wrapper; the
+    macro wins and its plugin only ships with Xcode, so every @State failed.
+    On launch the SDK's SwiftUI interfaces get that macro renamed once, and
+    the cached SwiftUI modules are rebuilt: @State is the property wrapper
+    again (as with SDK 26.5).
   - 1.5.0 (2026-11-07): app icons — the importer turns the package's AppIcon
     into a real icon (CFBundleIcons + PNGs in Resources), "Set App Icon…" for
     any project, and the exporter writes an AppIcon.appiconset
@@ -120,6 +126,7 @@ import UniformTypeIdentifiers
         /* fork: hold ⌘ for the shortcut list; editor font size 20 by default */
         KeyboardShortcutsHUD.shared.start()
         ForkDefaults.apply()
+        ForkSDKPatches.apply()
         
         reloadProjectsFromDisk()
     }
@@ -2131,6 +2138,55 @@ final class KeyboardShortcutsHUD {
 }
 
 // MARK: - Fork: one-time defaults
+
+/// One-time edits of Nyxian's own copy of the iOS SDK so it builds without Xcode-only compiler plugins.
+enum ForkSDKPatches {
+    private static let markerName = ".nyxian-fork-sdk-patches"
+    private static let version = "1"
+    
+    /// Swift macros whose implementation only ships inside Xcode, renamed so the
+    /// declaration with the same name that does not need a plugin is used.
+    private static let xcodeOnlyMacros = ["State"]
+    
+    static func apply() {
+        DispatchQueue.global(qos: .utility).async {
+            let fm = FileManager.default
+            let sdk: URL = NXBootstrap.shared().sdkURL
+            let marker = sdk.appendingPathComponent(markerName)
+            guard fm.fileExists(atPath: sdk.path),
+                  (try? String(contentsOf: marker, encoding: .utf8)) != version else { return }
+            
+            var patchedFiles = 0
+            for framework in ["SwiftUICore", "SwiftUI"] {
+                let modules = sdk.appendingPathComponent("System/Library/Frameworks/\(framework).framework/Modules")
+                guard let enumerator = fm.enumerator(at: modules, includingPropertiesForKeys: nil) else { continue }
+                for case let url as URL in enumerator where url.pathExtension == "swiftinterface" {
+                    guard var text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                    let original = text
+                    for name in xcodeOnlyMacros {
+                        /* "public macro State() = #externalMacro(module: "SwiftUIMacros", …)" */
+                        text = text.replacingOccurrences(of: #"\bmacro\s+"# + name + #"(?=\s*[(<])"#, with: "macro __NyxianXcodeOnly" + name, options: .regularExpression)
+                    }
+                    if text != original, (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil {
+                        patchedFiles += 1
+                    }
+                }
+            }
+            
+            /* modules built from the old interfaces must be rebuilt */
+            let cache: URL = NXBootstrap.shared().swiftModuleCacheURL
+            if patchedFiles > 0, let enumerator = fm.enumerator(at: cache, includingPropertiesForKeys: nil) {
+                for case let url as URL in enumerator {
+                    let name = url.lastPathComponent
+                    if name.hasPrefix("SwiftUI-") || name.hasPrefix("SwiftUICore-") || name.hasPrefix("SwiftUI.") || name.hasPrefix("SwiftUICore.") {
+                        try? fm.removeItem(at: url)
+                    }
+                }
+            }
+            try? version.write(to: marker, atomically: true, encoding: .utf8)
+        }
+    }
+}
 
 enum ForkDefaults {
     /// Editor font size 20 by default; an earlier untouched default of 12 is moved to 20 once.

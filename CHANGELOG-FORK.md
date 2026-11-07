@@ -4,6 +4,19 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.18.0 — 2026-11-07
+
+- **@State works with the iOS 27 SDK**: that SDK declares `@State` as a macro
+  in SwiftUICore (`SwiftUIMacros.StateMacro`) alongside the `State` property
+  wrapper; the macro wins name lookup and its plugin
+  (`libSwiftUIMacros.dylib`) only ships inside Xcode — the same failure
+  Command Line Tools builds on the Mac have. On launch, Nyxian renames that
+  macro once in its own copy of the SDK (SwiftUI / SwiftUICore interfaces) and
+  clears the cached SwiftUI modules, so `@State` is the property wrapper again
+  (what SDK 26.5 and earlier had). Your code does not change.
+- The overlay experiments of 1.17.0–1.17.3 were not the cause; Nyxian stops
+  at the first failing file, which is why this only surfaced now.
+
 ## 1.17.4 — 2026-11-07
 
 - **@State fixed for real**: the framework + SwiftUI overlays of the iOS 27
