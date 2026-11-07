@@ -4,6 +4,17 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.17.3 — 2026-11-07
+
+- **Fix for 1.17.0**: turning on every cross-import overlay broke `@State`
+  ("external macro implementation type 'SwiftUIMacros.StateMacro' could not be
+  found"): an iOS 27 SDK overlay makes `@State` a macro whose plugin only ships
+  with Xcode. The global flag is gone; Nyxian now imports only the overlays the
+  project's code uses, when the SDK has them: `SpriteView` → `_SpriteKit_SwiftUI`,
+  `SceneView` → `_SceneKit_SwiftUI`, `Map`/`Marker` → `_MapKit_SwiftUI`,
+  `VideoPlayer` → `_AVKit_SwiftUI`, StoreKit views, `SignInWithAppleButton`,
+  `quickLookPreview`, `PhotosPicker`.
+
 ## 1.17.2 — 2026-11-07
 
 - `Package.swift` (and `Package@swift-*.swift`, `.swiftpm/`, `.build/`) inside
