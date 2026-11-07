@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-07): the import button is now a menu: "Import File…" or
+    "Clone from GitHub…" (a Nyxian project stays linked to the repository; a
+    Swift Playgrounds package is converted). "GitHub Account…" is there too.
   - 1.2.0 (2026-11-07): the shortcut list honours its Customization toggle;
     Spanish names for Format Document and Rename Symbol.
   - 1.1.0 (2026-11-07): holding ⌘ alone for 2 seconds shows the keyboard
@@ -75,11 +78,20 @@ import GameController
             target: self,
             action: #selector(presentProjectCreationSheet)
         )
+        /* fork: import a file, or clone a repository from GitHub */
         let importItem = UIBarButtonItem(
             image: UIImage(systemName: "square.and.arrow.down.fill"),
-            style: .plain,
-            target: self,
-            action: #selector(presentImportPicker)
+            menu: UIMenu(children: [
+                UIAction(title: "Import File…", image: UIImage(systemName: "doc.zipper")) { [weak self] _ in
+                    self?.presentImportPicker()
+                },
+                UIAction(title: "Clone from GitHub…", image: UIImage(systemName: "arrow.down.circle")) { [weak self] _ in
+                    self?.forkPresentGitHubClone()
+                },
+                UIAction(title: "GitHub Account…", image: UIImage(systemName: "person.crop.circle")) { [weak self] _ in
+                    self?.forkPresentGitHubAccount()
+                }
+            ])
         )
         self.navigationItem.setRightBarButtonItems([createItem, importItem], animated: false)
         
@@ -978,6 +990,93 @@ extension ContentViewController {
             self.present(alert, animated: true)
         } catch {
             NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: error.localizedDescription, withDelay: 0.0)
+        }
+    }
+}
+
+// MARK: - Fork: clone from GitHub
+
+extension ContentViewController {
+    /// Asks for owner/repo and branch, then downloads it as a new project.
+    func forkPresentGitHubClone() {
+        guard GitHubTokenStore.token != nil else {
+            forkPresentGitHubAccount()
+            return
+        }
+        let alert = UIAlertController(title: "Clone from GitHub", message: "A Nyxian project (with Config/Project.plist) or a Swift Playgrounds app (with Package.swift).", preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "owner/repo"
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addTextField { field in
+            field.placeholder = "branch (main)"
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Clone", style: .default) { [weak self, weak alert] _ in
+            var text = (alert?.textFields?[0].text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            /* accept a pasted https://github.com/owner/repo(.git) link too */
+            for prefix in ["https://github.com/", "http://github.com/", "github.com/"] where text.lowercased().hasPrefix(prefix) {
+                text = String(text.dropFirst(prefix.count))
+            }
+            if text.hasSuffix(".git") { text = String(text.dropLast(4)) }
+            let parts = text.split(separator: "/").map(String.init)
+            var branch = (alert?.textFields?[1].text ?? "").trimmingCharacters(in: .whitespaces)
+            if branch.isEmpty { branch = "main" }
+            guard parts.count >= 2, !parts[0].isEmpty, !parts[1].isEmpty else {
+                self?.forkGitHubAlert("Clone from GitHub", "Write it as owner/repo.")
+                return
+            }
+            self?.forkCloneGitHubRepository(owner: parts[0], repo: parts[1], branch: branch)
+        })
+        self.present(alert, animated: true)
+    }
+    
+    private func forkCloneGitHubRepository(owner: String, repo: String, branch: String) {
+        guard let token = GitHubTokenStore.token else { return }
+        let projectsURL = NXBootstrap.shared().rootURL.appendingPathComponent("Projects")
+        var clonedProjectURL: URL?
+        
+        forkRunGitHubTask("Clone from GitHub", finished: { [weak self] in
+            if let url = clonedProjectURL, let project = NXProject(url: url) {
+                self?.addProject(project)
+            }
+        }) {
+            let sync = GitHubSync(token: token, owner: owner, repo: repo, branch: branch)
+            let fm = FileManager.default
+            let temp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("GitHubClone-\(UUID().uuidString)")
+            try fm.createDirectory(at: temp, withIntermediateDirectories: true)
+            defer { try? fm.removeItem(at: temp) }
+            
+            let downloaded = try await sync.download(into: temp)
+            
+            if fm.fileExists(atPath: temp.appendingPathComponent("Config/Project.plist").path) {
+                /* a Nyxian project: keep it linked so Pull / Commit and Push work right away */
+                let destination = projectsURL.appendingPathComponent(UUID().uuidString)
+                try fm.moveItem(at: temp, to: destination)
+                guard let project = NXProject(url: destination) else { throw GitHubSyncError.notAProject }
+                var link = GitHubLink(owner: owner, repo: repo, branch: branch)
+                link.lastCommit = downloaded.commit
+                link.files = downloaded.files
+                try link.save(for: project)
+                clonedProjectURL = destination
+                return "\(downloaded.files.count) file\(downloaded.files.count == 1 ? "" : "s") downloaded from \(owner)/\(repo) (\(branch)). The project is linked: use ⋯ > GitHub to pull and push."
+            }
+            
+            if SwiftPlaygroundsImporter.packageRoot(in: temp) != nil {
+                /* a Swift Playgrounds app: converted, so it is not linked */
+                let result = try SwiftPlaygroundsImporter.importPackage(at: temp, intoProjectsAt: projectsURL)
+                clonedProjectURL = result.project.url
+                var message = "Swift Playgrounds app converted: \(result.swiftFileCount) Swift file\(result.swiftFileCount == 1 ? "" : "s"), \(result.resourceCount) resource\(result.resourceCount == 1 ? "" : "s"). It is not linked to the repository because its layout changed."
+                if !result.warnings.isEmpty {
+                    message += "\n\n" + result.warnings.map { "• " + $0 }.joined(separator: "\n\n")
+                }
+                return message
+            }
+            
+            throw GitHubSyncError.notAProject
         }
     }
 }

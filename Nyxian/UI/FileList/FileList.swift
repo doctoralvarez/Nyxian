@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.1
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-07): GitHub sync through the REST API (⋯ > GitHub):
+    commit and push, pull, repository link and Keychain token
+    (GitHubSync, GitHubLink, GitHubTokenStore at the end of this file).
   - 1.1.1 (2026-11-07): fix build — project.url is an implicitly unwrapped
     optional from Objective-C; store it as URL in search and quick open.
   - 1.1.0 (2026-11-07): "Search in Project" and "Open Quickly" (⋯ menu, and
@@ -35,6 +38,8 @@
 
 import UIKit
 import UniformTypeIdentifiers
+import CryptoKit
+import Security
 
 class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate {
     let project: NXProject?
@@ -370,6 +375,24 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             rootMenuChildren.append({
                 return UIMenu(title: "Project", options: [.displayAsPalette, .displayInline], children: projectMenuElements.reversed())
             }())
+        }
+        
+        /* fork: GitHub sync for the project root */
+        if !self.isSublink, let project = self.project {
+            rootMenuChildren.append(UIMenu(title: "GitHub", image: UIImage(systemName: "arrow.triangle.2.circlepath"), children: [
+                UIAction(title: "Commit and Push…", image: UIImage(systemName: "arrow.up.circle")) { [weak self] _ in
+                    self?.forkGitHubPush(project)
+                },
+                UIAction(title: "Pull", image: UIImage(systemName: "arrow.down.circle")) { [weak self] _ in
+                    self?.forkGitHubPull(project)
+                },
+                UIAction(title: "Repository…", image: UIImage(systemName: "link")) { [weak self] _ in
+                    self?.forkPresentGitHubLinkSettings(project)
+                },
+                UIAction(title: "Account…", image: UIImage(systemName: "person.crop.circle")) { [weak self] _ in
+                    self?.forkPresentGitHubAccount()
+                }
+            ]))
         }
         
         /* fork: project-wide search and quick open */
@@ -1119,6 +1142,479 @@ final class QuickOpenViewController: UITableViewController, UISearchBarDelegate 
             let presenter = self.presentingViewController
             self.dismiss(animated: true) {
                 presenter?.forkOpenProjectFile(entry.url, project: project)
+            }
+        }
+    }
+}
+
+// MARK: - Fork: GitHub sync (REST API, no git binary needed)
+
+/// Stores the GitHub personal access token in the Keychain (never in project files).
+enum GitHubTokenStore {
+    private static let service = "org.emexlabs.nyxian.fork.github"
+    private static let account = "personal-access-token"
+    
+    static var token: String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+    
+    @discardableResult
+    static func save(_ token: String) -> Bool {
+        remove()
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecValueData as String: Data(token.utf8)
+        ]
+        return SecItemAdd(query as CFDictionary, nil) == errSecSuccess
+    }
+    
+    static func remove() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+}
+
+/// Per-project link to a repository, kept in Config/GitHub.plist (no secrets, never pushed).
+struct GitHubLink: Codable {
+    var owner: String
+    var repo: String
+    var branch: String
+    /// Commit this project was last synced with.
+    var lastCommit: String?
+    /// Git blob SHA of every file at the last sync, by project-relative path.
+    var files: [String: String] = [:]
+    
+    static let fileName = "GitHub.plist"
+    
+    static func url(for project: NXProject) -> URL {
+        let root: URL = project.url
+        return root.appendingPathComponent("Config").appendingPathComponent(fileName)
+    }
+    
+    static func load(for project: NXProject) -> GitHubLink? {
+        guard let data = try? Data(contentsOf: url(for: project)) else { return nil }
+        return try? PropertyListDecoder().decode(GitHubLink.self, from: data)
+    }
+    
+    func save(for project: NXProject) throws {
+        let data = try PropertyListEncoder().encode(self)
+        try data.write(to: GitHubLink.url(for: project), options: .atomic)
+    }
+}
+
+enum GitHubSyncError: LocalizedError {
+    case noToken
+    case http(Int, String)
+    case emptyRepository
+    case remoteChanged
+    case invalidResponse
+    case notAProject
+    
+    var errorDescription: String? {
+        switch self {
+        case .noToken: return "Add a GitHub token first (⋯ > GitHub > Account)."
+        case .http(let code, let message): return "GitHub answered \(code): \(message)"
+        case .emptyRepository: return "The repository is empty. Create it on GitHub with a README first, then push again."
+        case .remoteChanged: return "GitHub has commits this project does not have yet. Pull first, then push."
+        case .invalidResponse: return "Unexpected answer from GitHub."
+        case .notAProject: return "The repository is neither a Nyxian project (Config/Project.plist) nor a Swift Playgrounds app (Package.swift)."
+        }
+    }
+}
+
+/// Minimal GitHub client over the REST "Git Data" API: commit + push, pull, and clone.
+struct GitHubSync {
+    let token: String
+    let owner: String
+    let repo: String
+    let branch: String
+    
+    /// Files larger than this are skipped (the API limit is higher, but the device memory is not).
+    static let maximumFileSize = 25 * 1024 * 1024
+    
+    // MARK: HTTP
+    
+    private func request(_ method: String, _ path: String, body: [String: Any]? = nil, allow404: Bool = false) async throws -> Any? {
+        guard let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)\(path)") else { throw GitHubSyncError.invalidResponse }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+        request.setValue("Nyxian-fork", forHTTPHeaderField: "User-Agent")
+        if let body = body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw GitHubSyncError.invalidResponse }
+        if http.statusCode == 404 && allow404 { return nil }
+        if http.statusCode == 409 { throw GitHubSyncError.emptyRepository }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["message"] as? String ?? HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
+            throw GitHubSyncError.http(http.statusCode, message)
+        }
+        return data.isEmpty ? nil : try JSONSerialization.jsonObject(with: data)
+    }
+    
+    // MARK: helpers
+    
+    /// The SHA git uses for a blob: sha1("blob <size>\0<content>").
+    static func blobSHA(_ data: Data) -> String {
+        var hasher = Insecure.SHA1()
+        hasher.update(data: Data("blob \(data.count)\0".utf8))
+        hasher.update(data: data)
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+    
+    /// Project files to sync, by relative path (hidden files and the sync state are left out).
+    static func localFiles(in root: URL) -> [String: URL] {
+        var result: [String: URL] = [:]
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
+        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else { return [:] }
+        for case let url as URL in enumerator {
+            guard let values = try? url.resourceValues(forKeys: Set(keys)), values.isRegularFile == true,
+                  (values.fileSize ?? 0) <= maximumFileSize else { continue }
+            let relative = ProjectFileIndex.relativePath(url, root: root)
+            if relative == "Config/\(GitHubLink.fileName)" { continue }
+            result[relative] = url
+        }
+        return result
+    }
+    
+    /// Remote head commit and its tree, or nil when the branch does not exist yet.
+    private func head() async throws -> (commit: String, tree: String)? {
+        guard let ref = try await request("GET", "/git/ref/heads/\(branch)", allow404: true) as? [String: Any],
+              let object = ref["object"] as? [String: Any],
+              let commitSHA = object["sha"] as? String,
+              let commit = try await request("GET", "/git/commits/\(commitSHA)") as? [String: Any],
+              let tree = (commit["tree"] as? [String: Any])?["sha"] as? String else { return nil }
+        return (commitSHA, tree)
+    }
+    
+    /// path -> blob SHA of every file in a tree.
+    private func remoteFiles(tree: String) async throws -> [String: String] {
+        guard let json = try await request("GET", "/git/trees/\(tree)?recursive=1") as? [String: Any],
+              let entries = json["tree"] as? [[String: Any]] else { throw GitHubSyncError.invalidResponse }
+        var files: [String: String] = [:]
+        for entry in entries where (entry["type"] as? String) == "blob" {
+            if let path = entry["path"] as? String, let sha = entry["sha"] as? String {
+                files[path] = sha
+            }
+        }
+        return files
+    }
+    
+    private func downloadBlob(_ sha: String) async throws -> Data {
+        guard let json = try await request("GET", "/git/blobs/\(sha)") as? [String: Any],
+              let content = json["content"] as? String,
+              let data = Data(base64Encoded: content.replacingOccurrences(of: "\n", with: "")) else { throw GitHubSyncError.invalidResponse }
+        return data
+    }
+    
+    // MARK: operations
+    
+    struct Summary {
+        var uploaded = 0
+        var downloaded = 0
+        var deleted = 0
+        var conflicts: [String] = []
+        var commit: String?
+    }
+    
+    /// Commits the whole project as the new state of the branch.
+    func push(root: URL, link: inout GitHubLink, message: String) async throws -> Summary {
+        var summary = Summary()
+        let current = try await head()
+        if let current = current, let last = link.lastCommit, current.commit != last {
+            throw GitHubSyncError.remoteChanged
+        }
+        var remote: [String: String] = [:]
+        if let current = current {
+            remote = try await remoteFiles(tree: current.tree)
+        }
+        /* first push into a branch that already exists (e.g. created with a README): keep its files */
+        let keepRemoteOnlyFiles = (current != nil && link.lastCommit == nil)
+        
+        var treeEntries: [[String: Any]] = []
+        var newState: [String: String] = [:]
+        for (path, url) in GitHubSync.localFiles(in: root).sorted(by: { $0.key < $1.key }) {
+            let data = try Data(contentsOf: url)
+            let sha = GitHubSync.blobSHA(data)
+            if remote[path] != sha {
+                guard let blob = try await request("POST", "/git/blobs", body: ["content": data.base64EncodedString(), "encoding": "base64"]) as? [String: Any],
+                      let uploaded = blob["sha"] as? String else { throw GitHubSyncError.invalidResponse }
+                summary.uploaded += 1
+                newState[path] = uploaded
+            } else {
+                newState[path] = sha
+            }
+            treeEntries.append(["path": path, "mode": "100644", "type": "blob", "sha": newState[path]!])
+        }
+        if keepRemoteOnlyFiles {
+            for (path, sha) in remote where newState[path] == nil {
+                treeEntries.append(["path": path, "mode": "100644", "type": "blob", "sha": sha])
+                newState[path] = sha
+            }
+        }
+        summary.deleted = Set(remote.keys).subtracting(newState.keys).count
+        
+        /* a full tree (no base_tree): files deleted locally disappear from the branch too */
+        guard let tree = try await request("POST", "/git/trees", body: ["tree": treeEntries]) as? [String: Any],
+              let treeSHA = tree["sha"] as? String else { throw GitHubSyncError.invalidResponse }
+        if let current = current, current.tree == treeSHA {
+            link.lastCommit = current.commit
+            link.files = newState
+            summary.commit = current.commit
+            return summary
+        }
+        
+        var commitBody: [String: Any] = ["message": message, "tree": treeSHA]
+        if let current = current { commitBody["parents"] = [current.commit] }
+        guard let commit = try await request("POST", "/git/commits", body: commitBody) as? [String: Any],
+              let commitSHA = commit["sha"] as? String else { throw GitHubSyncError.invalidResponse }
+        
+        if current != nil {
+            _ = try await request("PATCH", "/git/refs/heads/\(branch)", body: ["sha": commitSHA, "force": false])
+        } else {
+            _ = try await request("POST", "/git/refs", body: ["ref": "refs/heads/\(branch)", "sha": commitSHA])
+        }
+        
+        link.lastCommit = commitSHA
+        link.files = newState
+        summary.commit = commitSHA
+        return summary
+    }
+    
+    /// Brings remote changes in. Files changed on both sides are kept as they are and reported.
+    func pull(root: URL, link: inout GitHubLink) async throws -> Summary {
+        var summary = Summary()
+        guard let current = try await head() else { return summary }
+        let remote = try await remoteFiles(tree: current.tree)
+        let local = GitHubSync.localFiles(in: root)
+        
+        var newState = link.files
+        for (path, remoteSHA) in remote.sorted(by: { $0.key < $1.key }) {
+            let localURL = root.appendingPathComponent(path)
+            let localSHA = local[path].flatMap { try? Data(contentsOf: $0) }.map { GitHubSync.blobSHA($0) }
+            if localSHA == remoteSHA {
+                newState[path] = remoteSHA
+                continue
+            }
+            let lastSynced = link.files[path]
+            let changedLocally = localSHA != nil && localSHA != lastSynced
+            if changedLocally {
+                summary.conflicts.append(path)
+                continue
+            }
+            let data = try await downloadBlob(remoteSHA)
+            try FileManager.default.createDirectory(at: localURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: localURL, options: .atomic)
+            newState[path] = remoteSHA
+            summary.downloaded += 1
+        }
+        /* files deleted on GitHub are removed here only if they were not edited locally */
+        for (path, lastSHA) in link.files where remote[path] == nil {
+            if let url = local[path], let data = try? Data(contentsOf: url), GitHubSync.blobSHA(data) == lastSHA {
+                try? FileManager.default.removeItem(at: url)
+                summary.deleted += 1
+            }
+            newState.removeValue(forKey: path)
+        }
+        
+        if summary.conflicts.isEmpty {
+            link.lastCommit = current.commit
+        }
+        link.files = newState
+        summary.commit = current.commit
+        return summary
+    }
+    
+    /// Downloads the branch into an empty folder.
+    func download(into folder: URL) async throws -> (commit: String, files: [String: String]) {
+        guard let current = try await head() else { throw GitHubSyncError.emptyRepository }
+        let remote = try await remoteFiles(tree: current.tree)
+        for (path, sha) in remote {
+            let data = try await downloadBlob(sha)
+            let url = folder.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        }
+        return (current.commit, remote)
+    }
+}
+
+// MARK: - Fork: GitHub UI
+
+extension UIViewController {
+    func forkGitHubAlert(_ title: String, _ message: String?) {
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        self.present(alert, animated: true)
+    }
+    
+    /// Asks for (or replaces / removes) the token kept in the Keychain.
+    func forkPresentGitHubAccount() {
+        let hasToken = GitHubTokenStore.token != nil
+        let alert = UIAlertController(
+            title: "GitHub Account",
+            message: "Paste a personal access token with \"Contents: Read and write\" permission for your repositories. It is stored in the Keychain on this device only." + (hasToken ? "\n\nA token is already saved." : ""),
+            preferredStyle: .alert
+        )
+        alert.addTextField { field in
+            field.placeholder = "github_pat_…"
+            field.isSecureTextEntry = true
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        if hasToken {
+            alert.addAction(UIAlertAction(title: "Remove Token", style: .destructive) { _ in
+                GitHubTokenStore.remove()
+            })
+        }
+        alert.addAction(UIAlertAction(title: "Save", style: .default) { [weak self, weak alert] _ in
+            guard let token = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty else { return }
+            if !GitHubTokenStore.save(token) {
+                self?.forkGitHubAlert("GitHub", "The token could not be saved in the Keychain.")
+            }
+        })
+        self.present(alert, animated: true)
+    }
+    
+    /// Shows a small "working" alert while `work` runs, then the result.
+    func forkRunGitHubTask(_ title: String, finished: (() -> Void)? = nil, _ work: @escaping () async throws -> String) {
+        let progress = UIAlertController(title: title, message: "Talking to GitHub…", preferredStyle: .alert)
+        self.present(progress, animated: true)
+        Task { @MainActor [weak self] in
+            var resultTitle = title
+            var resultMessage: String
+            do {
+                resultMessage = try await work()
+            } catch {
+                resultTitle = "\(title) Failed"
+                resultMessage = error.localizedDescription
+            }
+            progress.dismiss(animated: true) {
+                finished?()
+                self?.forkGitHubAlert(resultTitle, resultMessage)
+            }
+        }
+    }
+}
+
+extension FileListViewController {
+    /// Repository settings for this project (owner/repo and branch).
+    func forkPresentGitHubLinkSettings(_ project: NXProject) {
+        let link = GitHubLink.load(for: project)
+        let alert = UIAlertController(title: "GitHub Repository", message: "Link this project to a repository you own, as owner/repo.", preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "owner/repo"
+            field.text = link.map { "\($0.owner)/\($0.repo)" }
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addTextField { field in
+            field.placeholder = "branch (main)"
+            field.text = link?.branch ?? "main"
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Save", style: .default) { [weak self, weak alert] _ in
+            let parts = (alert?.textFields?[0].text ?? "").trimmingCharacters(in: .whitespaces).split(separator: "/").map(String.init)
+            let branch = (alert?.textFields?[1].text ?? "").trimmingCharacters(in: .whitespaces)
+            guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
+                self?.forkGitHubAlert("GitHub Repository", "Write it as owner/repo.")
+                return
+            }
+            var updated = link ?? GitHubLink(owner: parts[0], repo: parts[1], branch: "main")
+            if updated.owner != parts[0] || updated.repo != parts[1] {
+                /* a different repository starts a new sync history */
+                updated = GitHubLink(owner: parts[0], repo: parts[1], branch: "main")
+            }
+            updated.branch = branch.isEmpty ? "main" : branch
+            do {
+                try updated.save(for: project)
+            } catch {
+                self?.forkGitHubAlert("GitHub Repository", error.localizedDescription)
+            }
+        })
+        self.present(alert, animated: true)
+    }
+    
+    private func forkGitHubContext(_ project: NXProject) -> (GitHubSync, GitHubLink)? {
+        guard let token = GitHubTokenStore.token else {
+            forkPresentGitHubAccount()
+            return nil
+        }
+        guard let link = GitHubLink.load(for: project) else {
+            forkPresentGitHubLinkSettings(project)
+            return nil
+        }
+        return (GitHubSync(token: token, owner: link.owner, repo: link.repo, branch: link.branch), link)
+    }
+    
+    func forkGitHubPush(_ project: NXProject) {
+        guard let context = forkGitHubContext(project) else { return }
+        let (sync, link) = context
+        let alert = UIAlertController(title: "Commit and Push", message: "\(link.owner)/\(link.repo) • \(link.branch)", preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "Commit message"
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Push", style: .default) { [weak self, weak alert] _ in
+            let typed = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespaces) ?? ""
+            let message = typed.isEmpty ? "Update from Nyxian" : typed
+            NXDocumentManager.shared().saveAll {
+                DispatchQueue.main.async {
+                    self?.forkRunGitHubTask("Push") {
+                        var state = link
+                        let root: URL = project.url
+                        let summary = try await sync.push(root: root, link: &state, message: message)
+                        try state.save(for: project)
+                        return "\(summary.uploaded) file\(summary.uploaded == 1 ? "" : "s") uploaded, \(summary.deleted) removed.\nCommit \(String((summary.commit ?? "").prefix(7)))"
+                    }
+                }
+            }
+        })
+        self.present(alert, animated: true)
+    }
+    
+    func forkGitHubPull(_ project: NXProject) {
+        guard let context = forkGitHubContext(project) else { return }
+        let (sync, link) = context
+        NXDocumentManager.shared().saveAll { [weak self] in
+            DispatchQueue.main.async {
+                self?.forkRunGitHubTask("Pull", finished: { [weak self] in self?.performRefresh() }) {
+                    var state = link
+                    let root: URL = project.url
+                    let summary = try await sync.pull(root: root, link: &state)
+                    try state.save(for: project)
+                    var text = "\(summary.downloaded) file\(summary.downloaded == 1 ? "" : "s") updated, \(summary.deleted) removed."
+                    if !summary.conflicts.isEmpty {
+                        text += "\n\nChanged here and on GitHub, kept as they are here:\n" + summary.conflicts.prefix(10).joined(separator: "\n")
+                    }
+                    text += "\n\nClose and reopen open tabs to see the new contents."
+                    return text
+                }
             }
         }
     }

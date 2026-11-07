@@ -4,6 +4,22 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.10.0 — 2026-11-07
+
+- **GitHub sync** without a git binary (REST "Git Data" API):
+  - ⋯ > **GitHub** in a project: *Commit and Push…*, *Pull*, *Repository…*
+    (owner/repo + branch) and *Account…* (personal access token, kept in the
+    Keychain of this device only).
+  - Push refuses when GitHub has commits the project does not have (pull
+    first). The first push into an existing branch keeps the files that only
+    exist on GitHub.
+  - Pull never overwrites a file you changed since the last sync (it is
+    reported as a conflict) and only deletes local files you did not touch.
+  - The sync state lives in `Config/GitHub.plist`, which is never pushed.
+- **Clone from GitHub…** in the import button of the Projects screen: a Nyxian
+  project is downloaded and stays linked; a Swift Playgrounds app
+  (`Package.swift`) is converted like an imported `.swiftpm`.
+
 ## 1.9.1 — 2026-11-07
 
 - Build fix for 1.7.0: `MDKFile.fileURL` is optional in Swift; the open-tabs
