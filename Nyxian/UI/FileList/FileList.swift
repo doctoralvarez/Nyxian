@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-07): "Search in Project" and "Open Quickly" (⋯ menu, and
+    ⇧⌘F / ⇧⌘O on iPad); ProjectSearchViewController, QuickOpenViewController
+    and ProjectFileIndex live at the end of this file.
   - 1.0.0 (2026-11-07): "Select All" / "Deselect All" button in the
     selection toolbar (next to Delete); checkmarks now survive cell reuse
     while scrolling in selection mode.
@@ -367,6 +370,18 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             }())
         }
         
+        /* fork: project-wide search and quick open */
+        if let project = self.project {
+            rootMenuChildren.append(UIMenu(title: "Find", options: [.displayInline], children: [
+                UIAction(title: "Search in Project", image: UIImage(systemName: "text.magnifyingglass")) { [weak self] _ in
+                    self?.forkPresentProjectSearch(project)
+                },
+                UIAction(title: "Open Quickly", image: UIImage(systemName: "doc.text.magnifyingglass")) { [weak self] _ in
+                    self?.forkPresentQuickOpen(project)
+                }
+            ]))
+        }
+        
         if !self.isSublink {
             rootMenuChildren.append(UIMenu(title: "System", options: [.displayInline], children: [
                 UIAction(
@@ -704,5 +719,405 @@ func share(url: URL, remove: Bool = false) {
         }
 
         topController.present(activityViewController, animated: true)
+    }
+}
+
+// MARK: - Fork: project-wide search (⇧⌘F) and quick open (⇧⌘O)
+
+/// Text files of a project, shared by the project search and quick open.
+enum ProjectFileIndex {
+    static let textExtensions: Set<String> = [
+        "swift", "m", "mm", "c", "cc", "cpp", "cxx", "h", "hpp", "hh",
+        "plist", "xml", "json", "txt", "md", "strings", "entitlements", "sh", "py", "metal"
+    ]
+    
+    /// Skips very large files so a search never stalls the device.
+    static let maximumFileSize = 2 * 1024 * 1024
+    
+    static func files(in root: URL) -> [URL] {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else { return [] }
+        
+        var result: [URL] = []
+        for case let url as URL in enumerator {
+            guard textExtensions.contains(url.pathExtension.lowercased()),
+                  let values = try? url.resourceValues(forKeys: Set(keys)),
+                  values.isRegularFile == true,
+                  (values.fileSize ?? 0) <= maximumFileSize else { continue }
+            result.append(url)
+        }
+        return result.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+    }
+    
+    static func relativePath(_ url: URL, root: URL) -> String {
+        let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+        let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+        guard path.hasPrefix(rootPath) else { return url.lastPathComponent }
+        return String(path.dropFirst(rootPath.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+}
+
+extension UIViewController {
+    /// Opens a project file, at a line if given, the same way the file list does on this device.
+    func forkOpenProjectFile(_ url: URL, project: NXProject?, line: Int = 0, column: Int = 0) {
+        if NXApplicationState.fileListRequiresToSendRequests {
+            NotificationCenter.default.post(name: Notification.Name("FileListAct"), object: ["open", url.path, "\(line)", "\(column)", "0"])
+        } else {
+            guard let editor = CodeEditorViewController(project: project, url: url, line: line > 0 ? line : nil, column: line > 0 ? max(column, 1) : nil) else { return }
+            let navigation = UINavigationController(rootViewController: editor)
+            navigation.modalPresentationStyle = .overFullScreen
+            self.present(navigation, animated: true)
+        }
+    }
+    
+    @objc func forkPresentProjectSearch(_ project: NXProject) {
+        guard self.presentedViewController == nil else { return }
+        let navigation = UINavigationController(rootViewController: ProjectSearchViewController(project: project))
+        navigation.modalPresentationStyle = .formSheet
+        self.present(navigation, animated: true)
+    }
+    
+    @objc func forkPresentQuickOpen(_ project: NXProject) {
+        guard self.presentedViewController == nil else { return }
+        let navigation = UINavigationController(rootViewController: QuickOpenViewController(project: project))
+        navigation.modalPresentationStyle = .formSheet
+        self.present(navigation, animated: true)
+    }
+}
+
+/// Searches the text of every file in the project and jumps to a match.
+final class ProjectSearchViewController: UITableViewController, UISearchBarDelegate {
+    private struct Match {
+        let line: Int
+        let column: Int
+        let preview: String
+    }
+    
+    private struct FileMatches {
+        let url: URL
+        let relativePath: String
+        var matches: [Match]
+    }
+    
+    private static let maximumMatches = 1000
+    
+    private let project: NXProject
+    private let searchBar = UISearchBar()
+    private var results: [FileMatches] = []
+    private var searchGeneration = 0
+    private var statusText = "Type to search every file in the project."
+    
+    init(project: NXProject) {
+        self.project = project
+        super.init(style: .insetGrouped)
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        self.title = "Search in Project"
+        self.navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in
+            self?.dismiss(animated: true)
+        })
+        
+        searchBar.placeholder = "Text to find"
+        searchBar.autocapitalizationType = .none
+        searchBar.autocorrectionType = .no
+        searchBar.spellCheckingType = .no
+        searchBar.smartQuotesType = .no
+        searchBar.smartDashesType = .no
+        searchBar.delegate = self
+        searchBar.sizeToFit()
+        tableView.tableHeaderView = searchBar
+        tableView.keyboardDismissMode = .onDrag
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "match")
+    }
+    
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        searchBar.becomeFirstResponder()
+    }
+    
+    func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
+        /* debounce typing a little so big projects stay responsive */
+        searchGeneration += 1
+        let generation = searchGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self = self, generation == self.searchGeneration else { return }
+            self.runSearch(searchText)
+        }
+    }
+    
+    func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
+        searchGeneration += 1
+        runSearch(searchBar.text ?? "")
+        searchBar.resignFirstResponder()
+    }
+    
+    private func runSearch(_ query: String) {
+        searchGeneration += 1
+        let generation = searchGeneration
+        let needle = query
+        
+        guard !needle.isEmpty else {
+            results = []
+            statusText = "Type to search every file in the project."
+            tableView.reloadData()
+            return
+        }
+        
+        statusText = "Searching…"
+        tableView.reloadData()
+        
+        let root = project.url
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var found: [FileMatches] = []
+            var total = 0
+            var truncated = false
+            
+            fileLoop: for url in ProjectFileIndex.files(in: root) {
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                var matches: [Match] = []
+                var lineNumber = 0
+                for lineText in text.components(separatedBy: "\n") {
+                    lineNumber += 1
+                    guard let range = lineText.range(of: needle, options: [.caseInsensitive]) else { continue }
+                    let column = lineText.distance(from: lineText.startIndex, to: range.lowerBound) + 1
+                    let preview = lineText.trimmingCharacters(in: .whitespaces)
+                    matches.append(Match(line: lineNumber, column: column, preview: String(preview.prefix(200))))
+                    total += 1
+                    if total >= ProjectSearchViewController.maximumMatches {
+                        truncated = true
+                        break
+                    }
+                }
+                if !matches.isEmpty {
+                    found.append(FileMatches(url: url, relativePath: ProjectFileIndex.relativePath(url, root: root), matches: matches))
+                }
+                if truncated { break fileLoop }
+            }
+            
+            DispatchQueue.main.async {
+                guard let self = self, generation == self.searchGeneration else { return }
+                self.results = found
+                if total == 0 {
+                    self.statusText = "No results for \"\(needle)\"."
+                } else {
+                    let fileWord = found.count == 1 ? "file" : "files"
+                    self.statusText = "\(total)\(truncated ? "+" : "") result\(total == 1 ? "" : "s") in \(found.count) \(fileWord)" + (truncated ? " (showing the first \(ProjectSearchViewController.maximumMatches))" : "")
+                }
+                self.tableView.reloadData()
+            }
+        }
+    }
+    
+    override func numberOfSections(in tableView: UITableView) -> Int {
+        return max(results.count, 1)
+    }
+    
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        return results.isEmpty ? 0 : results[section].matches.count
+    }
+    
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        return results.isEmpty ? nil : "\(results[section].relativePath) • \(results[section].matches.count)"
+    }
+    
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        return section == max(results.count, 1) - 1 ? statusText : nil
+    }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "match", for: indexPath)
+        let match = results[indexPath.section].matches[indexPath.row]
+        var content = cell.defaultContentConfiguration()
+        content.text = match.preview.isEmpty ? " " : match.preview
+        content.textProperties.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        content.textProperties.numberOfLines = 2
+        content.secondaryText = "Line \(match.line)"
+        content.secondaryTextProperties.font = UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        content.secondaryTextProperties.color = .secondaryLabel
+        cell.contentConfiguration = content
+        cell.accessoryType = .disclosureIndicator
+        return cell
+    }
+    
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        let file = results[indexPath.section]
+        let match = file.matches[indexPath.row]
+        open(file.url, line: match.line, column: match.column)
+    }
+    
+    private func open(_ url: URL, line: Int, column: Int) {
+        let project = self.project
+        if NXApplicationState.fileListRequiresToSendRequests {
+            /* iPad: the workspace behind this sheet opens the tab */
+            self.forkOpenProjectFile(url, project: project, line: line, column: column)
+            self.dismiss(animated: true)
+        } else {
+            /* iPhone: open the editor on top of whatever presented this sheet */
+            let presenter = self.presentingViewController
+            self.dismiss(animated: true) {
+                presenter?.forkOpenProjectFile(url, project: project, line: line, column: column)
+            }
+        }
+    }
+}
+
+/// Finds a project file by typing part of its name (characters in order, like Xcode's Open Quickly).
+final class QuickOpenViewController: UITableViewController, UISearchBarDelegate {
+    private struct Entry {
+        let url: URL
+        let name: String
+        let relativePath: String
+    }
+    
+    private let project: NXProject
+    private let searchBar = UISearchBar()
+    private var allEntries: [Entry] = []
+    private var visibleEntries: [Entry] = []
+    
+    init(project: NXProject) {
+        self.project = project
+        super.init(style: .insetGrouped)
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        self.title = "Open Quickly"
+        self.navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in
+            self?.dismiss(animated: true)
+        })
+        
+        searchBar.placeholder = "File name"
+        searchBar.autocapitalizationType = .none
+        searchBar.autocorrectionType = .no
+        searchBar.spellCheckingType = .no
+        searchBar.delegate = self
+        searchBar.sizeToFit()
+        tableView.tableHeaderView = searchBar
+        tableView.keyboardDismissMode = .onDrag
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "file")
+        
+        let root = project.url
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let entries = ProjectFileIndex.files(in: root).map {
+                Entry(url: $0, name: $0.lastPathComponent, relativePath: ProjectFileIndex.relativePath($0, root: root))
+            }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.allEntries = entries
+                self.applyFilter(self.searchBar.text ?? "")
+            }
+        }
+    }
+    
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        searchBar.becomeFirstResponder()
+    }
+    
+    func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
+        applyFilter(searchText)
+    }
+    
+    func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
+        if let first = visibleEntries.first {
+            open(first)
+        }
+    }
+    
+    /// Lower score is better; nil means the query's characters do not appear in order.
+    private static func score(_ name: String, _ query: String) -> Int? {
+        let haystack = Array(name.lowercased())
+        let needle = Array(query.lowercased())
+        if needle.isEmpty { return 0 }
+        if name.lowercased().hasPrefix(query.lowercased()) { return 0 }
+        if name.lowercased().contains(query.lowercased()) { return 1 }
+        
+        var index = 0
+        var gaps = 0
+        for character in needle {
+            var found = false
+            while index < haystack.count {
+                if haystack[index] == character {
+                    found = true
+                    index += 1
+                    break
+                }
+                gaps += 1
+                index += 1
+            }
+            if !found { return nil }
+        }
+        return 2 + gaps
+    }
+    
+    private func applyFilter(_ query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty {
+            visibleEntries = allEntries
+        } else {
+            visibleEntries = allEntries
+                .compactMap { entry -> (Entry, Int)? in
+                    guard let score = QuickOpenViewController.score(entry.name, trimmed) else { return nil }
+                    return (entry, score)
+                }
+                .sorted { lhs, rhs in
+                    lhs.1 != rhs.1 ? lhs.1 < rhs.1 : lhs.0.name.count < rhs.0.name.count
+                }
+                .map { $0.0 }
+        }
+        tableView.reloadData()
+    }
+    
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        return visibleEntries.count
+    }
+    
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        return visibleEntries.isEmpty ? "No matching files." : nil
+    }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "file", for: indexPath)
+        let entry = visibleEntries[indexPath.row]
+        var content = cell.defaultContentConfiguration()
+        content.text = entry.name
+        content.secondaryText = entry.relativePath
+        content.secondaryTextProperties.color = .secondaryLabel
+        content.image = UIImage(systemName: "doc.text")
+        cell.contentConfiguration = content
+        return cell
+    }
+    
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        open(visibleEntries[indexPath.row])
+    }
+    
+    private func open(_ entry: Entry) {
+        let project = self.project
+        if NXApplicationState.fileListRequiresToSendRequests {
+            self.forkOpenProjectFile(entry.url, project: project)
+            self.dismiss(animated: true)
+        } else {
+            let presenter = self.presentingViewController
+            self.dismiss(animated: true) {
+                presenter?.forkOpenProjectFile(entry.url, project: project)
+            }
+        }
     }
 }

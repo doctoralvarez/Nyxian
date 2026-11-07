@@ -4,6 +4,30 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.3.0 — 2026-11-07
+
+### Editor and workspace
+- **Search in Project** (⇧⌘F on iPad, or ⋯ > Search in Project): finds text in
+  every project file; tapping a result opens the file at that line.
+- **Open Quickly** (⇧⌘O on iPad, or ⋯ > Open Quickly): type part of a file name.
+- **Move lines** up / down with ⌥⌘↑ / ⌥⌘↓.
+- **Tappable runtime errors**: "file X.swift, line N" (Swift traps) and
+  "path/X.swift:N:M" printed in the iPad console are underlined; tapping one
+  opens that file and line.
+
+### Projects
+- **Import Swift Playgrounds apps (.swiftpm)** with the existing import button,
+  as a folder or zipped. Becomes a SwiftUI app project; name, bundle ID and
+  version come from Package.swift; images in Assets.xcassets become loose files.
+  It warns about Swift package dependencies, `Bundle.module` and asset-catalog
+  items that cannot be compiled on the device (colors, app icon).
+
+Files: `CodeEditor.swift`, `FileList.swift`, `FileList+iPad.swift`,
+`ContentView.swift`, `NXConsoleView.m`.
+
+### CI (on main)
+- Weekly "Check upstream (emexLabs)" workflow; `actions/checkout@v5`.
+
 ## 1.2.0 — 2026-11-07
 
 ### File list (project editor)

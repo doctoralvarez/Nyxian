@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-07): ⌥⌘↑ / ⌥⌘↓ move the current or selected lines.
   - 1.0.0 (2026-11-06): Find & Replace (UIFindInteraction) with ⌘F, ⌥⌘F,
     ⌘G, ⇧⌘G and a toolbar button; editor shortcuts ⌘/ toggle comment,
     ⌘] / ⌘[ shift lines, ⌘D duplicate line, ⌘L go to line.
@@ -715,7 +716,9 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
                 command("Find and Replace", #selector(showFindAndReplace), "f", [.command, .alternate]),
                 command("Shift Right", #selector(indentLines), "]"),
                 command("Shift Left", #selector(outdentLines), "["),
-                command("Duplicate Line", #selector(duplicateLines), "d")
+                command("Duplicate Line", #selector(duplicateLines), "d"),
+                command("Move Line Up", #selector(moveLinesUp), UIKeyCommand.inputUpArrow, [.command, .alternate]),
+                command("Move Line Down", #selector(moveLinesDown), UIKeyCommand.inputDownArrow, [.command, .alternate])
             ])
             if self.lineCommentPrefix != nil {
                 commands.append(command("Toggle Comment", #selector(toggleComment), "/"))
@@ -1017,6 +1020,55 @@ extension CodeEditorViewController {
         }
     }
 
+    @objc func moveLinesUp() {
+        self.moveSelectedLines(up: true)
+    }
+    
+    @objc func moveLinesDown() {
+        self.moveSelectedLines(up: false)
+    }
+    
+    /// Swaps the selected lines with the line above or below, keeping the selection on the moved text.
+    private func moveSelectedLines(up: Bool) {
+        guard !self.isReadOnly else { return }
+        
+        let text = self.textView.text as NSString
+        let selection = self.textView.selectedRange
+        let block = self.selectedLinesRange()
+        let offsetInBlock = selection.location - block.location
+        var blockText = text.substring(with: block)
+        
+        if up {
+            guard block.location > 0 else { return }
+            let previous = text.lineRange(for: NSRange(location: block.location - 1, length: 0))
+            var previousText = text.substring(with: previous)
+            
+            /* the last line of a file has no newline: move the separator with it */
+            if !blockText.hasSuffix("\n") {
+                blockText += "\n"
+                if previousText.hasSuffix("\n") { previousText.removeLast() }
+            }
+            
+            let combined = NSRange(location: previous.location, length: block.location + block.length - previous.location)
+            self.replaceBypassingAutoindent(combined, with: blockText + previousText)
+            self.textView.selectedRange = NSRange(location: previous.location + offsetInBlock, length: selection.length)
+        } else {
+            let blockEnd = block.location + block.length
+            guard blockEnd < text.length else { return }
+            let next = text.lineRange(for: NSRange(location: blockEnd, length: 0))
+            var nextText = text.substring(with: next)
+            
+            if !nextText.hasSuffix("\n") {
+                nextText += "\n"
+                if blockText.hasSuffix("\n") { blockText.removeLast() }
+            }
+            
+            let combined = NSRange(location: block.location, length: next.location + next.length - block.location)
+            self.replaceBypassingAutoindent(combined, with: nextText + blockText)
+            self.textView.selectedRange = NSRange(location: block.location + (nextText as NSString).length + offsetInBlock, length: selection.length)
+        }
+    }
+    
     @objc func duplicateLines() {
         guard !self.isReadOnly else { return }
 

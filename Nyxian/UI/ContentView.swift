@@ -20,6 +20,14 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): Import Swift Playgrounds app packages (.swiftpm,
+    as a folder or zipped) with the existing import button; they become a
+    SwiftUI app project (SwiftPlaygroundsImporter at the end of this file).
+*/
+
 import Foundation
 import SwiftUI
 import UIKit
@@ -100,7 +108,8 @@ import UIKit
     }
 
     @objc private func presentImportPicker() {
-        let documentPicker = UIDocumentPickerViewController(forOpeningContentTypes: [.zip], asCopy: true)
+        /* fork: also Swift Playgrounds app packages (.swiftpm folders) */
+        let documentPicker = UIDocumentPickerViewController(forOpeningContentTypes: [.zip, .folder, .package], asCopy: true)
         documentPicker.delegate = self
         documentPicker.modalPresentationStyle = .formSheet
         self.present(documentPicker, animated: true)
@@ -359,6 +368,14 @@ import UIKit
         do {
             guard let selectedURL = urls.first else { return }
             
+            /* fork: a .swiftpm package (or any folder with Package.swift) picked directly */
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: selectedURL.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                importSwiftPlaygroundsPackage(at: selectedURL)
+                try? FileManager.default.removeItem(at: selectedURL)
+                return
+            }
+            
             let extractFirst = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("Proj")
             
             if FileManager.default.fileExists(atPath: extractFirst.path) {
@@ -376,6 +393,15 @@ import UIKit
             guard let firstItem = items.first else {
                 try? FileManager.default.removeItem(at: extractFirst)
                 throw CocoaError(.fileReadNoSuchFile)
+            }
+            
+            /* fork: a zipped .swiftpm package is converted instead of being taken as a Nyxian project */
+            let extractedItem = extractFirst.appendingPathComponent(firstItem)
+            if !FileManager.default.fileExists(atPath: extractedItem.appendingPathComponent("Config/Project.plist").path),
+               SwiftPlaygroundsImporter.packageRoot(in: extractedItem) != nil {
+                importSwiftPlaygroundsPackage(at: extractedItem)
+                try? FileManager.default.removeItem(at: extractFirst)
+                return
             }
             
             let projectPath = "\(NXBootstrap.shared().rootURL.appendingPathComponent("/Projects").path)/\(UUID().uuidString)"
@@ -669,5 +695,279 @@ struct ProjectTemplateOptionsView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+}
+
+// MARK: - Fork: import Swift Playgrounds app packages (.swiftpm)
+
+/// Converts a Swift Playgrounds app package (Package.swift + Swift sources) into a Nyxian SwiftUI app project.
+enum SwiftPlaygroundsImporter {
+    struct Result {
+        let project: NXProject
+        let swiftFileCount: Int
+        let resourceCount: Int
+        let warnings: [String]
+    }
+    
+    enum ImportError: LocalizedError {
+        case notAPackage
+        case noSwiftSources
+        case projectCreationFailed
+        
+        var errorDescription: String? {
+            switch self {
+            case .notAPackage: return "This folder has no Package.swift, so it is not a Swift Playgrounds app."
+            case .noSwiftSources: return "No Swift source files were found in the package."
+            case .projectCreationFailed: return "Nyxian could not create the project."
+            }
+        }
+    }
+    
+    /// Folders that belong to the package tooling, never to the app.
+    private static let ignoredNames: Set<String> = [".swiftpm", ".build", ".git", "Package.swift", "Package.resolved", "__MACOSX"]
+    
+    /// Returns the package root inside `url`: `url` itself, or a single nested folder that holds Package.swift.
+    static func packageRoot(in url: URL) -> URL? {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: url.appendingPathComponent("Package.swift").path) {
+            return url
+        }
+        let children = (try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
+        for child in children where !child.lastPathComponent.hasPrefix("__") {
+            if fm.fileExists(atPath: child.appendingPathComponent("Package.swift").path) {
+                return child
+            }
+        }
+        return nil
+    }
+    
+    static func importPackage(at packageURL: URL, intoProjectsAt projectsURL: URL) throws -> Result {
+        let fm = FileManager.default
+        guard let root = packageRoot(in: packageURL) else { throw ImportError.notAPackage }
+        
+        let manifest = (try? String(contentsOf: root.appendingPathComponent("Package.swift"), encoding: .utf8)) ?? ""
+        var warnings: [String] = []
+        
+        /* identity from the .iOSApplication product, falling back to the folder name */
+        let folderName = root.deletingPathExtension().lastPathComponent
+        let displayName = firstCapture(in: manifest, pattern: #"\.iOSApplication\s*\(\s*name\s*:\s*"([^"]+)""#)
+            ?? firstCapture(in: manifest, pattern: #"name\s*:\s*"([^"]+)""#)
+            ?? folderName
+        let executableName = sanitizedIdentifier(displayName)
+        let bundleIdentifier = firstCapture(in: manifest, pattern: #"bundleIdentifier\s*:\s*"([^"]+)""#)
+            ?? "com.example.\(executableName)"
+        let displayVersion = firstCapture(in: manifest, pattern: #"displayVersion\s*:\s*"([^"]+)""#)
+        let bundleVersion = firstCapture(in: manifest, pattern: #"bundleVersion\s*:\s*"([^"]+)""#)
+        
+        if manifest.range(of: #"\.package\s*\("#, options: .regularExpression) != nil {
+            warnings.append("The package depends on other Swift packages. Nyxian cannot download them, so code that imports them will not compile until you add their sources to the project.")
+        }
+        
+        /* collect sources and resources */
+        var swiftFiles: [(source: URL, relative: String)] = []
+        var resourceFiles: [(source: URL, relative: String)] = []
+        var assetCatalogs: [URL] = []
+        var usesBundleModule = false
+        
+        let keys: [URLResourceKey] = [.isDirectoryKey]
+        if let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) {
+            for case let url as URL in enumerator {
+                let name = url.lastPathComponent
+                if ignoredNames.contains(name) {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                let isDirectory = (try? url.resourceValues(forKeys: Set(keys)).isDirectory) ?? false
+                if isDirectory {
+                    if url.pathExtension == "xcassets" {
+                        assetCatalogs.append(url)
+                        enumerator.skipDescendants()
+                    }
+                    continue
+                }
+                
+                let relative = ProjectFileIndex.relativePath(url, root: root)
+                if url.pathExtension.lowercased() == "swift" {
+                    swiftFiles.append((source: url, relative: relative))
+                    if !usesBundleModule,
+                       let text = try? String(contentsOf: url, encoding: .utf8),
+                       text.contains("Bundle.module") {
+                        usesBundleModule = true
+                    }
+                } else {
+                    /* everything that is not code ships in the app bundle; a leading "Resources/" folder is flattened */
+                    var resourceRelative = relative
+                    if resourceRelative.hasPrefix("Resources/") {
+                        resourceRelative = String(resourceRelative.dropFirst("Resources/".count))
+                    }
+                    resourceFiles.append((source: url, relative: resourceRelative))
+                }
+            }
+        }
+        
+        guard !swiftFiles.isEmpty else { throw ImportError.noSwiftSources }
+        
+        if usesBundleModule {
+            warnings.append("The code uses Bundle.module, which only exists in Swift packages. Replace it with Bundle.main.")
+        }
+        
+        /* a regular SwiftUI app project to fill */
+        guard let project = NXProject.createProject(
+            at: projectsURL,
+            withName: executableName,
+            withOrganizationIdentifier: organizationPrefix(of: bundleIdentifier),
+            withBundleIdentifier: bundleIdentifier,
+            withSchemeKind: .app,
+            withLanguageKind: .swift,
+            withInterfaceKind: .swiftUI) else {
+            throw ImportError.projectCreationFailed
+        }
+        
+        do {
+            /* the template's own Swift files would clash with the imported @main app */
+            for templateFile in ProjectFileIndex.files(in: project.url) where templateFile.pathExtension == "swift" {
+                try? fm.removeItem(at: templateFile)
+            }
+            
+            for file in swiftFiles {
+                try copy(file.source, to: project.url.appendingPathComponent(file.relative))
+            }
+            
+            var resourceCount = 0
+            for file in resourceFiles {
+                try copy(file.source, to: project.resourcesURL.appendingPathComponent(file.relative))
+                resourceCount += 1
+            }
+            
+            for catalog in assetCatalogs {
+                let converted = convertAssetCatalogImages(catalog, into: project.resourcesURL)
+                resourceCount += converted.images
+                if converted.skipped > 0 {
+                    warnings.append("\(catalog.lastPathComponent): \(converted.skipped) item(s) such as colors, the app icon or symbol images were not converted, because asset catalogs cannot be compiled on the device. Images were copied as plain files, so Image(\"name\") should still find them.")
+                }
+            }
+            
+            updateProjectConfig(project, displayName: displayName, displayVersion: displayVersion, bundleVersion: bundleVersion)
+            _ = project.reload()
+            
+            return Result(project: project, swiftFileCount: swiftFiles.count, resourceCount: resourceCount, warnings: warnings)
+        } catch {
+            project.remove()
+            throw error
+        }
+    }
+    
+    // MARK: helpers
+    
+    private static func copy(_ source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if fm.fileExists(atPath: destination.path) {
+            try fm.removeItem(at: destination)
+        }
+        try fm.copyItem(at: source, to: destination)
+    }
+    
+    /// Copies the image files of every imageset as loose files named after the set ("logo.png", "logo@2x.png").
+    private static func convertAssetCatalogImages(_ catalog: URL, into resources: URL) -> (images: Int, skipped: Int) {
+        let fm = FileManager.default
+        var images = 0
+        var skipped = 0
+        guard let enumerator = fm.enumerator(at: catalog, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else { return (0, 0) }
+        
+        for case let url as URL in enumerator {
+            let ext = url.pathExtension
+            guard ["imageset", "colorset", "appiconset", "symbolset", "dataset"].contains(ext) else { continue }
+            enumerator.skipDescendants()
+            
+            guard ext == "imageset" else {
+                skipped += 1
+                continue
+            }
+            
+            let setName = url.deletingPathExtension().lastPathComponent
+            guard let data = try? Data(contentsOf: url.appendingPathComponent("Contents.json")),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let entries = json["images"] as? [[String: Any]] else {
+                skipped += 1
+                continue
+            }
+            
+            var copiedAny = false
+            for entry in entries {
+                guard let filename = entry["filename"] as? String else { continue }
+                let source = url.appendingPathComponent(filename)
+                guard fm.fileExists(atPath: source.path) else { continue }
+                let scale = (entry["scale"] as? String) ?? "1x"
+                let suffix = scale == "1x" ? "" : "@\(scale)"
+                let fileExtension = source.pathExtension.isEmpty ? "png" : source.pathExtension
+                let destination = resources.appendingPathComponent("\(setName)\(suffix).\(fileExtension)")
+                if (try? copy(source, to: destination)) != nil {
+                    copiedAny = true
+                }
+            }
+            if copiedAny { images += 1 } else { skipped += 1 }
+        }
+        return (images, skipped)
+    }
+    
+    private static func updateProjectConfig(_ project: NXProject, displayName: String, displayVersion: String?, bundleVersion: String?) {
+        let plistURL = project.url.appendingPathComponent("Config/Project.plist")
+        guard let data = try? Data(contentsOf: plistURL),
+              var plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else { return }
+        plist["NXDisplayName"] = displayName
+        if let displayVersion { plist["NXBundleShortVersion"] = displayVersion }
+        if let bundleVersion { plist["NXBundleVersion"] = bundleVersion }
+        if let output = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) {
+            try? output.write(to: plistURL, options: .atomic)
+        }
+    }
+    
+    private static func firstCapture(in text: String, pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              match.numberOfRanges > 1,
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        let value = String(text[range]).trimmingCharacters(in: .whitespaces)
+        return value.isEmpty ? nil : value
+    }
+    
+    /// Executable / module names must be plain identifiers.
+    private static func sanitizedIdentifier(_ name: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_"))
+        var result = String(name.unicodeScalars.filter { allowed.contains($0) && $0.isASCII })
+        if result.isEmpty { result = "ImportedApp" }
+        if let first = result.unicodeScalars.first, CharacterSet.decimalDigits.contains(first) {
+            result = "App" + result
+        }
+        return result
+    }
+    
+    private static func organizationPrefix(of bundleIdentifier: String) -> String {
+        let parts = bundleIdentifier.split(separator: ".")
+        return parts.count > 1 ? parts.dropLast().joined(separator: ".") : "com.example"
+    }
+}
+
+extension ContentViewController {
+    /// Imports a .swiftpm package and reports what was converted.
+    func importSwiftPlaygroundsPackage(at url: URL) {
+        do {
+            let result = try SwiftPlaygroundsImporter.importPackage(
+                at: url,
+                intoProjectsAt: NXBootstrap.shared().rootURL.appendingPathComponent("Projects")
+            )
+            addProject(result.project)
+            
+            var message = "\(result.swiftFileCount) Swift file\(result.swiftFileCount == 1 ? "" : "s") and \(result.resourceCount) resource\(result.resourceCount == 1 ? "" : "s") imported."
+            if !result.warnings.isEmpty {
+                message += "\n\n" + result.warnings.map { "• " + $0 }.joined(separator: "\n\n")
+            }
+            let alert = UIAlertController(title: "Imported \"\(result.project.projectConfig.displayName ?? "App")\"", message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            self.present(alert, animated: true)
+        } catch {
+            NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: error.localizedDescription, withDelay: 0.0)
+        }
     }
 }

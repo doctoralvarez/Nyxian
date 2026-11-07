@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-07): ⇧⌘F Search in Project, ⇧⌘O Open Quickly; tapping a
+    "file:line" printed in the console opens that file at that line.
   - 1.0.0 (2026-11-06): ⌘B builds without running, ⇧⌘I opens the
     Issue Navigator.
 */
@@ -232,7 +234,21 @@ class MainSplitViewController: UISplitViewController, UISplitViewControllerDeleg
         buildCommand.wantsPriorityOverSystemBehavior = true
         issuesCommand.wantsPriorityOverSystemBehavior = true
         
-        return [closeCommand, runCommand, buildCommand, issuesCommand]
+        let searchCommand = UIKeyCommand(title: "Search in Project", action: #selector(self.showProjectSearch), input: "F", modifierFlags: [.command, .shift])
+        let quickOpenCommand = UIKeyCommand(title: "Open Quickly", action: #selector(self.showQuickOpen), input: "O", modifierFlags: [.command, .shift])
+        searchCommand.wantsPriorityOverSystemBehavior = true
+        quickOpenCommand.wantsPriorityOverSystemBehavior = true
+        
+        return [closeCommand, runCommand, buildCommand, issuesCommand, searchCommand, quickOpenCommand]
+    }
+    
+    /* fork: project-wide search and quick open from the keyboard */
+    @objc func showProjectSearch() {
+        self.detailVC?.forkPresentProjectSearch(self.project)
+    }
+    
+    @objc func showQuickOpen() {
+        self.detailVC?.forkPresentQuickOpen(self.project)
     }
     
     /* fork: compile and link without signing, installing or running */
@@ -702,6 +718,55 @@ class SplitScreenDetailViewController: UIViewController, PEProcessObserver {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         NotificationCenter.default.addObserver(self, selector: #selector(handleMyNotification(_:)), name: Notification.Name("FileListAct"), object: nil)
+        /* fork: tapped "file:line" in the console */
+        NotificationCenter.default.addObserver(self, selector: #selector(handleConsoleSourceLocation(_:)), name: Notification.Name("NXConsoleOpenSourceLocation"), object: nil)
+    }
+    
+    /* fork: open the file and line a running program printed (Swift runtime traps, compiler-style paths) */
+    @objc func handleConsoleSourceLocation(_ notification: Notification) {
+        guard let console = notification.object as? NXConsoleView, console === self.logView,
+              let info = notification.userInfo,
+              let rawPath = info["path"] as? String,
+              let line = (info["line"] as? NSNumber)?.intValue else { return }
+        let column = (info["column"] as? NSNumber)?.intValue ?? 1
+        
+        guard let url = resolveConsoleSourcePath(rawPath) else {
+            let alert = UIAlertController(
+                title: "File Not in Project",
+                message: "\(rawPath) is not part of this project. It may belong to the Swift runtime or the SDK.",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            self.present(alert, animated: true)
+            return
+        }
+        
+        self.openPath(url: url, line: CFIndex(line), column: CFIndex(column), isReadOnly: false)
+    }
+    
+    /// Absolute paths are used as they are; relative ones ("Module/File.swift") match the project file sharing the longest path suffix.
+    private func resolveConsoleSourcePath(_ rawPath: String) -> URL? {
+        if rawPath.hasPrefix("/") {
+            return FileManager.default.fileExists(atPath: rawPath) ? URL(fileURLWithPath: rawPath) : nil
+        }
+        
+        let wanted = rawPath.split(separator: "/").map(String.init)
+        guard !wanted.isEmpty else { return nil }
+        
+        var best: (url: URL, matched: Int)?
+        for url in ProjectFileIndex.files(in: self.project.url) {
+            let parts = url.standardizedFileURL.pathComponents
+            var matched = 0
+            while matched < wanted.count,
+                  matched < parts.count,
+                  parts[parts.count - 1 - matched] == wanted[wanted.count - 1 - matched] {
+                matched += 1
+            }
+            if matched > 0, matched > (best?.matched ?? 0) {
+                best = (url, matched)
+            }
+        }
+        return best?.url
     }
     
     override func viewDidDisappear(_ animated: Bool) {
