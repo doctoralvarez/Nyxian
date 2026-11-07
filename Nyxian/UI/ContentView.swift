@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.1
+ Fork doctoralvarez/Nyxian — version 1.4.2
  Changelog:
+  - 1.4.2 (2026-11-07): exported Package.swift failed in Swift Playgrounds
+    ("PlaceholderIcon has no member 'gear'"); the default icon is now .leaf.
+    The importer keeps the original manifest in Config/SwiftPlaygrounds-
+    Package.swift.txt; the exporter reuses its placeholder icon and accent color.
   - 1.4.1 (2026-11-07): imported .swiftpm apps whose name has spaces failed to
     link ("failed to open …/Payload/ZCS Explorer.app/ZCSExplorer"); the
     importer now writes NXOutputPath with $(NXExecutable).app (see NXProject.m).
@@ -942,6 +946,8 @@ enum SwiftPlaygroundsImporter {
             }
             
             updateProjectConfig(project, displayName: displayName, displayVersion: displayVersion, bundleVersion: bundleVersion)
+            /* kept so an export back to .swiftpm can reuse its icon and accent color */
+            try? manifest.write(to: project.url.appendingPathComponent("Config/\(SwiftPlaygroundsExporter.originalManifestName)"), atomically: true, encoding: .utf8)
             _ = project.reload()
             
             return Result(project: project, swiftFileCount: swiftFiles.count, resourceCount: resourceCount, warnings: warnings)
@@ -1092,6 +1098,9 @@ enum SwiftPlaygroundsExporter {
         }
     }
     
+    /// The imported package's own manifest, kept in Config/ by SwiftPlaygroundsImporter.
+    static let originalManifestName = "SwiftPlaygrounds-Package.swift.txt"
+    
     private static let cFamilyExtensions: Set<String> = ["c", "m", "mm", "cpp", "cc", "cxx", "h", "hpp", "hh", "s"]
     private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "heic", "pdf"]
     private static let ignoredNames: Set<String> = ["Config", ".git", ".build", ".swiftpm", "Package.swift", "Package.resolved"]
@@ -1209,12 +1218,17 @@ enum SwiftPlaygroundsExporter {
             }
         }
         
-        /* manifest */
+        /* manifest; icon and accent color come from the original package when there was one */
         let hasResources = resourceCount > 0
+        let original = (try? String(contentsOf: root.appendingPathComponent("Config/\(originalManifestName)"), encoding: .utf8)) ?? ""
+        let appIcon = firstMatch(in: original, pattern: #"\.placeholder\s*\(\s*icon\s*:\s*\.[A-Za-z]+\s*\)"#) ?? ".placeholder(icon: .leaf)"
+        let accentColor = firstMatch(in: original, pattern: #"\.presetColor\s*\(\s*\.[A-Za-z]+\s*\)"#) ?? ".presetColor(.blue)"
         try manifest(name: displayName,
                      bundleIdentifier: config.bundleid ?? "com.example.\(packageName)",
                      displayVersion: displayVersion,
                      bundleVersion: bundleVersion,
+                     appIcon: appIcon,
+                     accentColor: accentColor,
                      resources: hasResources)
             .write(to: package.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
         
@@ -1255,7 +1269,12 @@ enum SwiftPlaygroundsExporter {
         "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
     
-    private static func manifest(name: String, bundleIdentifier: String, displayVersion: String, bundleVersion: String, resources: Bool) -> String {
+    private static func firstMatch(in text: String, pattern: String) -> String? {
+        guard let range = text.range(of: pattern, options: .regularExpression) else { return nil }
+        return String(text[range])
+    }
+    
+    private static func manifest(name: String, bundleIdentifier: String, displayVersion: String, bundleVersion: String, appIcon: String, accentColor: String, resources: Bool) -> String {
         let resourcesLine = resources ? ",\n            resources: [\n                .process(\"Resources\")\n            ]" : ""
         return """
         // swift-tools-version: 5.9
@@ -1280,8 +1299,8 @@ enum SwiftPlaygroundsExporter {
                     teamIdentifier: "",
                     displayVersion: \(literal(displayVersion)),
                     bundleVersion: \(literal(bundleVersion)),
-                    appIcon: .placeholder(icon: .gear),
-                    accentColor: .presetColor(.blue),
+                    appIcon: \(appIcon),
+                    accentColor: \(accentColor),
                     supportedDeviceFamilies: [
                         .pad,
                         .phone

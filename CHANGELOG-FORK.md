@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.11.2 — 2026-11-07
+
+- **.swiftpm export fix**: Swift Playgrounds rejected the manifest
+  ("PlaceholderIcon has no member 'gear'"). The default icon is now `.leaf`.
+- Imported `.swiftpm` apps keep their original manifest in
+  `Config/SwiftPlaygrounds-Package.swift.txt`; exporting them back reuses its
+  placeholder icon and accent color. (Projects imported before 1.11.2 use the
+  defaults.)
+
 ## 1.11.1 — 2026-11-07
 
 - **Link fix** for apps whose display name differs from the executable name
