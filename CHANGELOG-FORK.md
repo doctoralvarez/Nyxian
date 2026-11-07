@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.17.4 — 2026-11-07
+
+- **@State fixed for real**: the framework + SwiftUI overlays of the iOS 27
+  SDK themselves (`_SpriteKit_SwiftUI`, `_SceneKit_SwiftUI`, …) turn `@State`
+  into a macro that needs Xcode's `SwiftUIMacros` plugin. 1.17.3 still loaded
+  them when the code mentioned `SpriteView` / `SceneView`. Nyxian no longer
+  loads any overlay (as up to 1.16). Use `SKView` / `SCNView` in a
+  `UIViewRepresentable` instead of `SpriteView`.
+
 ## 1.17.3 — 2026-11-07
 
 - **Fix for 1.17.0**: turning on every cross-import overlay broke `@State`

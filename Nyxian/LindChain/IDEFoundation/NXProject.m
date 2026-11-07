@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-07): no framework + SwiftUI overlays at all. Loading
+    _SpriteKit_SwiftUI / _SceneKit_SwiftUI from the iOS 27 SDK (globally in
+    1.1.0, on demand in 1.2.0) makes @State resolve to a macro whose plugin
+    (SwiftUIMacros) only ships with Xcode, so every @State failed. Back to
+    the plain SDK modules; SpriteView needs an SKView wrapper instead.
   - 1.2.0 (2026-11-07): no global -enable-cross-import-overlays any more (an
     iOS 27 overlay turned @State into a macro needing Xcode's SwiftUIMacros
     plugin); instead the overlays the code uses (SpriteView ->
@@ -43,98 +48,10 @@
 #import <LindChain/IDEFoundation/NXCodeTemplate.h>
 #import <LindChain/IDEFoundation/NXUser.h>
 #import <LindChain/IDEFoundation/NXUtils.h>
-#import <LindChain/IDEBuilder/LDEFilesFinder.h>
 #import <Nyxian-Swift.h>
 
 @implementation NXProjectConfig
 
-/* fork: the getter below is custom, so the backing variable is declared here */
-@synthesize swiftFlags = _swiftFlags;
-
-/*
- * fork: framework + SwiftUI overlays (SpriteView lives in _SpriteKit_SwiftUI, …).
- * Turning on every cross-import overlay is not possible here: the iOS 27 SDK has
- * overlays whose macros (e.g. SwiftUIMacros.StateMacro for @State) need compiler
- * plugins that only ship with Xcode. So only the overlays the project's code
- * uses are imported, and only when the SDK has them.
- */
-static NSArray<NSString*> *NXForkOverlayImports(NSString *sourceRoot)
-{
-    if(sourceRoot.length == 0)
-    {
-        return @[];
-    }
-    
-    static NSMutableDictionary<NSString*,NSArray*> *cache;
-    static NSMutableDictionary<NSString*,NSDate*> *cacheDates;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        cache = [NSMutableDictionary dictionary];
-        cacheDates = [NSMutableDictionary dictionary];
-    });
-    @synchronized(cache)
-    {
-        NSDate *date = cacheDates[sourceRoot];
-        if(date != nil && -date.timeIntervalSinceNow < 3.0)
-        {
-            return cache[sourceRoot];
-        }
-    }
-    
-    /* overlay module -> what code that needs it says */
-    NSDictionary<NSString*,NSArray<NSString*>*> *overlays = @{
-        @"_SpriteKit_SwiftUI": @[@"SpriteView"],
-        @"_SceneKit_SwiftUI": @[@"SceneView"],
-        @"_MapKit_SwiftUI": @[@"Map(", @"Map {", @"MapMarker", @"MapAnnotation", @"MapPin", @"Marker(", @"MapCameraPosition", @"MapReader"],
-        @"_AVKit_SwiftUI": @[@"VideoPlayer"],
-        @"_StoreKit_SwiftUI": @[@"StoreView", @"ProductView", @"SubscriptionStoreView"],
-        @"_AuthenticationServices_SwiftUI": @[@"SignInWithAppleButton"],
-        @"_QuickLook_SwiftUI": @[@"quickLookPreview"],
-        @"_PhotosUI_SwiftUI": @[@"PhotosPicker"],
-        @"_HealthKit_SwiftUI": @[@"healthDataAccessRequest"],
-    };
-    
-    NSMutableString *sources = [NSMutableString string];
-    for(NSString *path in LDEFilesFinder(sourceRoot, [NSSet setWithObject:@"swift"], [NSSet setWithArray:@[@"Resources", @"Config"]]))
-    {
-        NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
-        if(text) [sources appendString:text];
-    }
-    
-    NSString *swiftLib = [NXBootstrap.shared.sdkURL URLByAppendingPathComponent:@"usr/lib/swift"].path;
-    NSMutableArray<NSString*> *flags = [NSMutableArray array];
-    for(NSString *module in [overlays.allKeys sortedArrayUsingSelector:@selector(compare:)])
-    {
-        BOOL used = NO;
-        for(NSString *token in overlays[module])
-        {
-            if([sources containsString:token]) { used = YES; break; }
-        }
-        if(!used) continue;
-        NSString *modulePath = [swiftLib stringByAppendingPathComponent:[module stringByAppendingPathExtension:@"swiftmodule"]];
-        NSString *interfacePath = [swiftLib stringByAppendingPathComponent:[module stringByAppendingPathExtension:@"swiftinterface"]];
-        if(![[NSFileManager defaultManager] fileExistsAtPath:modulePath] && ![[NSFileManager defaultManager] fileExistsAtPath:interfacePath]) continue;
-        [flags addObjectsFromArray:@[@"-Xfrontend", @"-import-module", @"-Xfrontend", module]];
-    }
-    
-    @synchronized(cache)
-    {
-        cache[sourceRoot] = flags;
-        cacheDates[sourceRoot] = [NSDate date];
-    }
-    return flags;
-}
-
-- (NSArray<NSString*>*)swiftFlags
-{
-    NSArray<NSString*> *flags = _swiftFlags;
-    if(flags.count == 0)
-    {
-        return flags;
-    }
-    NSArray<NSString*> *overlays = NXForkOverlayImports(self.variables[@"SRCROOT"]);
-    return overlays.count ? [flags arrayByAddingObjectsFromArray:overlays] : flags;
-}
 
 + (NSArray<NSString*>*)sdkCompilerFlags
 {
