@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-07): no TeamWin splash image on normal launches (plain
+    background; Recovery > Settings > "Show TeamWin boot splash" brings it
+    back; verbose boot still shows its console). When booting the bundled IDE
+    with a TrustStore already installed, the TrustStore check runs in the
+    background instead of holding the launch for up to 4 seconds.
   - 1.0.0 (2026-11-07): "Boot bundled IDE" (on by default). A normal boot
     loads the IDE built into this IPA (SuperSlot.dylib) instead of
     downloading/booting the official emexLabs ROM, so this fork's changes
@@ -284,6 +289,13 @@ enum BootConfig {
     fileprivate static let entitlementModeKey = "nyxian.boot.entitlements.mode"
     /* fork: boot the IDE bundled in this IPA (SuperSlot.dylib) instead of an OTA/flashed ROM */
     fileprivate static let preferBundledIDEKey = "fork.boot.preferBundledIDE"
+    /* fork: the TeamWin image while booting (off: plain background) */
+    fileprivate static let showBootSplashKey = "fork.boot.showSplash"
+    
+    static var showBootSplash: Bool {
+        get { UserDefaults.standard.bool(forKey: showBootSplashKey) }
+        set { UserDefaults.standard.set(newValue, forKey: showBootSplashKey) }
+    }
     
     static var preferBundledIDE: Bool {
         get { UserDefaults.standard.bool(forKey: preferBundledIDEKey) }
@@ -295,6 +307,7 @@ enum BootConfig {
         defaults[entitlementModeKey] = EnforcementMode.enforcing.rawValue
         defaults["nyxian.recovery.tw_military_time"] = true
         defaults[preferBundledIDEKey] = true
+        defaults[showBootSplashKey] = false
         
         UserDefaults.standard.register(defaults: defaults)
     }
@@ -1228,6 +1241,15 @@ private func bootConfigItems() -> [NXRecoveryItem] {
     bundledIDE.toggle = true
     bundledIDE.checked = BootConfig.preferBundledIDE
     items.append(bundledIDE)
+    /* fork: TeamWin image on every launch, or a plain background */
+    let splash: NXRecoveryItem = NXRecoveryItem(title: "Show TeamWin boot splash") { c in
+        guard let c else { return }
+        BootConfig.showBootSplash.toggle()
+        reload(c)
+    }
+    splash.toggle = true
+    splash.checked = BootConfig.showBootSplash
+    items.append(splash)
     // the boot toggles are boot arguments now (BootHandoff/NXBootArgs.h)
     items.append(NXRecoveryItem(title: bootArgumentsSettingTitle()) { c in
         guard let c else { return }
@@ -1250,6 +1272,7 @@ private func bootConfigItems() -> [NXRecoveryItem] {
         BootArguments.string = ""
         BootConfig.entitlementMode = .enforcing
         BootConfig.preferBundledIDE = true
+        BootConfig.showBootSplash = false
         c.restoreRecoverySettings()
         reload(c)
     })
@@ -2329,7 +2352,7 @@ class BootViewController: UIViewController, NXBootHandoffHostDelegate {
         
         self.view.backgroundColor = .systemBackground
         
-        splashView.backgroundColor = UIColor(white: 34.0 / 255.0, alpha: 1)
+        splashView.backgroundColor = BootConfig.showBootSplash ? UIColor(white: 34.0 / 255.0, alpha: 1) : .systemBackground
         splashView.frame = self.view.bounds
         splashView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         self.view.addSubview(splashView)
@@ -2386,7 +2409,14 @@ class BootViewController: UIViewController, NXBootHandoffHostDelegate {
             if verbose {
                 bootLog("bootloader: checking for a newer TrustStore")
             }
-            updateTrustStore(timeout: haveStore ? 4 : 8) { line, _ in bootLog("bootloader: " + line) }
+            /* fork: the bundled IDE does not need a fresh TrustStore to boot, so do not hold the launch for it */
+            if haveStore && mode == 0 && BootConfig.preferBundledIDE {
+                DispatchQueue.global(qos: .background).async {
+                    updateTrustStore(timeout: 8) { _, _ in }
+                }
+            } else {
+                updateTrustStore(timeout: haveStore ? 4 : 8) { line, _ in bootLog("bootloader: " + line) }
+            }
             
             if mode == 0, let otaPath = takePendingOTA() {
                 if verbose { bootLog("bootloader: OTA pending: \(otaPath)") }
@@ -2500,7 +2530,8 @@ class BootViewController: UIViewController, NXBootHandoffHostDelegate {
         super.viewDidLayoutSubviews()
         if splashView.superview != nil {
             let size = splashView.bounds.size
-            if size.width > 0, size.height > 0, size != splashImageSize {
+            /* fork: plain background unless the TeamWin splash is turned on */
+            if BootConfig.showBootSplash, size.width > 0, size.height > 0, size != splashImageSize {
                 logoView.image = NXTWRPBootSplashImage(size)
                 splashImageSize = size
             }

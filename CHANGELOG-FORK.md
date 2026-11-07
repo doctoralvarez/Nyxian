@@ -4,6 +4,16 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.12.0 — 2026-11-07
+
+- **No TeamWin splash on launch**: normal launches show a plain background
+  while the IDE loads. Recovery > Settings > *Show TeamWin boot splash* brings
+  the image back; verbose boot still shows its console.
+- **Faster launch**: when booting the bundled IDE with a TrustStore already
+  installed, the TrustStore check runs in the background instead of holding
+  the launch for up to 4 seconds. The 1-second volume-button window stays, as
+  it is the way into Recovery.
+
 ## 1.11.2 — 2026-11-07
 
 - **.swiftpm export fix**: Swift Playgrounds rejected the manifest
