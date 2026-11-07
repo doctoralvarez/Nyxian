@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.1.1
  Changelog:
+  - 1.1.1 (2026-11-07): nullability of +shared and the stop dictionary.
   - 1.1.0 (2026-11-07): NXForkDebugger — attaches to a running app through
     its task port: pause / continue, stop on Swift traps, line breakpoints
     with the CPU's hardware breakpoint registers, backtraces of every thread
@@ -84,9 +85,9 @@
  */
 @interface NXForkDebugger : NSObject
 
-+ (instancetype)shared;
++ (nonnull instancetype)shared;
 
-@property (nonatomic, copy) void (^stopHandler)(NSDictionary<NSString*,id> *stop);
+@property (nonatomic, copy) void (^stopHandler)(NSDictionary<NSString*,id> * _Nonnull stop);
 @property (nonatomic, copy) void (^stateHandler)(void);
 
 @property (atomic, readonly) BOOL attached;
