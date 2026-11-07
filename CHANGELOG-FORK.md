@@ -4,6 +4,29 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.16.0 — 2026-11-07
+
+- **Git**: ⋯ > GitHub > **Branches…** (list, create from the current state,
+  switch — needs no unpushed changes) and **History** (commits of the branch;
+  tap one for its files with +/− and the patch). In *Commit and Push…* swipe a
+  file to **Discard** it (back to the last sync; new files are deleted).
+- **Export assistant**: Export (iPad archive button, iPhone ⋯ > Export) first
+  shows version and build number (with "+1"), and checks: bundle identifier,
+  app icon, and permissions the code uses without a usage description (one tap
+  adds it), background tasks. Then it builds the .ipa (not signed for
+  distribution — sign it externally).
+- **Profiler**: a pill over the console (iPad) and in the iPhone Console
+  window shows CPU, memory and threads of the running app every second; tap it
+  for the last minute as graphs.
+- **Metal shaders**: every `.metal` file is copied into the app and joined as
+  `NyxianShaders.metal`; ⋯ > **Add Metal Helper** writes
+  `MetalLibrary+App.swift` (`device.makeAppLibrary()`: Xcode's compiled
+  library, or the sources compiled on the device) and a sample `Shaders.metal`.
+- **SwiftUI Preview** (⌥⌘P or the edit menu in a Swift file): builds a copy of
+  the project whose app shows only the chosen `#Preview` / `PreviewProvider`
+  (`@Previewable` supported) and runs it as "<App> Preview". It is a full
+  build, not a live canvas.
+
 ## 1.15.0 — 2026-11-07
 
 - **Jump to Definition** now also in Swift files, with **⌃⌘J** (and the edit

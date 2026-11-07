@@ -21,8 +21,18 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.1
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-07): ⋯ > Add Metal Helper writes MetalLibrary+App.swift
+    (MTLDevice.makeAppLibrary(): Xcode's default library, or the .metal
+    sources Nyxian bundles, compiled on the device). Profiler pill over the console (CPU, memory,
+    threads of the running app, tap for the last minute as graphs;
+    ForkProfilerView). Export opens an export assistant first (version and
+    build number, icon / bundle identifier / missing usage-description checks
+    with one-tap fixes), then builds the .ipa (ForkExportAssistant).
+  - 1.4.0 (2026-11-07): GitHub branches (list, create, switch), history of
+    the branch with each commit's changes, and Discard Changes (swipe a file
+    in Review Changes). GitHubBranchesViewController, GitHubHistoryViewController.
   - 1.3.1 (2026-11-07): build fix — NXConsoleView() is failable.
   - 1.3.0 (2026-11-07): "Commit and Push…" first shows the changes since the
     last sync (added / modified / deleted, +/− lines) with a line diff per
@@ -375,7 +385,8 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             }))
             projectMenuElements.append(UIAction(title: "Export", image: UIImage(systemName: "archivebox.fill"), handler: { [weak self] _ in
                 guard let self = self else { return }
-                buildProjectWithArgumentUI(targetViewController: self, project: project, buildType: .export)
+                /* fork: checks and version first */
+                ForkExportAssistant.present(from: self, project: project)
             }))
             projectMenuElements.append(UIAction(title: "Issue Navigator", image: UIImage(systemName: "exclamationmark.triangle.fill"), handler: { [weak self] _ in
                 guard let self = self else { return }
@@ -398,11 +409,27 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
                 UIAction(title: "Pull", image: UIImage(systemName: "arrow.down.circle")) { [weak self] _ in
                     self?.forkGitHubPull(project)
                 },
+                /* fork 1.4.0 */
+                UIAction(title: "Branches…", image: UIImage(systemName: "arrow.triangle.branch")) { [weak self] _ in
+                    self?.forkGitHubBranches(project)
+                },
+                UIAction(title: "History", image: UIImage(systemName: "clock.arrow.circlepath")) { [weak self] _ in
+                    self?.forkGitHubHistory(project)
+                },
                 UIAction(title: "Repository…", image: UIImage(systemName: "link")) { [weak self] _ in
                     self?.forkPresentGitHubLinkSettings(project)
                 },
                 UIAction(title: "Account…", image: UIImage(systemName: "person.crop.circle")) { [weak self] _ in
                     self?.forkPresentGitHubAccount()
+                }
+            ]))
+        }
+        
+        /* fork: Metal shaders without a Metal compiler */
+        if !self.isSublink, let project = self.project {
+            rootMenuChildren.append(UIMenu(options: .displayInline, children: [
+                UIAction(title: "Add Metal Helper", image: UIImage(systemName: "cube.transparent")) { [weak self] _ in
+                    self?.forkAddMetalHelper(project)
                 }
             ]))
         }
@@ -1263,7 +1290,7 @@ struct GitHubSync {
     
     // MARK: HTTP
     
-    private func request(_ method: String, _ path: String, body: [String: Any]? = nil, allow404: Bool = false) async throws -> Any? {
+    func request(_ method: String, _ path: String, body: [String: Any]? = nil, allow404: Bool = false) async throws -> Any? {
         guard let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)\(path)") else { throw GitHubSyncError.invalidResponse }
         var request = URLRequest(url: url)
         request.httpMethod = method
@@ -1312,7 +1339,7 @@ struct GitHubSync {
     }
     
     /// Remote head commit and its tree, or nil when the branch does not exist yet.
-    private func head() async throws -> (commit: String, tree: String)? {
+    func head() async throws -> (commit: String, tree: String)? {
         guard let ref = try await request("GET", "/git/ref/heads/\(branch)", allow404: true) as? [String: Any],
               let object = ref["object"] as? [String: Any],
               let commitSHA = object["sha"] as? String,
@@ -1322,7 +1349,7 @@ struct GitHubSync {
     }
     
     /// path -> blob SHA of every file in a tree.
-    private func remoteFiles(tree: String) async throws -> [String: String] {
+    func remoteFiles(tree: String) async throws -> [String: String] {
         guard let json = try await request("GET", "/git/trees/\(tree)?recursive=1") as? [String: Any],
               let entries = json["tree"] as? [[String: Any]] else { throw GitHubSyncError.invalidResponse }
         var files: [String: String] = [:]
@@ -1597,7 +1624,7 @@ extension FileListViewController {
                     self.forkGitHubAlert("Nothing to Push", "No file changed since the last sync with \(link.owner)/\(link.repo).")
                     return
                 }
-                let review = GitHubChangesViewController(sync: sync, link: link, changes: changes) { [weak self] in
+                let review = GitHubChangesViewController(sync: sync, link: link, root: root, changes: changes) { [weak self] in
                     self?.forkGitHubCommitAndPush(project, sync: sync, link: link)
                 }
                 let navigation = UINavigationController(rootViewController: review)
@@ -1732,13 +1759,15 @@ enum LineDiff {
 final class GitHubChangesViewController: UITableViewController {
     private let sync: GitHubSync
     private let link: GitHubLink
-    private let sections: [(GitHubChange.Kind, [GitHubChange])]
+    private let root: URL
+    private var sections: [(GitHubChange.Kind, [GitHubChange])]
     private var counts: [String: (added: Int, removed: Int)] = [:]
     private let onPush: () -> Void
     
-    init(sync: GitHubSync, link: GitHubLink, changes: [GitHubChange], onPush: @escaping () -> Void) {
+    init(sync: GitHubSync, link: GitHubLink, root: URL, changes: [GitHubChange], onPush: @escaping () -> Void) {
         self.sync = sync
         self.link = link
+        self.root = root
         self.onPush = onPush
         let kinds: [GitHubChange.Kind] = [.modified, .added, .deleted]
         self.sections = kinds.compactMap { kind in
@@ -1851,6 +1880,64 @@ final class GitHubChangesViewController: UITableViewController {
         tableView.deselectRow(at: indexPath, animated: true)
         let change = sections[indexPath.section].1[indexPath.row]
         navigationController?.pushViewController(GitHubDiffViewController(sync: sync, change: change), animated: true)
+    }
+    
+    /* fork 1.4.0: swipe to put a file back as it was at the last sync */
+    override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        let change = sections[indexPath.section].1[indexPath.row]
+        let discard = UIContextualAction(style: .destructive, title: "Discard") { [weak self] _, _, completion in
+            guard let self else { completion(false); return }
+            let what = change.kind == .added ? "delete this new file" : "put back the version of the last sync"
+            let alert = UIAlertController(title: "Discard Changes", message: "\(change.path)\n\nThis will \(what). It cannot be undone.", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completion(false) })
+            alert.addAction(UIAlertAction(title: "Discard", style: .destructive) { _ in
+                self.discard(change) { ok in completion(ok) }
+            })
+            self.present(alert, animated: true)
+        }
+        discard.image = UIImage(systemName: "arrow.uturn.backward")
+        return UISwipeActionsConfiguration(actions: [discard])
+    }
+    
+    private func discard(_ change: GitHubChange, completion: @escaping (Bool) -> Void) {
+        let sync = self.sync
+        let target = root.appendingPathComponent(change.path)
+        Task { [weak self] in
+            var failure: String?
+            do {
+                if change.kind == .added {
+                    try FileManager.default.removeItem(at: target)
+                } else if let sha = change.baseSHA {
+                    let data = try await sync.downloadBlob(sha)
+                    try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try data.write(to: target, options: .atomic)
+                }
+            } catch {
+                failure = error.localizedDescription
+            }
+            await MainActor.run {
+                guard let self else { return }
+                if let failure {
+                    self.forkGitHubAlert("Discard Failed", failure)
+                    completion(false)
+                    return
+                }
+                /* an open tab of that file shows the restored text */
+                if let live = LiveEditorRegistry.editor(forPath: target.path), change.kind != .added,
+                   let text = try? String(contentsOf: target, encoding: .utf8) {
+                    live.replaceWholeText(text)
+                }
+                for index in self.sections.indices {
+                    self.sections[index].1.removeAll { $0.path == change.path }
+                }
+                self.sections.removeAll { $0.1.isEmpty }
+                self.tableView.reloadData()
+                completion(true)
+                if self.sections.isEmpty {
+                    self.dismiss(animated: true)
+                }
+            }
+        }
     }
 }
 
@@ -1976,7 +2063,7 @@ final class ForkPhoneConsole: NSObject, PEProcessObserver {
         return console
     }()
     private weak var session: ForkConsoleSession?
-    private weak var process: PEProcess?
+    private(set) weak var process: PEProcess?
     
     /// Spawn items that send stdout / stderr to the console and stdin from it.
     func itemsForNewRun(name: String) -> [AnyHashable: Any] {
@@ -2047,6 +2134,9 @@ final class ForkConsoleSession: NXWindowSession {
             console.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             console.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
+        /* fork: CPU / memory of the app this console belongs to */
+        let profiler = ForkProfilerView { ForkPhoneConsole.shared.process }
+        profiler.attach(to: view)
         return true
     }
     
@@ -2054,5 +2144,828 @@ final class ForkConsoleSession: NXWindowSession {
         _ = super.closeWindow()
         ForkPhoneConsole.shared.console.removeFromSuperview()
         return true
+    }
+}
+
+// MARK: - Fork: branches and history
+
+extension GitHubSync {
+    func branches() async throws -> [String] {
+        guard let list = try await request("GET", "/branches?per_page=100") as? [[String: Any]] else { throw GitHubSyncError.invalidResponse }
+        return list.compactMap { $0["name"] as? String }.sorted()
+    }
+    
+    /// A new branch at `commit`.
+    func createBranch(_ name: String, at commit: String) async throws {
+        _ = try await request("POST", "/git/refs", body: ["ref": "refs/heads/\(name)", "sha": commit])
+    }
+    
+    /// Replaces the synced files with those of this sync's branch (no local changes allowed).
+    func checkout(root: URL, link: inout GitHubLink) async throws -> Int {
+        guard let current = try await head() else { throw GitHubSyncError.emptyRepository }
+        let remote = try await remoteFiles(tree: current.tree)
+        var written = 0
+        for (path, sha) in remote where link.files[path] != sha {
+            let data = try await downloadBlob(sha)
+            let url = root.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+            written += 1
+        }
+        for path in link.files.keys where remote[path] == nil {
+            try? FileManager.default.removeItem(at: root.appendingPathComponent(path))
+            written += 1
+        }
+        link.branch = branch
+        link.lastCommit = current.commit
+        link.files = remote
+        return written
+    }
+    
+    struct CommitSummary {
+        let sha: String
+        let message: String
+        let author: String
+        let date: Date?
+    }
+    
+    func history(limit: Int = 50) async throws -> [CommitSummary] {
+        let encoded = branch.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? branch
+        guard let list = try await request("GET", "/commits?sha=\(encoded)&per_page=\(limit)") as? [[String: Any]] else { throw GitHubSyncError.invalidResponse }
+        let formatter = ISO8601DateFormatter()
+        return list.compactMap { item in
+            guard let sha = item["sha"] as? String, let commit = item["commit"] as? [String: Any] else { return nil }
+            let author = commit["author"] as? [String: Any]
+            return CommitSummary(
+                sha: sha,
+                message: commit["message"] as? String ?? "",
+                author: author?["name"] as? String ?? "",
+                date: (author?["date"] as? String).flatMap { formatter.date(from: $0) })
+        }
+    }
+    
+    struct CommitFile {
+        let path: String
+        let status: String
+        let additions: Int
+        let deletions: Int
+        let patch: String?
+    }
+    
+    func commitFiles(_ sha: String) async throws -> [CommitFile] {
+        guard let commit = try await request("GET", "/commits/\(sha)") as? [String: Any],
+              let files = commit["files"] as? [[String: Any]] else { throw GitHubSyncError.invalidResponse }
+        return files.map {
+            CommitFile(path: $0["filename"] as? String ?? "",
+                       status: $0["status"] as? String ?? "",
+                       additions: $0["additions"] as? Int ?? 0,
+                       deletions: $0["deletions"] as? Int ?? 0,
+                       patch: $0["patch"] as? String)
+        }
+    }
+}
+
+extension FileListViewController {
+    func forkGitHubBranches(_ project: NXProject) {
+        guard let context = forkGitHubContext(project) else { return }
+        let (sync, link) = context
+        let list = GitHubBranchesViewController(project: project, sync: sync, link: link) { [weak self] in
+            self?.performRefresh()
+        }
+        let navigation = UINavigationController(rootViewController: list)
+        navigation.modalPresentationStyle = .formSheet
+        present(navigation, animated: true)
+    }
+    
+    func forkGitHubHistory(_ project: NXProject) {
+        guard let context = forkGitHubContext(project) else { return }
+        let (sync, link) = context
+        let navigation = UINavigationController(rootViewController: GitHubHistoryViewController(sync: sync, link: link))
+        navigation.modalPresentationStyle = .formSheet
+        present(navigation, animated: true)
+    }
+}
+
+final class GitHubBranchesViewController: UITableViewController {
+    private let project: NXProject
+    private var sync: GitHubSync
+    private var link: GitHubLink
+    private var branches: [String] = []
+    private let onSwitch: () -> Void
+    
+    init(project: NXProject, sync: GitHubSync, link: GitHubLink, onSwitch: @escaping () -> Void) {
+        self.project = project
+        self.sync = sync
+        self.link = link
+        self.onSwitch = onSwitch
+        super.init(style: .insetGrouped)
+        title = "Branches"
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "branch")
+        navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .add, primaryAction: UIAction { [weak self] _ in self?.promptNewBranch() })
+        reload()
+    }
+    
+    private func reload() {
+        let sync = self.sync
+        Task { [weak self] in
+            do {
+                let names = try await sync.branches()
+                await MainActor.run {
+                    self?.branches = names
+                    self?.tableView.reloadData()
+                }
+            } catch {
+                await MainActor.run { self?.forkGitHubAlert("Branches", error.localizedDescription) }
+            }
+        }
+    }
+    
+    private var hasLocalChanges: Bool {
+        let root: URL = project.url
+        return !GitHubChange.localChanges(root: root, link: link).isEmpty
+    }
+    
+    private func promptNewBranch() {
+        let alert = UIAlertController(title: "New Branch", message: "Starts from \(link.branch) as it is now. Your files stay as they are; the next push goes to the new branch.", preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "feature-name"
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Create", style: .default) { [weak self, weak alert] _ in
+            guard let self else { return }
+            let name = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespaces).replacingOccurrences(of: " ", with: "-")
+            guard !name.isEmpty else { return }
+            let sync = self.sync
+            let base = self.link.lastCommit
+            Task { [weak self] in
+                do {
+                    var start = base
+                    if start == nil { start = try await sync.head()?.commit }
+                    guard let commit = start else { throw GitHubSyncError.emptyRepository }
+                    try await sync.createBranch(name, at: commit)
+                    await MainActor.run {
+                        guard let self else { return }
+                        self.link.branch = name
+                        try? self.link.save(for: self.project)
+                        self.sync = GitHubSync(token: sync.token, owner: sync.owner, repo: sync.repo, branch: name)
+                        self.reload()
+                    }
+                } catch {
+                    await MainActor.run { self?.forkGitHubAlert("New Branch", error.localizedDescription) }
+                }
+            }
+        })
+        present(alert, animated: true)
+    }
+    
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { branches.count }
+    
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        "\(link.owner)/\(link.repo). Switching downloads the other branch's files; it needs no unpushed changes."
+    }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "branch", for: indexPath)
+        let name = branches[indexPath.row]
+        var content = cell.defaultContentConfiguration()
+        content.text = name
+        content.image = UIImage(systemName: "arrow.triangle.branch")
+        cell.contentConfiguration = content
+        cell.accessoryType = name == link.branch ? .checkmark : .none
+        return cell
+    }
+    
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        let name = branches[indexPath.row]
+        guard name != link.branch else { return }
+        guard !hasLocalChanges else {
+            forkGitHubAlert("Unpushed Changes", "Push or discard your changes (Commit and Push… > swipe a file) before switching to \(name).")
+            return
+        }
+        let target = GitHubSync(token: sync.token, owner: sync.owner, repo: sync.repo, branch: name)
+        let project = self.project
+        let current = self.link
+        let onSwitch = self.onSwitch
+        forkRunGitHubTask("Switch to \(name)", finished: { [weak self] in
+            if let updated = GitHubLink.load(for: project) { self?.link = updated }
+            self?.sync = target
+            self?.tableView.reloadData()
+            onSwitch()
+        }) {
+            var state = current
+            let root: URL = project.url
+            let changed = try await target.checkout(root: root, link: &state)
+            try state.save(for: project)
+            return "\(changed) file\(changed == 1 ? "" : "s") changed. Close and reopen open tabs to see the new contents."
+        }
+    }
+}
+
+final class GitHubHistoryViewController: UITableViewController {
+    private let sync: GitHubSync
+    private let link: GitHubLink
+    private var commits: [GitHubSync.CommitSummary] = []
+    private let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+    
+    init(sync: GitHubSync, link: GitHubLink) {
+        self.sync = sync
+        self.link = link
+        super.init(style: .insetGrouped)
+        title = "History · \(link.branch)"
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "commit")
+        navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        let sync = self.sync
+        Task { [weak self] in
+            do {
+                let list = try await sync.history()
+                await MainActor.run {
+                    self?.commits = list
+                    self?.tableView.reloadData()
+                }
+            } catch {
+                await MainActor.run { self?.forkGitHubAlert("History", error.localizedDescription) }
+            }
+        }
+    }
+    
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { commits.count }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "commit", for: indexPath)
+        let commit = commits[indexPath.row]
+        var content = cell.defaultContentConfiguration()
+        content.text = commit.message.components(separatedBy: "\n").first ?? commit.message
+        var detail = String(commit.sha.prefix(7)) + " · " + commit.author
+        if let date = commit.date { detail += " · " + dateFormatter.string(from: date) }
+        if commit.sha == link.lastCommit { detail += " · this project" }
+        content.secondaryText = detail
+        content.secondaryTextProperties.color = .secondaryLabel
+        content.secondaryTextProperties.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        cell.contentConfiguration = content
+        cell.accessoryType = .disclosureIndicator
+        return cell
+    }
+    
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        navigationController?.pushViewController(GitHubCommitViewController(sync: sync, commit: commits[indexPath.row]), animated: true)
+    }
+}
+
+/// One commit: its files with +/− and GitHub's patch, colored.
+final class GitHubCommitViewController: UIViewController {
+    private let sync: GitHubSync
+    private let commit: GitHubSync.CommitSummary
+    private let textView = UITextView()
+    
+    init(sync: GitHubSync, commit: GitHubSync.CommitSummary) {
+        self.sync = sync
+        self.commit = commit
+        super.init(nibName: nil, bundle: nil)
+        title = String(commit.sha.prefix(7))
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+        textView.isEditable = false
+        textView.alwaysBounceVertical = true
+        textView.textContainerInset = UIEdgeInsets(top: 12, left: 8, bottom: 12, right: 8)
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(textView)
+        NSLayoutConstraint.activate([
+            textView.topAnchor.constraint(equalTo: view.topAnchor),
+            textView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            textView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            textView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+        textView.text = "Loading…"
+        let sync = self.sync
+        let commit = self.commit
+        Task { [weak self] in
+            do {
+                let files = try await sync.commitFiles(commit.sha)
+                let rendered = GitHubCommitViewController.render(commit: commit, files: files)
+                await MainActor.run { self?.textView.attributedText = rendered }
+            } catch {
+                await MainActor.run { self?.textView.text = error.localizedDescription }
+            }
+        }
+    }
+    
+    static func render(commit: GitHubSync.CommitSummary, files: [GitHubSync.CommitFile]) -> NSAttributedString {
+        let mono = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let bold = UIFont.monospacedSystemFont(ofSize: 13, weight: .bold)
+        let output = NSMutableAttributedString()
+        output.append(NSAttributedString(string: commit.message + "\n\n", attributes: [.font: UIFont.preferredFont(forTextStyle: .headline), .foregroundColor: UIColor.label]))
+        for file in files {
+            output.append(NSAttributedString(string: "\(file.status.capitalized)  \(file.path)  ", attributes: [.font: bold, .foregroundColor: UIColor.label]))
+            output.append(NSAttributedString(string: "+\(file.additions) ", attributes: [.font: bold, .foregroundColor: UIColor.systemGreen]))
+            output.append(NSAttributedString(string: "−\(file.deletions)\n", attributes: [.font: bold, .foregroundColor: UIColor.systemRed]))
+            guard let patch = file.patch else {
+                output.append(NSAttributedString(string: "(no line view: binary or too large)\n\n", attributes: [.font: mono, .foregroundColor: UIColor.secondaryLabel]))
+                continue
+            }
+            for line in patch.components(separatedBy: "\n") {
+                var attributes: [NSAttributedString.Key: Any] = [.font: mono, .foregroundColor: UIColor.secondaryLabel]
+                if line.hasPrefix("+") {
+                    attributes[.foregroundColor] = UIColor.label
+                    attributes[.backgroundColor] = UIColor.systemGreen.withAlphaComponent(0.18)
+                } else if line.hasPrefix("-") {
+                    attributes[.foregroundColor] = UIColor.label
+                    attributes[.backgroundColor] = UIColor.systemRed.withAlphaComponent(0.18)
+                } else if line.hasPrefix("@@") {
+                    attributes[.foregroundColor] = UIColor.systemBlue
+                }
+                output.append(NSAttributedString(string: line + "\n", attributes: attributes))
+            }
+            output.append(NSAttributedString(string: "\n", attributes: [.font: mono]))
+        }
+        return output
+    }
+}
+
+// MARK: - Fork: export assistant
+
+/// Version, build number and pre-flight checks before Nyxian builds the .ipa.
+final class ForkExportAssistant: UITableViewController {
+    struct Check {
+        let title: String
+        let detail: String
+        let ok: Bool
+        let fix: (() -> Void)?
+    }
+    
+    /// API used in the code -> Info.plist key it needs, with a starting text.
+    private static let permissionHints: [(token: String, key: String, text: String)] = [
+        ("AVCaptureDevice", "NSCameraUsageDescription", "This app uses the camera."),
+        ("AVCaptureSession", "NSCameraUsageDescription", "This app uses the camera."),
+        ("UIImagePickerController", "NSCameraUsageDescription", "This app uses the camera."),
+        ("requestRecordPermission", "NSMicrophoneUsageDescription", "This app uses the microphone."),
+        ("AVAudioRecorder", "NSMicrophoneUsageDescription", "This app uses the microphone."),
+        ("PHPhotoLibrary", "NSPhotoLibraryUsageDescription", "This app reads your photo library."),
+        ("CLLocationManager", "NSLocationWhenInUseUsageDescription", "This app uses your location."),
+        ("CNContactStore", "NSContactsUsageDescription", "This app reads your contacts."),
+        ("EKEventStore", "NSCalendarsFullAccessUsageDescription", "This app uses your calendar."),
+        ("LAContext", "NSFaceIDUsageDescription", "This app uses Face ID."),
+        ("CBCentralManager", "NSBluetoothAlwaysUsageDescription", "This app uses Bluetooth."),
+        ("SFSpeechRecognizer", "NSSpeechRecognitionUsageDescription", "This app recognizes speech."),
+        ("CMMotionManager", "NSMotionUsageDescription", "This app uses motion data."),
+        ("CMPedometer", "NSMotionUsageDescription", "This app uses motion data."),
+        ("HKHealthStore", "NSHealthShareUsageDescription", "This app reads health data.")
+    ]
+    
+    private let project: NXProject
+    private weak var presenter: UIViewController?
+    private var version = "1.0"
+    private var build = "1"
+    private var checks: [Check] = []
+    
+    static func present(from presenter: UIViewController, project: NXProject) {
+        let assistant = ForkExportAssistant(project: project, presenter: presenter)
+        let navigation = UINavigationController(rootViewController: assistant)
+        navigation.modalPresentationStyle = .formSheet
+        presenter.present(navigation, animated: true)
+    }
+    
+    private init(project: NXProject, presenter: UIViewController) {
+        self.project = project
+        self.presenter = presenter
+        super.init(style: .insetGrouped)
+        title = "Export .ipa"
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    private var plistURL: URL {
+        let root: URL = project.url
+        return root.appendingPathComponent("Config/Project.plist")
+    }
+    
+    private func readPlist() -> [String: Any] {
+        guard let data = try? Data(contentsOf: plistURL),
+              let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else { return [:] }
+        return plist
+    }
+    
+    private func writeVersions() {
+        var plist = readPlist()
+        guard !plist.isEmpty else { return }
+        plist["NXBundleShortVersion"] = version
+        plist["NXBundleVersion"] = build
+        if let data = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) {
+            try? data.write(to: plistURL, options: .atomic)
+        }
+        _ = project.reload()
+    }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        let plist = readPlist()
+        build = plist["NXBundleVersion"] as? String ?? "1"
+        version = plist["NXBundleShortVersion"] as? String ?? build
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
+        navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .cancel, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Export", image: nil, primaryAction: UIAction { [weak self] _ in self?.export() }, menu: nil)
+        runChecks()
+    }
+    
+    private func runChecks() {
+        let config = project.projectConfig!
+        let info = config.infoDictionary ?? [:]
+        var result: [Check] = []
+        
+        let bundleID = config.bundleid ?? ""
+        let defaultID = bundleID.isEmpty || bundleID.hasPrefix("com.example.")
+        result.append(Check(title: "Bundle identifier", detail: bundleID.isEmpty ? "missing" : bundleID, ok: !defaultID, fix: nil))
+        
+        let hasIcon = info["CFBundleIcons"] != nil || info["CFBundleIconFiles"] != nil
+        result.append(Check(title: "App icon", detail: hasIcon ? "set" : "none — long-press the project in the list > Set App Icon…", ok: hasIcon, fix: nil))
+        
+        /* permissions the code uses but the Info.plist does not explain (iOS closes the app when it asks) */
+        let root: URL = project.url
+        var sources = ""
+        for url in ProjectFileIndex.files(in: root) where ["swift", "m", "mm", "c", "cpp", "h"].contains(url.pathExtension.lowercased()) {
+            sources += (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            sources += "\n"
+        }
+        var seenKeys: Set<String> = []
+        for hint in Self.permissionHints where sources.contains(hint.token) && !seenKeys.contains(hint.key) {
+            seenKeys.insert(hint.key)
+            let present = (info[hint.key] as? String).map { !$0.isEmpty } ?? false
+            let project = self.project
+            result.append(Check(
+                title: hint.key,
+                detail: present ? "described" : "\(hint.token) is used but there is no description — the app would crash when it asks",
+                ok: present,
+                fix: present ? nil : { [weak self] in
+                    self?.promptDescription(key: hint.key, text: hint.text, project: project)
+                }))
+        }
+        if sources.contains("BGTaskScheduler") {
+            let ok = info["BGTaskSchedulerPermittedIdentifiers"] != nil && info["UIBackgroundModes"] != nil
+            result.append(Check(title: "Background tasks", detail: ok ? "identifiers and modes set" : "BGTaskScheduler needs BGTaskSchedulerPermittedIdentifiers and UIBackgroundModes in the Info.plist (Config/Project.plist > NXBundleInfo)", ok: ok, fix: nil))
+        }
+        checks = result
+        tableView.reloadData()
+    }
+    
+    private func promptDescription(key: String, text: String, project: NXProject) {
+        let alert = UIAlertController(title: key, message: "The sentence iOS shows when the app asks for permission.", preferredStyle: .alert)
+        alert.addTextField { $0.text = text }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Add", style: .default) { [weak self, weak alert] _ in
+            let value = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespaces) ?? ""
+            guard !value.isEmpty else { return }
+            var values: [String: Any] = [key: value]
+            if key == "NSCalendarsFullAccessUsageDescription" { values["NSCalendarsUsageDescription"] = value }
+            ForkCapabilities.mergeIntoBundleInfo(values, project: project)
+            self?.runChecks()
+        })
+        present(alert, animated: true)
+    }
+    
+    private func export() {
+        view.endEditing(true)
+        writeVersions()
+        let project = self.project
+        let presenter = self.presenter
+        dismiss(animated: true) {
+            guard let presenter else { return }
+            buildProjectWithArgumentUI(targetViewController: presenter, project: project, buildType: .export)
+        }
+    }
+    
+    // MARK: table
+    
+    override func numberOfSections(in tableView: UITableView) -> Int { 3 }
+    
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        ["Version", "Checks", nil][section]
+    }
+    
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        switch section {
+        case 0: return "Saved in the project. Raise the build number for every .ipa you install over an older one."
+        case 2: return "Nyxian builds the app and packs it as an .ipa that is not signed for distribution: sign it with your own certificate (or a signing service) to install it outside Nyxian. TestFlight / App Store uploads need Xcode or Transporter on a Mac."
+        default: return nil
+        }
+    }
+    
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        [2, checks.count, 1][section]
+    }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
+        var content = cell.defaultContentConfiguration()
+        cell.accessoryType = .none
+        cell.selectionStyle = .default
+        switch indexPath.section {
+        case 0:
+            content.text = indexPath.row == 0 ? "Version" : "Build"
+            content.secondaryText = indexPath.row == 0 ? version : build
+            content.prefersSideBySideTextAndSecondaryText = true
+            cell.accessoryType = .disclosureIndicator
+        case 1:
+            let check = checks[indexPath.row]
+            content.text = check.title
+            content.secondaryText = check.detail
+            content.secondaryTextProperties.color = check.ok ? .secondaryLabel : .systemOrange
+            content.image = UIImage(systemName: check.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+            content.imageProperties.tintColor = check.ok ? .systemGreen : .systemOrange
+            if check.fix != nil { cell.accessoryType = .disclosureIndicator } else { cell.selectionStyle = .none }
+        default:
+            content.text = "Export .ipa"
+            content.textProperties.color = .tintColor
+            content.image = UIImage(systemName: "archivebox.fill")
+        }
+        cell.contentConfiguration = content
+        return cell
+    }
+    
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        switch indexPath.section {
+        case 0:
+            let isVersion = indexPath.row == 0
+            let alert = UIAlertController(title: isVersion ? "Version" : "Build", message: isVersion ? "Shown to people, e.g. 1.2.0" : "A number that grows with every build, e.g. 7", preferredStyle: .alert)
+            alert.addTextField { field in
+                field.text = isVersion ? self.version : self.build
+                field.keyboardType = isVersion ? .numbersAndPunctuation : .numberPad
+            }
+            if !isVersion, let number = Int(build) {
+                alert.addAction(UIAlertAction(title: "Use \(number + 1)", style: .default) { [weak self] _ in
+                    self?.build = "\(number + 1)"
+                    self?.tableView.reloadData()
+                })
+            }
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            alert.addAction(UIAlertAction(title: "Save", style: .default) { [weak self, weak alert] _ in
+                let value = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespaces) ?? ""
+                guard let self, !value.isEmpty else { return }
+                if isVersion { self.version = value } else { self.build = value }
+                self.tableView.reloadData()
+            })
+            present(alert, animated: true)
+        case 1:
+            checks[indexPath.row].fix?()
+        default:
+            export()
+        }
+    }
+}
+
+// MARK: - Fork: profiler (CPU, memory, threads)
+
+/// A small pill with live numbers of the running app; tap for the last minute as graphs.
+final class ForkProfilerView: UIControl {
+    struct Sample {
+        let cpu: Double
+        let memory: Double
+        let threads: Int
+    }
+    
+    private let provider: () -> PEProcess?
+    private let label = UILabel()
+    private var timer: Timer?
+    private(set) var samples: [Sample] = []
+    private weak var graphs: ForkProfilerGraphsViewController?
+    
+    init(provider: @escaping () -> PEProcess?) {
+        self.provider = provider
+        super.init(frame: .zero)
+        backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.92)
+        layer.cornerRadius = 11
+        layer.cornerCurve = .continuous
+        label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        label.textColor = .secondaryLabel
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9)
+        ])
+        isHidden = true
+        addAction(UIAction { [weak self] _ in self?.showGraphs() }, for: .touchUpInside)
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    /// Pins the pill to the top-right corner of `container`.
+    func attach(to container: UIView) {
+        translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(self)
+        NSLayoutConstraint.activate([
+            topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor, constant: 8),
+            trailingAnchor.constraint(equalTo: container.safeAreaLayoutGuide.trailingAnchor, constant: -10)
+        ])
+    }
+    
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        timer?.invalidate()
+        timer = nil
+        guard window != nil else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in self?.tick() }
+        tick()
+    }
+    
+    private func tick() {
+        guard let process = provider() else {
+            isHidden = true
+            return
+        }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let usage = process.forkResourceUsage()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard let usage,
+                      let cpu = usage["cpu"]?.doubleValue,
+                      let memory = usage["memory"]?.doubleValue,
+                      let threads = usage["threads"]?.intValue else {
+                    self.isHidden = true
+                    return
+                }
+                self.samples.append(Sample(cpu: cpu, memory: memory, threads: threads))
+                if self.samples.count > 60 { self.samples.removeFirst(self.samples.count - 60) }
+                self.label.text = String(format: "CPU %.0f%%  ·  %@  ·  %d threads", cpu, ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory), threads)
+                self.isHidden = false
+                self.superview?.bringSubviewToFront(self)
+                self.graphs?.update(self.samples)
+            }
+        }
+    }
+    
+    private func showGraphs() {
+        guard let presenter = sequence(first: self as UIResponder, next: { $0.next }).first(where: { $0 is UIViewController }) as? UIViewController else { return }
+        let graphs = ForkProfilerGraphsViewController()
+        graphs.update(samples)
+        self.graphs = graphs
+        let navigation = UINavigationController(rootViewController: graphs)
+        navigation.modalPresentationStyle = .pageSheet
+        navigation.sheetPresentationController?.detents = [.medium(), .large()]
+        navigation.sheetPresentationController?.prefersGrabberVisible = true
+        presenter.present(navigation, animated: true)
+    }
+}
+
+final class ForkProfilerGraphsViewController: UIViewController {
+    private let cpuGraph = ForkSparklineView(color: .systemTeal)
+    private let memoryGraph = ForkSparklineView(color: .systemPurple)
+    private let cpuLabel = UILabel()
+    private let memoryLabel = UILabel()
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Profiler"
+        view.backgroundColor = .systemBackground
+        navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        for label in [cpuLabel, memoryLabel] {
+            label.font = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
+            label.numberOfLines = 2
+        }
+        let note = UILabel()
+        note.text = "Last 60 seconds, one sample per second. CPU 100% = one core fully busy."
+        note.font = .preferredFont(forTextStyle: .footnote)
+        note.textColor = .secondaryLabel
+        note.numberOfLines = 0
+        let stack = UIStackView(arrangedSubviews: [cpuLabel, cpuGraph, memoryLabel, memoryGraph, note])
+        stack.axis = .vertical
+        stack.spacing = 10
+        stack.setCustomSpacing(22, after: cpuGraph)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 16),
+            stack.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            stack.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+            cpuGraph.heightAnchor.constraint(equalToConstant: 110),
+            memoryGraph.heightAnchor.constraint(equalToConstant: 110)
+        ])
+    }
+    
+    func update(_ samples: [ForkProfilerView.Sample]) {
+        loadViewIfNeeded()
+        let cpu = samples.map { $0.cpu }
+        let memory = samples.map { $0.memory }
+        cpuGraph.values = cpu
+        memoryGraph.values = memory
+        let peakCPU = cpu.max() ?? 0
+        let peakMemory = memory.max() ?? 0
+        cpuLabel.text = String(format: "CPU  now %.0f%%   peak %.0f%%", cpu.last ?? 0, peakCPU)
+        memoryLabel.text = "Memory  now \(ByteCountFormatter.string(fromByteCount: Int64(memory.last ?? 0), countStyle: .memory))   peak \(ByteCountFormatter.string(fromByteCount: Int64(peakMemory), countStyle: .memory))"
+    }
+}
+
+final class ForkSparklineView: UIView {
+    private let color: UIColor
+    var values: [Double] = [] { didSet { setNeedsDisplay() } }
+    
+    init(color: UIColor) {
+        self.color = color
+        super.init(frame: .zero)
+        backgroundColor = .secondarySystemBackground
+        layer.cornerRadius = 10
+        layer.cornerCurve = .continuous
+        clipsToBounds = true
+        contentMode = .redraw
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    override func draw(_ rect: CGRect) {
+        guard values.count > 1 else { return }
+        let inset = bounds.insetBy(dx: 6, dy: 8)
+        let top = max(values.max() ?? 1, 1)
+        let step = inset.width / CGFloat(max(59, values.count - 1))
+        let startX = inset.maxX - step * CGFloat(values.count - 1)
+        let line = UIBezierPath()
+        for (index, value) in values.enumerated() {
+            let point = CGPoint(x: startX + step * CGFloat(index), y: inset.maxY - inset.height * CGFloat(value / top))
+            index == 0 ? line.move(to: point) : line.addLine(to: point)
+        }
+        let area = line.copy() as! UIBezierPath
+        area.addLine(to: CGPoint(x: inset.maxX, y: inset.maxY))
+        area.addLine(to: CGPoint(x: startX, y: inset.maxY))
+        area.close()
+        color.withAlphaComponent(0.18).setFill()
+        area.fill()
+        color.setStroke()
+        line.lineWidth = 2
+        line.lineJoinStyle = .round
+        line.stroke()
+    }
+}
+
+// MARK: - Fork: Metal helper file
+
+extension FileListViewController {
+    func forkAddMetalHelper(_ project: NXProject) {
+        let root: URL = project.url
+        let helper = root.appendingPathComponent("MetalLibrary+App.swift")
+        let shader = root.appendingPathComponent("Shaders.metal")
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: helper.path) {
+            try? """
+            import Metal
+            
+            extension MTLDevice {
+                /// The app's shaders. Built by Xcode: the compiled default library.
+                /// Built by Nyxian (no Metal compiler on iOS): the .metal sources of the project,
+                /// which Nyxian copies into the app as NyxianShaders.metal, compiled here at run time.
+                func makeAppLibrary() throws -> MTLLibrary {
+                    if let library = makeDefaultLibrary() {
+                        return library
+                    }
+                    guard let url = Bundle.main.url(forResource: "NyxianShaders", withExtension: "metal") else {
+                        throw NSError(domain: "Metal", code: 1, userInfo: [NSLocalizedDescriptionKey: "No shaders: add a .metal file to the project."])
+                    }
+                    return try makeLibrary(source: String(contentsOf: url, encoding: .utf8), options: nil)
+                }
+            }
+            
+            """.write(to: helper, atomically: true, encoding: .utf8)
+        }
+        if !fm.fileExists(atPath: shader.path) {
+            try? """
+            #include <metal_stdlib>
+            using namespace metal;
+            
+            // Example: a full-color fragment function. Load it with
+            // try device.makeAppLibrary().makeFunction(name: "solidColor")
+            fragment float4 solidColor() {
+                return float4(0.2, 0.6, 1.0, 1.0);
+            }
+            
+            """.write(to: shader, atomically: true, encoding: .utf8)
+        }
+        performRefresh()
+        forkGitHubAlert("Metal Helper", "Added MetalLibrary+App.swift and Shaders.metal. Load your shaders with:\n\nlet library = try device.makeAppLibrary()\n\nNyxian puts every .metal file of the project into the app and compiles them on the device; Xcode builds still use the compiled library.")
     }
 }

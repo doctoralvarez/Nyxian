@@ -20,7 +20,16 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): -forkResourceUsage (CPU %, memory footprint and
+    thread count of the process, read through its task port) for the
+    profiler in the console.
+*/
+
 #import <LindChain/ProcEnvironment/Surface/libkern/klog.h>
+#import <LindChain/ProcEnvironment/Surface/proc/lookup.h>
 #import <LindChain/ProcEnvironment/PEProcess.h>
 #import <LindChain/WindowServer/NXWindowServer.h>
 #import <LindChain/ProcEnvironment/PEExtension.h>
@@ -391,6 +400,56 @@ static void PEAttachControllingTTYForSpawn(NSDictionary *items,
 #if DEBUG
     NSLog(@"deallocated %@", self);
 #endif /* DEBUG */
+}
+
+/* fork: profiler numbers, read through the task port the host keeps for the process */
+- (NSDictionary<NSString*,NSNumber*>*)forkResourceUsage
+{
+    ksurface_proc_t *proc = self.proc;
+    if(proc == NULL)
+    {
+        return nil;
+    }
+    
+    task_special_port_t flavour = TASK_READ_PORT;
+    task_t task = MACH_PORT_NULL;
+    if(proc_task_for_proc(proc, &flavour, &task) != KERN_SUCCESS || task == MACH_PORT_NULL)
+    {
+        return nil;
+    }
+    
+    uint64_t footprint = 0;
+    task_vm_info_data_t vmInfo;
+    mach_msg_type_number_t vmCount = TASK_VM_INFO_COUNT;
+    if(task_info(task, TASK_VM_INFO, (task_info_t)&vmInfo, &vmCount) == KERN_SUCCESS)
+    {
+        footprint = vmInfo.phys_footprint;
+    }
+    
+    double cpu = 0;
+    thread_act_array_t threads = NULL;
+    mach_msg_type_number_t threadCount = 0;
+    if(task_threads(task, &threads, &threadCount) == KERN_SUCCESS)
+    {
+        for(mach_msg_type_number_t i = 0; i < threadCount; i++)
+        {
+            thread_basic_info_data_t info;
+            mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
+            if(thread_info(threads[i], THREAD_BASIC_INFO, (thread_info_t)&info, &count) == KERN_SUCCESS && !(info.flags & TH_FLAGS_IDLE))
+            {
+                cpu += (double)info.cpu_usage / (double)TH_USAGE_SCALE * 100.0;
+            }
+            mach_port_deallocate(mach_task_self(), threads[i]);
+        }
+        vm_deallocate(mach_task_self(), (vm_address_t)threads, threadCount * sizeof(thread_act_t));
+    }
+    mach_port_deallocate(mach_task_self(), task);
+    
+    return @{
+        @"cpu": @(cpu),
+        @"memory": @(footprint),
+        @"threads": @(threadCount)
+    };
 }
 
 @end

@@ -20,6 +20,14 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): -forkResourceUsage (CPU %, memory footprint and
+    thread count of the process, read through its task port) for the
+    profiler in the console.
+*/
+
 #ifndef PRPROCESS_H
 #define PRPROCESS_H
 
@@ -57,6 +65,9 @@
 - (void)resume;
 
 - (void)addObserver:(id<PEProcessObserver>)observer;
+
+/* fork: @{ @"cpu": percent (all threads, 100 = one core), @"memory": bytes (phys footprint), @"threads": count }, nil when the task is gone */
+- (NSDictionary<NSString*,NSNumber*>*)forkResourceUsage;
 - (void)removeObserver:(id<PEProcessObserver>)observer;
 
 @end

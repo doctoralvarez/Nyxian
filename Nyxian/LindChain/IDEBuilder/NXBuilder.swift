@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-07): Metal shaders — every .metal file of the project is
+    copied into the app, and all of them together as NyxianShaders.metal, so
+    the app can compile them on the device with makeLibrary(source:)
+    (there is no Metal compiler on iOS). See "Add Metal Helper" in ⋯.
   - 1.0.0 (2026-11-06): New BuildType.build (compile and link only, no
     signing/install) used by the ⌘B "Build" shortcut.
 */
@@ -144,6 +148,8 @@ final class NXBuilder: NSObject {
         if project.projectConfig.schemeKind == .app {
             try FileManager.default.createDirectory(at: self.project.payloadURL, withIntermediateDirectories: true)
             try FileManager.default.copyItem(at: self.project.resourcesURL, to: self.project.bundleURL)
+            /* fork: Metal shader sources travel inside the app, to be compiled at run time */
+            NXBuilder.forkBundleMetalSources(projectURL: self.project.url, bundleURL: self.project.bundleURL)
             
             let infoPlistDataSerialized = try PropertyListSerialization.data(fromPropertyList: self.project.projectConfig.infoDictionary ?? [:], format: .xml, options: 0)
             FileManager.default.createFile(atPath: self.project.bundleURL.appendingPathComponent("Info.plist").path, contents: infoPlistDataSerialized)
@@ -392,5 +398,28 @@ func buildProjectWithArgumentUI(targetViewController: UIViewController,
                 }
             }
         }
+    }
+}
+
+extension NXBuilder {
+    /// Copies the project's .metal files into the app and joins them as NyxianShaders.metal.
+    static func forkBundleMetalSources(projectURL: URL, bundleURL: URL) {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(at: projectURL, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else { return }
+        var combined = ""
+        for case let url as URL in enumerator {
+            let relative = url.path.replacingOccurrences(of: projectURL.path + "/", with: "")
+            if relative.hasPrefix("Config/") || relative == "Config" { enumerator.skipDescendants(); continue }
+            guard url.pathExtension.lowercased() == "metal",
+                  let source = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            if !relative.hasPrefix("Resources/") {
+                let destination = bundleURL.appendingPathComponent(url.lastPathComponent)
+                try? fm.removeItem(at: destination)
+                try? fm.copyItem(at: url, to: destination)
+            }
+            combined += "// ---- \(relative)\n" + source + "\n"
+        }
+        guard !combined.isEmpty else { return }
+        try? combined.write(to: bundleURL.appendingPathComponent("NyxianShaders.metal"), atomically: true, encoding: .utf8)
     }
 }

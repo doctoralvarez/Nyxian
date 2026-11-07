@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.8.0
+ Fork doctoralvarez/Nyxian — version 1.9.0
  Changelog:
+  - 1.9.0 (2026-11-07): SwiftUI Preview (⌥⌘P, or the edit menu) — builds a
+    copy of the project whose app shows only the chosen #Preview /
+    PreviewProvider and runs it in its own window (ForkSwiftUIPreview).
   - 1.8.0 (2026-11-07): Jump to Definition works in Swift files (⌃⌘J; SDK
     symbols say which module they come from) and Find References (⇧⌃⌘F, also
     in the edit menu): every whole-word match in the project, checked by the
@@ -787,6 +790,9 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             commands.append(command("Jump to Definition", #selector(jumpToDefinition), "j", [.command, .control]))
             commands.append(command("Find References", #selector(findReferences), "f", [.command, .control, .shift]))
         }
+        if self.file.isSwift, self.project != nil {
+            commands.append(command("Run Preview", #selector(forkRunPreview), "p", [.command, .alternate]))
+        }
 
         if !self.isReadOnly {
             /* fork: editing */
@@ -964,7 +970,13 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             self.findReferences()
         }
 
-        builder.insertChild(UIMenu(options: .displayInline, children: [myAction, referencesAction]), atEndOfMenu: .standardEdit)
+        var navigationActions: [UIMenuElement] = [myAction, referencesAction]
+        if self.file.isSwift, self.project != nil {
+            navigationActions.append(UIAction(title: "Run Preview", image: UIImage(systemName: "eye")) { _ in
+                self.forkRunPreview()
+            })
+        }
+        builder.insertChild(UIMenu(options: .displayInline, children: navigationActions), atEndOfMenu: .standardEdit)
     }
     
     deinit {
@@ -2966,6 +2978,230 @@ extension CodeEditorViewController {
                     self.present(navigation, animated: true)
                 }
             }
+        }
+    }
+}
+
+// MARK: - Fork: SwiftUI Preview
+
+/// Builds "<project>-Preview": the same sources, but its @main app shows one preview.
+enum ForkSwiftUIPreview {
+    struct Preview {
+        let name: String
+        let body: String
+        /// `@Previewable` declarations, turned into stored properties
+        let properties: [String]
+    }
+    
+    /// #Preview { … } and PreviewProvider `previews` bodies of a Swift source.
+    static func previews(in text: String) -> [Preview] {
+        var result: [Preview] = []
+        let ns = text as NSString
+        if let regex = try? NSRegularExpression(pattern: #"#Preview\s*(\(([^)]*)\))?\s*\{"#) {
+            for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+                let open = NSMaxRange(match.range) - 1
+                guard let close = matchingBrace(in: ns, open: open) else { continue }
+                var name = "Preview \(result.count + 1)"
+                if match.range(at: 2).location != NSNotFound {
+                    let arguments = ns.substring(with: match.range(at: 2))
+                    if let quoted = arguments.range(of: #""[^"]*""#, options: .regularExpression) {
+                        name = String(arguments[quoted]).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                    }
+                }
+                let raw = ns.substring(with: NSRange(location: open + 1, length: close - open - 1))
+                result.append(split(raw, name: name))
+            }
+        }
+        if let regex = try? NSRegularExpression(pattern: #"static\s+var\s+previews\s*:\s*some\s+View\s*\{"#) {
+            for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+                let open = NSMaxRange(match.range) - 1
+                guard let close = matchingBrace(in: ns, open: open) else { continue }
+                let raw = ns.substring(with: NSRange(location: open + 1, length: close - open - 1))
+                result.append(split(raw, name: "PreviewProvider \(result.count + 1)"))
+            }
+        }
+        return result
+    }
+    
+    private static func split(_ raw: String, name: String) -> Preview {
+        var properties: [String] = []
+        var bodyLines: [String] = []
+        for line in raw.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("@Previewable") {
+                properties.append(String(trimmed.dropFirst("@Previewable".count)).trimmingCharacters(in: .whitespaces))
+            } else {
+                bodyLines.append(line)
+            }
+        }
+        return Preview(name: name, body: bodyLines.joined(separator: "\n"), properties: properties)
+    }
+    
+    /// Index of the "}" closing the "{" at `open` (strings and comments skipped).
+    static func matchingBrace(in text: NSString, open: Int) -> Int? {
+        var depth = 0
+        var index = open
+        var inString = false
+        var inLineComment = false
+        var inBlockComment = false
+        while index < text.length {
+            let c = text.character(at: index)
+            let next: unichar = index + 1 < text.length ? text.character(at: index + 1) : 0
+            if inLineComment {
+                if c == 10 { inLineComment = false }
+            } else if inBlockComment {
+                if c == 42 && next == 47 { inBlockComment = false; index += 1 }
+            } else if inString {
+                if c == 92 { index += 1 } else if c == 34 { inString = false }
+            } else if c == 47 && next == 47 {
+                inLineComment = true
+            } else if c == 47 && next == 42 {
+                inBlockComment = true
+            } else if c == 34 {
+                inString = true
+            } else if c == 123 {
+                depth += 1
+            } else if c == 125 {
+                depth -= 1
+                if depth == 0 { return index }
+            }
+            index += 1
+        }
+        return nil
+    }
+    
+    /// Source with every #Preview block removed (the copy must not need the previews macro plugin).
+    static func strippingPreviews(_ text: String) -> String {
+        var ns = text as NSString
+        guard let regex = try? NSRegularExpression(pattern: #"#Preview\s*(\([^)]*\))?\s*\{"#) else { return text }
+        while let match = regex.firstMatch(in: ns as String, range: NSRange(location: 0, length: ns.length)) {
+            let open = NSMaxRange(match.range) - 1
+            guard let close = matchingBrace(in: ns, open: open) else { break }
+            ns = ns.replacingCharacters(in: NSRange(location: match.range.location, length: close - match.range.location + 1), with: "") as NSString
+        }
+        return ns as String
+    }
+    
+    /// Writes only when the content changed, so unchanged files keep their dates (incremental builds).
+    private static func write(_ data: Data, to url: URL) throws {
+        if let existing = try? Data(contentsOf: url), existing == data { return }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: url, options: .atomic)
+    }
+    
+    static let generatedFileName = "__NyxianPreviewApp.swift"
+    
+    /// Creates or refreshes the preview copy of `project` showing `preview`.
+    static func makeProject(for project: NXProject, preview: Preview, overriding livePath: String?, liveText: String?) throws -> NXProject {
+        let fm = FileManager.default
+        let source: URL = project.url
+        let destination = NXBootstrap.shared().rootURL.appendingPathComponent("Previews").appendingPathComponent(source.lastPathComponent + "-Preview")
+        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+        
+        var keep: Set<String> = ["Config/Project.plist", generatedFileName]
+        if let enumerator = fm.enumerator(at: source, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
+            for case let url as URL in enumerator {
+                guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+                let relative = ProjectFileIndex.relativePath(url, root: source)
+                if relative == "Config/Project.plist" || relative == "Config/GitHub.plist" { continue }
+                keep.insert(relative)
+                var data = (try? Data(contentsOf: url)) ?? Data()
+                if url.pathExtension == "swift" {
+                    var text = (livePath == url.path ? liveText : nil) ?? LiveEditorRegistry.editor(forPath: url.path)?.textView.text ?? String(data: data, encoding: .utf8) ?? ""
+                    /* the copy's only entry point is the preview app */
+                    text = text.replacingOccurrences(of: #"@main\b"#, with: "", options: .regularExpression)
+                    text = strippingPreviews(text)
+                    data = Data(text.utf8)
+                }
+                try write(data, to: destination.appendingPathComponent(relative))
+            }
+        }
+        /* files deleted from the project leave the copy too */
+        if let enumerator = fm.enumerator(at: destination, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
+            for case let url as URL in enumerator {
+                guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+                if !keep.contains(ProjectFileIndex.relativePath(url, root: destination)) { try? fm.removeItem(at: url) }
+            }
+        }
+        
+        /* its own identity, so it installs next to the real app */
+        let plistData = try Data(contentsOf: source.appendingPathComponent("Config/Project.plist"))
+        guard var plist = try PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any] else { throw CocoaError(.fileReadCorruptFile) }
+        let bundleID = (plist["NXBundleIdentifier"] as? String) ?? (project.projectConfig.bundleid ?? "app")
+        plist["NXBundleIdentifier"] = bundleID + ".preview"
+        plist["NXDisplayName"] = ((plist["NXDisplayName"] as? String) ?? project.projectConfig.displayName ?? "App") + " Preview"
+        plist["NXOutputPath"] = "$(CACHEROOT)/Payload/$(NXExecutable).app/$(NXExecutable)"
+        try write(try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0), to: destination.appendingPathComponent("Config/Project.plist"))
+        
+        let properties = preview.properties.map { "    " + $0 }.joined(separator: "\n")
+        let app = """
+        // Generated by Nyxian for the preview "\(preview.name)". Not part of your project.
+        import SwiftUI
+        
+        @main
+        struct __NyxianPreviewApp: App {
+            var body: some Scene {
+                WindowGroup {
+                    __NyxianPreviewContent()
+                }
+            }
+        }
+        
+        struct __NyxianPreviewContent: View {
+        \(properties)
+            var body: some View {
+        \(preview.body)
+            }
+        }
+        
+        """
+        try write(Data(app.utf8), to: destination.appendingPathComponent(generatedFileName))
+        
+        guard let previewProject = NXProject(url: destination) else { throw CocoaError(.fileReadCorruptFile) }
+        return previewProject
+    }
+}
+
+extension CodeEditorViewController {
+    @objc func forkRunPreview() {
+        guard self.file.isSwift, let project = self.project, presentedViewController == nil else { return }
+        let text = self.textView.text
+        let previews = ForkSwiftUIPreview.previews(in: text)
+        guard !previews.isEmpty else {
+            let alert = UIAlertController(title: "No Preview", message: "This file has no #Preview { … } or PreviewProvider.", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            present(alert, animated: true)
+            return
+        }
+        if previews.count == 1 {
+            forkBuildPreview(previews[0], project: project, text: text)
+            return
+        }
+        let sheet = UIAlertController(title: "Run Preview", message: nil, preferredStyle: .actionSheet)
+        for preview in previews {
+            sheet.addAction(UIAlertAction(title: preview.name, style: .default) { [weak self] _ in
+                self?.forkBuildPreview(preview, project: project, text: text)
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        sheet.popoverPresentationController?.sourceView = view
+        sheet.popoverPresentationController?.sourceRect = CGRect(x: view.bounds.midX, y: view.safeAreaInsets.top + 8, width: 1, height: 1)
+        present(sheet, animated: true)
+    }
+    
+    private func forkBuildPreview(_ preview: ForkSwiftUIPreview.Preview, project: NXProject, text: String) {
+        let previewProject: NXProject
+        do {
+            previewProject = try ForkSwiftUIPreview.makeProject(for: project, preview: preview, overriding: self.file.fileURL?.path, liveText: text)
+        } catch {
+            NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Preview: \(error.localizedDescription)", withDelay: 0.0)
+            return
+        }
+        let name = (previewProject.projectConfig.displayName ?? "Preview")
+        buildProjectWithArgumentUI(targetViewController: self, project: previewProject, buildType: .run) { result, _ in
+            guard result else { return }
+            let pid = PEProcessManager.shared().spawnProcess(withBundleIdentifier: previewProject.projectConfig.bundleid, withItems: ForkPhoneConsole.shared.itemsForNewRun(name: name), withKernelSurfaceProcess: nil, doRestartIfRunning: true)
+            ForkPhoneConsole.shared.attach(processIdentifier: pid)
         }
     }
 }

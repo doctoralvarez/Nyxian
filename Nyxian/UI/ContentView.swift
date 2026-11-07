@@ -1906,7 +1906,8 @@ final class KeyboardShortcutsHUD {
         "Show Console": "Mostrar consola",
         "Review Changes": "Revisar cambios",
         "Jump to Definition": "Ir a definición",
-        "Find References": "Buscar referencias"
+        "Find References": "Buscar referencias",
+        "Run Preview": "Ejecutar preview"
     ]
     
     func start() {

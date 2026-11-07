@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-07): the export button opens the export assistant;
+    profiler pill (CPU, memory, threads) over the console while the app runs.
   - 1.2.0 (2026-11-07): ⌃⇥ switches to the previously used tab (press again
     to go back), ⌃⇧⇥ to the least recently used one; tabs remember the order
     they were used in.
@@ -696,6 +698,15 @@ class SplitScreenDetailViewController: UIViewController, PEProcessObserver {
         
         self.view.addSubview(self.resizeHandle)
         
+        /* fork: live CPU / memory of the running app, over the console */
+        let profiler = ForkProfilerView { [weak self] in self?.process }
+        profiler.translatesAutoresizingMaskIntoConstraints = false
+        self.view.addSubview(profiler)
+        NSLayoutConstraint.activate([
+            profiler.topAnchor.constraint(equalTo: logView!.topAnchor, constant: 8),
+            profiler.trailingAnchor.constraint(equalTo: logView!.trailingAnchor, constant: -10)
+        ])
+        
         NSLayoutConstraint.activate([
             self.resizeHandle.topAnchor.constraint(equalTo: logView!.topAnchor),
             self.resizeHandle.leadingAnchor.constraint(equalTo: logView!.leadingAnchor),
@@ -716,7 +727,8 @@ class SplitScreenDetailViewController: UIViewController, PEProcessObserver {
         }
         barButtons.append(UIBarButtonItem(image: UIImage(systemName: "archivebox.fill"), primaryAction: UIAction { [weak self] _ in
             guard let self = self else { return }
-            buildProjectWithArgumentUI(targetViewController: self, project: self.project, buildType: .export)
+            /* fork: version and checks first */
+            ForkExportAssistant.present(from: self, project: self.project)
         }))
         barButtons.append(UIBarButtonItem(image: UIImage(systemName: "exclamationmark.triangle.fill"), primaryAction: UIAction { [weak self] _ in
             guard let self = self else { return }
