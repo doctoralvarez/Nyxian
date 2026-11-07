@@ -4,6 +4,25 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.14.0 — 2026-11-07
+
+- **Document Symbols** (⌃6, or the list button in the editor toolbar):
+  functions, types, properties, enum cases and `MARK` sections of the file
+  (Swift, C, C++, Objective-C), filterable; tap to jump.
+- **Recent tabs** (iPad): ⌃⇥ goes to the previously used tab (again to come
+  back), ⌃⇧⇥ to the least recently used one.
+- **Faster Swift rebuilds**: when no Swift file changed since the last build
+  (and the flags are the same), the Swift compiler is skipped and only the
+  link runs. Any Swift change still recompiles all Swift files.
+- **iPhone console**: the app's `print()` output goes to a **Console** window
+  (project ⋯ menu > Console) that lives next to the app in the window
+  switcher — no new edge gestures.
+- **GitHub: review before pushing**: *Commit and Push…* first lists the files
+  modified / added / deleted since the last sync with +/− line counts; tap a
+  file for its line diff, then *Commit…*.
+- Code folding is not included: the editor engine (Runestone) cannot hide
+  lines.
+
 ## 1.13.0 — 2026-11-07
 
 - **App icons**: importing a `.swiftpm` turns its `AppIcon` into a real icon

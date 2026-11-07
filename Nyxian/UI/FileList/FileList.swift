@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-07): "Commit and Push…" first shows the changes since the
+    last sync (added / modified / deleted, +/− lines) with a line diff per
+    file (GitHubChangesViewController, LineDiff). iPhone: the program's
+    print() output goes to a Console window (⋯ > Console), opened next to
+    the app in the window switcher — no new edge gestures (ForkPhoneConsole).
   - 1.2.0 (2026-11-07): GitHub sync through the REST API (⋯ > GitHub):
     commit and push, pull, repository link and Keychain token
     (GitHubSync, GitHubLink, GitHubTokenStore at the end of this file).
@@ -352,7 +357,9 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
                     buildProjectWithArgumentUI(targetViewController: self, project: project, buildType: .run) { result, execPath in
                         if result {
                             if project.projectConfig.schemeKind == .app {
-                                PEProcessManager.shared().spawnProcess(withBundleIdentifier: project.projectConfig.bundleid, withItems: [:], withKernelSurfaceProcess: nil, doRestartIfRunning: true)
+                                /* fork: print() output goes to the Console window */
+                                let pid = PEProcessManager.shared().spawnProcess(withBundleIdentifier: project.projectConfig.bundleid, withItems: ForkPhoneConsole.shared.itemsForNewRun(name: project.projectConfig.displayName ?? "App"), withKernelSurfaceProcess: nil, doRestartIfRunning: true)
+                                ForkPhoneConsole.shared.attach(processIdentifier: pid)
                             } else if project.projectConfig.schemeKind == .utility, let execPath = execPath {
                                 let terminalSession: NXWindowSessionTerminal = NXWindowSessionTerminal(utilityPath: execPath)
                                 NXWindowServer.shared().openWindow(with: terminalSession, withCompletion: nil)
@@ -361,6 +368,10 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
                     }
                 }))
             }
+            /* fork: output of the running app */
+            projectMenuElements.append(UIAction(title: "Console", image: UIImage(systemName: "terminal"), handler: { _ in
+                ForkPhoneConsole.shared.show()
+            }))
             projectMenuElements.append(UIAction(title: "Export", image: UIImage(systemName: "archivebox.fill"), handler: { [weak self] _ in
                 guard let self = self else { return }
                 buildProjectWithArgumentUI(targetViewController: self, project: project, buildType: .export)
@@ -1322,7 +1333,7 @@ struct GitHubSync {
         return files
     }
     
-    private func downloadBlob(_ sha: String) async throws -> Data {
+    func downloadBlob(_ sha: String) async throws -> Data {
         guard let json = try await request("GET", "/git/blobs/\(sha)") as? [String: Any],
               let content = json["content"] as? String,
               let data = Data(base64Encoded: content.replacingOccurrences(of: "\n", with: "")) else { throw GitHubSyncError.invalidResponse }
@@ -1575,6 +1586,27 @@ extension FileListViewController {
     func forkGitHubPush(_ project: NXProject) {
         guard let context = forkGitHubContext(project) else { return }
         let (sync, link) = context
+        /* fork: review what changed before committing */
+        NXDocumentManager.shared().saveAll {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let root: URL = project.url
+                let changes = GitHubChange.localChanges(root: root, link: link)
+                guard !changes.isEmpty else {
+                    self.forkGitHubAlert("Nothing to Push", "No file changed since the last sync with \(link.owner)/\(link.repo).")
+                    return
+                }
+                let review = GitHubChangesViewController(sync: sync, link: link, changes: changes) { [weak self] in
+                    self?.forkGitHubCommitAndPush(project, sync: sync, link: link)
+                }
+                let navigation = UINavigationController(rootViewController: review)
+                navigation.modalPresentationStyle = .formSheet
+                self.present(navigation, animated: true)
+            }
+        }
+    }
+    
+    private func forkGitHubCommitAndPush(_ project: NXProject, sync: GitHubSync, link: GitHubLink) {
         let alert = UIAlertController(title: "Commit and Push", message: "\(link.owner)/\(link.repo) • \(link.branch)", preferredStyle: .alert)
         alert.addTextField { field in
             field.placeholder = "Commit message"
@@ -1617,5 +1649,408 @@ extension FileListViewController {
                 }
             }
         }
+    }
+}
+
+// MARK: - Fork: review changes before pushing
+
+struct GitHubChange {
+    enum Kind: Int { case modified, added, deleted }
+    let path: String
+    let kind: Kind
+    let localURL: URL?
+    let baseSHA: String?
+    
+    /// Differences between the project now and the state of the last sync.
+    static func localChanges(root: URL, link: GitHubLink) -> [GitHubChange] {
+        let local = GitHubSync.localFiles(in: root)
+        var changes: [GitHubChange] = []
+        for (path, url) in local {
+            guard let data = try? Data(contentsOf: url) else { continue }
+            if let base = link.files[path] {
+                if GitHubSync.blobSHA(data) != base {
+                    changes.append(GitHubChange(path: path, kind: .modified, localURL: url, baseSHA: base))
+                }
+            } else {
+                changes.append(GitHubChange(path: path, kind: .added, localURL: url, baseSHA: nil))
+            }
+        }
+        for (path, sha) in link.files where local[path] == nil {
+            changes.append(GitHubChange(path: path, kind: .deleted, localURL: nil, baseSHA: sha))
+        }
+        return changes.sorted { $0.kind.rawValue != $1.kind.rawValue ? $0.kind.rawValue < $1.kind.rawValue : $0.path < $1.path }
+    }
+}
+
+/// Line diff (longest common subsequence), enough for reviewing edits.
+enum LineDiff {
+    enum Op { case same, removed, added }
+    
+    static let maximumLines = 4000
+    
+    static func diff(_ old: [String], _ new: [String]) -> [(Op, String)]? {
+        guard old.count <= maximumLines, new.count <= maximumLines else { return nil }
+        /* trim the common head and tail, then LCS on the middle */
+        var head = 0
+        while head < old.count, head < new.count, old[head] == new[head] { head += 1 }
+        var tail = 0
+        while tail < old.count - head, tail < new.count - head, old[old.count - 1 - tail] == new[new.count - 1 - tail] { tail += 1 }
+        let a = Array(old[head..<(old.count - tail)])
+        let b = Array(new[head..<(new.count - tail)])
+        guard a.count * b.count <= 4_000_000 else { return nil }
+        
+        var table = [[Int32]](repeating: [Int32](repeating: 0, count: b.count + 1), count: a.count + 1)
+        if !a.isEmpty && !b.isEmpty {
+            for i in stride(from: a.count - 1, through: 0, by: -1) {
+                for j in stride(from: b.count - 1, through: 0, by: -1) {
+                    table[i][j] = a[i] == b[j] ? table[i + 1][j + 1] + 1 : max(table[i + 1][j], table[i][j + 1])
+                }
+            }
+        }
+        var result: [(Op, String)] = old[0..<head].map { (Op.same, $0) }
+        var i = 0, j = 0
+        while i < a.count || j < b.count {
+            if i < a.count, j < b.count, a[i] == b[j] {
+                result.append((.same, a[i])); i += 1; j += 1
+            } else if j < b.count, i == a.count || table[i][j + 1] >= table[i + 1][j] {
+                result.append((.added, b[j])); j += 1
+            } else {
+                result.append((.removed, a[i])); i += 1
+            }
+        }
+        result.append(contentsOf: old[(old.count - tail)...].map { (Op.same, $0) })
+        return result
+    }
+    
+    static func lines(_ data: Data) -> [String]? {
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        return text.components(separatedBy: "\n")
+    }
+}
+
+final class GitHubChangesViewController: UITableViewController {
+    private let sync: GitHubSync
+    private let link: GitHubLink
+    private let sections: [(GitHubChange.Kind, [GitHubChange])]
+    private var counts: [String: (added: Int, removed: Int)] = [:]
+    private let onPush: () -> Void
+    
+    init(sync: GitHubSync, link: GitHubLink, changes: [GitHubChange], onPush: @escaping () -> Void) {
+        self.sync = sync
+        self.link = link
+        self.onPush = onPush
+        let kinds: [GitHubChange.Kind] = [.modified, .added, .deleted]
+        self.sections = kinds.compactMap { kind in
+            let items = changes.filter { $0.kind == kind }
+            return items.isEmpty ? nil : (kind, items)
+        }
+        super.init(style: .insetGrouped)
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Review Changes"
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "change")
+        navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .cancel, primaryAction: UIAction { [weak self] _ in
+            self?.dismiss(animated: true)
+        })
+        navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Commit…", image: nil, primaryAction: UIAction { [weak self] _ in
+            guard let self else { return }
+            let onPush = self.onPush
+            self.dismiss(animated: true) { onPush() }
+        }, menu: nil)
+        loadCounts()
+    }
+    
+    /// +/− per file, computed in the background (base versions come from GitHub).
+    private func loadCounts() {
+        let sync = self.sync
+        let items = sections.flatMap { $0.1 }
+        Task { [weak self] in
+            for change in items {
+                var added = 0, removed = 0
+                switch change.kind {
+                case .added:
+                    if let url = change.localURL, let data = try? Data(contentsOf: url), let lines = LineDiff.lines(data) { added = lines.count }
+                case .deleted:
+                    if let sha = change.baseSHA, let data = try? await sync.downloadBlob(sha), let lines = LineDiff.lines(data) { removed = lines.count }
+                case .modified:
+                    guard let sha = change.baseSHA, let url = change.localURL,
+                          let base = try? await sync.downloadBlob(sha), let now = try? Data(contentsOf: url),
+                          let old = LineDiff.lines(base), let new = LineDiff.lines(now),
+                          let ops = LineDiff.diff(old, new) else { continue }
+                    added = ops.filter { $0.0 == .added }.count
+                    removed = ops.filter { $0.0 == .removed }.count
+                }
+                await MainActor.run {
+                    guard let self else { return }
+                    self.counts[change.path] = (added, removed)
+                    self.tableView.reloadData()
+                }
+            }
+        }
+    }
+    
+    override func numberOfSections(in tableView: UITableView) -> Int { sections.count }
+    
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        let (kind, items) = sections[section]
+        let name = kind == .modified ? "Modified" : kind == .added ? "Added" : "Deleted"
+        return "\(name) (\(items.count))"
+    }
+    
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        guard section == sections.count - 1 else { return nil }
+        return "Compared with the last sync of \(link.owner)/\(link.repo) (\(link.branch)). Tap a file to see its lines."
+    }
+    
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { sections[section].1.count }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "change", for: indexPath)
+        let change = sections[indexPath.section].1[indexPath.row]
+        var content = cell.defaultContentConfiguration()
+        content.text = change.path
+        content.textProperties.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
+        content.textProperties.lineBreakMode = .byTruncatingHead
+        content.textProperties.numberOfLines = 1
+        switch change.kind {
+        case .modified:
+            content.image = UIImage(systemName: "pencil.circle.fill")
+            content.imageProperties.tintColor = .systemOrange
+        case .added:
+            content.image = UIImage(systemName: "plus.circle.fill")
+            content.imageProperties.tintColor = .systemGreen
+        case .deleted:
+            content.image = UIImage(systemName: "minus.circle.fill")
+            content.imageProperties.tintColor = .systemRed
+        }
+        if let count = counts[change.path] {
+            let text = NSMutableAttributedString()
+            if count.added > 0 || change.kind == .added {
+                text.append(NSAttributedString(string: "+\(count.added) ", attributes: [.foregroundColor: UIColor.systemGreen]))
+            }
+            if count.removed > 0 || change.kind == .deleted {
+                text.append(NSAttributedString(string: "−\(count.removed)", attributes: [.foregroundColor: UIColor.systemRed]))
+            }
+            content.secondaryAttributedText = text
+        } else {
+            content.secondaryText = "…"
+            content.secondaryTextProperties.color = .tertiaryLabel
+        }
+        content.prefersSideBySideTextAndSecondaryText = true
+        cell.contentConfiguration = content
+        cell.accessoryType = .disclosureIndicator
+        return cell
+    }
+    
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        let change = sections[indexPath.section].1[indexPath.row]
+        navigationController?.pushViewController(GitHubDiffViewController(sync: sync, change: change), animated: true)
+    }
+}
+
+final class GitHubDiffViewController: UIViewController {
+    private let sync: GitHubSync
+    private let change: GitHubChange
+    private let textView = UITextView()
+    
+    init(sync: GitHubSync, change: GitHubChange) {
+        self.sync = sync
+        self.change = change
+        super.init(nibName: nil, bundle: nil)
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = (change.path as NSString).lastPathComponent
+        view.backgroundColor = .systemBackground
+        textView.isEditable = false
+        textView.alwaysBounceVertical = true
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        textView.textContainerInset = UIEdgeInsets(top: 12, left: 8, bottom: 12, right: 8)
+        view.addSubview(textView)
+        NSLayoutConstraint.activate([
+            textView.topAnchor.constraint(equalTo: view.topAnchor),
+            textView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            textView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            textView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+        textView.text = "Loading…"
+        load()
+    }
+    
+    private func load() {
+        let sync = self.sync
+        let change = self.change
+        Task { [weak self] in
+            var old: [String] = []
+            var new: [String] = []
+            var failure: String?
+            do {
+                if let sha = change.baseSHA {
+                    let data = try await sync.downloadBlob(sha)
+                    guard let lines = LineDiff.lines(data) else { throw CocoaError(.fileReadInapplicableStringEncoding) }
+                    old = lines
+                }
+                if let url = change.localURL {
+                    let data = try Data(contentsOf: url)
+                    guard let lines = LineDiff.lines(data) else { throw CocoaError(.fileReadInapplicableStringEncoding) }
+                    new = lines
+                }
+            } catch let error as CocoaError where error.code == .fileReadInapplicableStringEncoding {
+                failure = "Binary file — no line view."
+            } catch {
+                failure = error.localizedDescription
+            }
+            let rendered = failure == nil ? GitHubDiffViewController.render(old: old, new: new) : nil
+            await MainActor.run {
+                guard let self else { return }
+                if let rendered {
+                    self.textView.attributedText = rendered
+                } else {
+                    self.textView.text = failure ?? "The file is too large to compare here."
+                }
+            }
+        }
+    }
+    
+    /// Unified view: changed lines with 3 lines of context, "⋯" between hunks.
+    static func render(old: [String], new: [String]) -> NSAttributedString? {
+        guard let ops = LineDiff.diff(old, new) else { return nil }
+        let font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let output = NSMutableAttributedString()
+        let context = 3
+        var keep = [Bool](repeating: false, count: ops.count)
+        for (index, op) in ops.enumerated() where op.0 != .same {
+            for k in max(0, index - context)...min(ops.count - 1, index + context) { keep[k] = true }
+        }
+        var oldLine = 0, newLine = 0
+        var skipped = false
+        for (index, op) in ops.enumerated() {
+            switch op.0 {
+            case .same: oldLine += 1; newLine += 1
+            case .removed: oldLine += 1
+            case .added: newLine += 1
+            }
+            guard keep[index] else { skipped = true; continue }
+            if skipped {
+                output.append(NSAttributedString(string: "⋯\n", attributes: [.font: font, .foregroundColor: UIColor.tertiaryLabel]))
+                skipped = false
+            }
+            let number = op.0 == .removed ? oldLine : newLine
+            let prefix = op.0 == .added ? "+" : op.0 == .removed ? "−" : " "
+            let line = String(format: "%5d %@ ", number, prefix) + op.1 + "\n"
+            var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.label]
+            if op.0 == .added { attributes[.backgroundColor] = UIColor.systemGreen.withAlphaComponent(0.18) }
+            if op.0 == .removed { attributes[.backgroundColor] = UIColor.systemRed.withAlphaComponent(0.18) }
+            if op.0 == .same { attributes[.foregroundColor] = UIColor.secondaryLabel }
+            output.append(NSAttributedString(string: line, attributes: attributes))
+        }
+        if output.length == 0 {
+            output.append(NSAttributedString(string: "Only line endings or whitespace at the end changed.", attributes: [.font: font, .foregroundColor: UIColor.secondaryLabel]))
+        }
+        return output
+    }
+}
+
+// MARK: - Fork: iPhone console for the running app
+
+/// Keeps one console for the app run from the iPhone project menu; shown as its own window in the switcher.
+final class ForkPhoneConsole: NSObject, PEProcessObserver {
+    static let shared = ForkPhoneConsole()
+    
+    private(set) lazy var console: NXConsoleView = {
+        let console = NXConsoleView()
+        console.isEditable = true
+        console.isSelectable = true
+        console.backgroundColor = LDETheme.currentTheme?.backgroundColor
+        console.textColor = LDETheme.currentTheme?.textColor
+        return console
+    }()
+    private weak var session: ForkConsoleSession?
+    private weak var process: PEProcess?
+    
+    /// Spawn items that send stdout / stderr to the console and stdin from it.
+    func itemsForNewRun(name: String) -> [AnyHashable: Any] {
+        let console = self.console
+        console.clearConsole()
+        console.writeMessage(toConsole: "▶︎ \(name)", with: .secondaryLabel)
+        guard let table = PEFileTable.empty() else { return [:] }
+        table.appendFileDescriptor(console.pipe.fileHandleForWriting.fileDescriptor, withMappingToLoc: STDOUT_FILENO)
+        table.appendFileDescriptor(console.pipe.fileHandleForWriting.fileDescriptor, withMappingToLoc: STDERR_FILENO)
+        table.appendFileDescriptor(console.stdinPipe.fileHandleForReading.fileDescriptor, withMappingToLoc: STDIN_FILENO)
+        table.appendFileDescriptor(console.pipe.fileHandleForReading.fileDescriptor, withMappingToLoc: 100)
+        table.appendFileDescriptor(console.stdinPipe.fileHandleForWriting.fileDescriptor, withMappingToLoc: 101)
+        return ["PEFileTable": table]
+    }
+    
+    func attach(processIdentifier: pid_t) {
+        process?.remove(self)
+        process = nil
+        guard processIdentifier > 0, let new = PEProcessManager.shared().process(forProcessIdentifier: processIdentifier) else {
+            console.writeMessage(toConsole: "failed to spawn process", with: .systemRed)
+            return
+        }
+        new.add(self)
+        process = new
+    }
+    
+    func process(_ process: PEProcess!, didExitWithWait4Code code: Int32) {
+        DispatchQueue.main.async {
+            let signal = code & 0x7F
+            if signal == 0 {
+                let exit = (code >> 8) & 0xFF
+                self.console.writeMessage(toConsole: "process did exit with code: \(exit)", with: exit == 0 ? .systemGreen : .systemRed)
+            } else if signal != 0x7F {
+                self.console.writeMessage(toConsole: "process was killed by signal: \(signal) (\(PosixSignal(rawValue: signal)?.description ?? "SIGUNKNOWN"))", with: signal == 9 ? .systemRed : .systemYellow)
+            }
+        }
+    }
+    
+    /// Opens the Console window, or brings it to the front.
+    func show() {
+        let server = NXWindowServer.shared()
+        if let session, session.window != nil {
+            server?.activateWindow(forIdentifier: session.windowIdentifier, animated: true, withCompletion: nil)
+            return
+        }
+        let session = ForkConsoleSession()
+        self.session = session
+        server?.openWindow(with: session, withCompletion: nil)
+    }
+}
+
+final class ForkConsoleSession: NXWindowSession {
+    override var windowName: String! {
+        get { "Console" }
+        set { super.windowName = newValue }
+    }
+    
+    override func openWindow() -> Bool {
+        guard super.openWindow() else { return false }
+        let console = ForkPhoneConsole.shared.console
+        console.removeFromSuperview()
+        console.translatesAutoresizingMaskIntoConstraints = false
+        view.backgroundColor = console.backgroundColor
+        view.addSubview(console)
+        NSLayoutConstraint.activate([
+            console.topAnchor.constraint(equalTo: view.topAnchor),
+            console.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            console.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            console.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+        return true
+    }
+    
+    override func closeWindow() -> Bool {
+        _ = super.closeWindow()
+        ForkPhoneConsole.shared.console.removeFromSuperview()
+        return true
     }
 }

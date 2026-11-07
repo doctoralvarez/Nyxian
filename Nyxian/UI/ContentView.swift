@@ -1899,7 +1899,12 @@ final class KeyboardShortcutsHUD {
         "Show Signature": "Ver parámetros",
         "Dismiss Parameter Help": "Cerrar ayuda de parámetros",
         "Fix Issue": "Arreglar la línea",
-        "Fix All Issues": "Arreglar todo el archivo"
+        "Fix All Issues": "Arreglar todo el archivo",
+        "Document Symbols": "Símbolos del archivo",
+        "Previous File": "Pestaña anterior",
+        "Least Recent File": "Pestaña más antigua",
+        "Show Console": "Mostrar consola",
+        "Review Changes": "Revisar cambios"
     ]
     
     func start() {

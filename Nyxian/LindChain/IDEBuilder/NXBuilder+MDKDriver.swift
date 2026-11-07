@@ -20,6 +20,16 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): Swift builds skip the compiler when no Swift file
+    changed since the last build (every object file is newer than every Swift
+    source and the build flags are the same); only the link runs. A change in
+    any Swift file still recompiles all of them, because Swift files depend on
+    each other (forkSkipSwiftCompileIfUnchanged).
+*/
+
 import MobileDevelopmentKit
 
 extension NXBuilder: MDKDriverDelegate {
@@ -30,7 +40,8 @@ extension NXBuilder: MDKDriverDelegate {
     
     func driver(_ driver: MDKDriver, editJobListForJobList jobs: [MDKJob]) -> [MDKJob]? {
         if driver.type != .clang {
-            return jobs
+            /* fork: nothing to compile when no Swift file changed */
+            return (self.projectDirty || !self.incrementalBuild) ? jobs : NXBuilder.forkSkipSwiftCompileIfUnchanged(jobs)
         }
         
         // This can now in theory run in parallel ?:3
@@ -169,5 +180,33 @@ extension NXBuilder: MDKDriverDelegate {
         }
         
         return newJobs
+    }
+}
+
+extension NXBuilder {
+    /// Drops the Swift compile jobs when all their objects are newer than all their sources.
+    static func forkSkipSwiftCompileIfUnchanged(_ jobs: [MDKJob]) -> [MDKJob] {
+        let fm = FileManager.default
+        func modified(_ path: String) -> Date? {
+            (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        }
+        
+        let compileJobs = jobs.filter { $0.type == .compiler }
+        guard !compileJobs.isEmpty else { return jobs }
+        
+        var oldestObject: Date?
+        var sources: Set<String> = []
+        for job in compileJobs {
+            /* a job without its own object file (module merging, …): do not guess */
+            guard let output = job.outputFileURL, let date = modified(output.path) else { return jobs }
+            oldestObject = min(oldestObject ?? date, date)
+            for url in job.inputFileURLs ?? [] { sources.insert(url.path) }
+        }
+        guard let oldestObject, !sources.isEmpty else { return jobs }
+        
+        for path in sources {
+            guard let date = modified(path), date < oldestObject else { return jobs }
+        }
+        return jobs.filter { $0.type != .compiler }
     }
 }

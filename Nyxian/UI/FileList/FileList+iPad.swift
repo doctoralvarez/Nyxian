@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-07): ⌃⇥ switches to the previously used tab (press again
+    to go back), ⌃⇧⇥ to the least recently used one; tabs remember the order
+    they were used in.
   - 1.1.0 (2026-11-07): ⇧⌘F Search in Project, ⇧⌘O Open Quickly; tapping a
     "file:line" printed in the console opens that file at that line.
   - 1.0.0 (2026-11-06): ⌘B builds without running, ⇧⌘I opens the
@@ -239,7 +242,21 @@ class MainSplitViewController: UISplitViewController, UISplitViewControllerDeleg
         searchCommand.wantsPriorityOverSystemBehavior = true
         quickOpenCommand.wantsPriorityOverSystemBehavior = true
         
-        return [closeCommand, runCommand, buildCommand, issuesCommand, searchCommand, quickOpenCommand]
+        /* fork: recently used tabs */
+        let previousFileCommand = UIKeyCommand(title: "Previous File", action: #selector(self.showPreviousFile), input: "\t", modifierFlags: [.control])
+        let oldestFileCommand = UIKeyCommand(title: "Least Recent File", action: #selector(self.showLeastRecentFile), input: "\t", modifierFlags: [.control, .shift])
+        previousFileCommand.wantsPriorityOverSystemBehavior = true
+        oldestFileCommand.wantsPriorityOverSystemBehavior = true
+        
+        return [closeCommand, runCommand, buildCommand, issuesCommand, searchCommand, quickOpenCommand, previousFileCommand, oldestFileCommand]
+    }
+    
+    @objc func showPreviousFile() {
+        self.detailVC?.forkSelectRecentTab(leastRecent: false)
+    }
+    
+    @objc func showLeastRecentFile() {
+        self.detailVC?.forkSelectRecentTab(leastRecent: true)
     }
     
     /* fork: project-wide search and quick open from the keyboard */
@@ -482,9 +499,29 @@ class SplitScreenDetailViewController: UIViewController, PEProcessObserver {
         }
     }
     private var tabs: [UIButtonTab] = []
+    /* fork: tabs by last use, most recent first */
+    private var recentTabs: [URL] = []
+    
+    private func forkTouchRecent(_ url: URL) {
+        recentTabs.removeAll { $0 == url }
+        recentTabs.insert(url, at: 0)
+    }
+    
+    /// ⌃⇥ goes to the tab used before this one; ⌃⇧⇥ to the one unused the longest.
+    func forkSelectRecentTab(leastRecent: Bool) {
+        recentTabs.removeAll { url in !tabs.contains { $0.url == url } }
+        guard recentTabs.count > 1 else { return }
+        let target = leastRecent ? recentTabs[recentTabs.count - 1] : recentTabs[1]
+        guard let button = tabs.first(where: { $0.url == target }) else { return }
+        childButton = button
+        childVC = button.vc
+        updateTabSelection(selectedTab: button)
+        forkTouchRecent(target)
+    }
     
     func openPath(url: URL, line: CFIndex, column: CFIndex, isReadOnly: Bool) {
         if let existingTab = tabs.first(where: { $0.url == url }) {
+            forkTouchRecent(url)
             self.childButton = existingTab
             self.childVC = existingTab.vc
             (self.childVC as! CodeEditorViewController).goto(location: MDKSourceLocationMake(line, column))
@@ -497,6 +534,7 @@ class SplitScreenDetailViewController: UIViewController, PEProcessObserver {
             self.childButton = button
             self.childVC = button.vc
             self.updateTabSelection(selectedTab: button)
+            self.forkTouchRecent(button.url)
         }
         
         let close: (UIButtonTab) -> Void = { [weak self] button in

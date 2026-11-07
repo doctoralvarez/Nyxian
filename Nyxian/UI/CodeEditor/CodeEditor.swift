@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.6.1
+ Fork doctoralvarez/Nyxian — version 1.7.0
  Changelog:
+  - 1.7.0 (2026-11-07): Document Symbols — ⌃6 or the list button in the
+    editor toolbar shows the functions, types, properties and MARK sections of
+    the file (Swift, C, C++, Objective-C) with search; tap one to jump to it
+    (DocumentSymbolScanner / DocumentSymbolsViewController).
   - 1.6.1 (2026-11-07): build fix — MDKFile.fileURL is optional; unwrap it in
     LiveEditorRegistry and SymbolRenamer.
   - 1.6.0 (2026-11-07): Fix-its — ⌥⌘↩ (or the wrench button) applies the
@@ -540,6 +544,13 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         items.append(fixBarButton)
         items.append(spawnSeparator())
         
+        /* fork: functions and types of this file */
+        let symbolsBarButton = UIBarButtonItem(customView: SymbolButton(symbolName: "list.bullet.indent", width: 35.0) { [weak self] in
+            self?.showDocumentSymbols()
+        })
+        items.append(symbolsBarButton)
+        items.append(spawnSeparator())
+        
         /* fork: find & replace for touch users (no hardware keyboard) */
         let findBarButton = UIBarButtonItem(customView: SymbolButton(symbolName: "magnifyingglass", width: 35.0) { [weak self] in
             self?.showFindAndReplace()
@@ -763,7 +774,8 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             command("Find", #selector(showFind), "f"),
             command("Find Next", #selector(findNextMatch), "g"),
             command("Find Previous", #selector(findPreviousMatch), "g", [.command, .shift]),
-            command("Go to Line", #selector(promptGoToLine), "l")
+            command("Go to Line", #selector(promptGoToLine), "l"),
+            command("Document Symbols", #selector(showDocumentSymbols), "6", [.control])
         ]
 
         if !self.isReadOnly {
@@ -2352,5 +2364,343 @@ extension CodeEditorViewController {
             })
             self.present(alert, animated: true)
         }
+    }
+}
+
+// MARK: - Fork: document symbols (⌃6)
+
+struct DocumentSymbol {
+    enum Kind {
+        case function, initializer, type, classType, structType, enumType, protocolType, extensionType, property, enumCase, mark, objcMethod, macro
+        
+        var symbolName: String {
+            switch self {
+            case .function, .objcMethod: return "f.square"
+            case .initializer: return "i.square"
+            case .type: return "t.square"
+            case .classType: return "c.square"
+            case .structType: return "s.square"
+            case .enumType: return "e.square"
+            case .protocolType: return "p.square"
+            case .extensionType: return "puzzlepiece.extension"
+            case .property: return "v.square"
+            case .enumCase: return "e.circle"
+            case .mark: return "number"
+            case .macro: return "number.square"
+            }
+        }
+        
+        var tint: UIColor {
+            switch self {
+            case .function, .objcMethod, .initializer: return .systemTeal
+            case .classType, .structType, .enumType, .protocolType, .type: return .systemPurple
+            case .extensionType: return .systemOrange
+            case .property, .enumCase: return .systemGreen
+            case .mark: return .secondaryLabel
+            case .macro: return .systemBrown
+            }
+        }
+    }
+    
+    let name: String
+    let kind: Kind
+    /// 1-based
+    let line: Int
+    let depth: Int
+}
+
+/// Line-based outline of a source file. Not a parser: good enough to navigate, no semantics.
+enum DocumentSymbolScanner {
+    private static let swiftModifiers: Set<String> = [
+        "public", "private", "fileprivate", "internal", "open", "package", "static", "final", "override",
+        "mutating", "nonmutating", "nonisolated", "convenience", "required", "lazy", "weak", "unowned",
+        "dynamic", "optional", "indirect", "prefix", "postfix", "infix", "consuming", "borrowing", "async", "isolated"
+    ]
+    
+    static func scan(_ text: String, swift: Bool) -> [DocumentSymbol] {
+        var symbols: [DocumentSymbol] = []
+        var depth = 0
+        var inBlockComment = false
+        var inImplementation = false
+        let lines = text.components(separatedBy: "\n")
+        
+        for (index, rawLine) in lines.enumerated() {
+            let lineNumber = index + 1
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            let depthAtStart = depth
+            
+            /* MARK / pragma mark sections */
+            if let mark = markTitle(line) {
+                symbols.append(DocumentSymbol(name: mark, kind: .mark, line: lineNumber, depth: 0))
+            } else if !inBlockComment {
+                if swift {
+                    if let symbol = swiftSymbol(line, lineNumber: lineNumber, depth: depthAtStart) {
+                        symbols.append(symbol)
+                    }
+                } else if let symbol = clangSymbol(line, lineNumber: lineNumber, depth: depthAtStart, inImplementation: &inImplementation) {
+                    symbols.append(symbol)
+                }
+            }
+            
+            depth = max(0, depth + braceDelta(rawLine, inBlockComment: &inBlockComment))
+        }
+        return symbols
+    }
+    
+    private static func markTitle(_ line: String) -> String? {
+        for prefix in ["// MARK:", "//MARK:", "#pragma mark"] where line.hasPrefix(prefix) {
+            var title = String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+            if title.hasPrefix("-") { title = String(title.dropFirst()).trimmingCharacters(in: .whitespaces) }
+            return title.isEmpty ? "—" : title
+        }
+        return nil
+    }
+    
+    /// { minus } outside strings, characters and comments.
+    private static func braceDelta(_ line: String, inBlockComment: inout Bool) -> Int {
+        var delta = 0
+        var inString = false
+        var escaped = false
+        var previous: Character = " "
+        for c in line {
+            if inBlockComment {
+                if previous == "*" && c == "/" { inBlockComment = false; previous = " "; continue }
+                previous = c
+                continue
+            }
+            if inString {
+                if escaped { escaped = false } else if c == "\\" { escaped = true } else if c == "\"" { inString = false }
+                previous = c
+                continue
+            }
+            if previous == "/" && c == "/" { break }
+            if previous == "/" && c == "*" { inBlockComment = true; previous = " "; continue }
+            if c == "\"" { inString = true }
+            else if c == "{" { delta += 1 }
+            else if c == "}" { delta -= 1 }
+            previous = c
+        }
+        return delta
+    }
+    
+    private static func identifier(at text: Substring) -> String {
+        String(text.prefix { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "`" })
+    }
+    
+    private static func swiftSymbol(_ line: String, lineNumber: Int, depth: Int) -> DocumentSymbol? {
+        guard !line.hasPrefix("//"), !line.hasPrefix("*"), !line.isEmpty else { return nil }
+        var words = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        /* attributes and modifiers ("@MainActor", "private(set)", "class func") */
+        while let first = words.first {
+            if first.hasPrefix("@") || swiftModifiers.contains(first) || first.hasPrefix("private(") || first.hasPrefix("fileprivate(") || first.hasPrefix("internal(") || first.hasPrefix("public(") {
+                words.removeFirst()
+            } else if first == "class", words.count > 1, ["func", "var", "let", "subscript"].contains(words[1]) || swiftModifiers.contains(words[1]) {
+                words.removeFirst()
+            } else {
+                break
+            }
+        }
+        guard let firstWord = words.first else { return nil }
+        /* "init(frame:", "init?(coder:", "subscript(index:" → the bare keyword */
+        let keyword = String(firstWord.prefix { $0.isLetter })
+        let rest = words.dropFirst().joined(separator: " ")
+        let restSub = Substring(rest)
+        
+        switch keyword {
+        case "func":
+            /* name plus the parameter labels, without the body */
+            var signature = rest
+            if let brace = signature.firstIndex(of: "{") { signature = String(signature[..<brace]) }
+            signature = signature.trimmingCharacters(in: .whitespaces)
+            return signature.isEmpty ? nil : DocumentSymbol(name: signature, kind: .function, line: lineNumber, depth: depth)
+        case "init", "deinit", "subscript":
+            guard firstWord.count == keyword.count || "(?!<".contains(firstWord[firstWord.index(firstWord.startIndex, offsetBy: keyword.count)]) else { return nil }
+            var signature = line[line.range(of: keyword)!.lowerBound...]
+            if let brace = signature.firstIndex(of: "{") { signature = signature[..<brace] }
+            return DocumentSymbol(name: signature.trimmingCharacters(in: .whitespaces), kind: .initializer, line: lineNumber, depth: depth)
+        case "class", "struct", "enum", "protocol", "actor", "typealias":
+            let name = identifier(at: restSub)
+            guard !name.isEmpty else { return nil }
+            let kind: DocumentSymbol.Kind = keyword == "class" || keyword == "actor" ? .classType : keyword == "struct" ? .structType : keyword == "enum" ? .enumType : keyword == "protocol" ? .protocolType : .type
+            return DocumentSymbol(name: name, kind: kind, line: lineNumber, depth: depth)
+        case "extension":
+            var name = rest
+            if let cut = name.firstIndex(where: { $0 == "{" || $0 == ":" }) { name = String(name[..<cut]) }
+            name = name.trimmingCharacters(in: .whitespaces)
+            return name.isEmpty ? nil : DocumentSymbol(name: name, kind: .extensionType, line: lineNumber, depth: depth)
+        case "var", "let":
+            /* only stored/computed properties of types and globals, not locals inside functions */
+            guard depth <= 1 else { return nil }
+            let name = identifier(at: restSub)
+            return name.isEmpty ? nil : DocumentSymbol(name: name, kind: .property, line: lineNumber, depth: depth)
+        case "case":
+            guard depth >= 1, !line.contains("("), !rest.hasPrefix(".") else {
+                if depth >= 1, let name = Optional(identifier(at: restSub)), !name.isEmpty, !rest.hasPrefix("."), !line.hasSuffix(":") {
+                    return DocumentSymbol(name: name, kind: .enumCase, line: lineNumber, depth: depth)
+                }
+                return nil
+            }
+            /* "case a, b" inside an enum; "case .x:" in a switch is skipped */
+            guard !line.hasSuffix(":") else { return nil }
+            let name = identifier(at: restSub)
+            return name.isEmpty ? nil : DocumentSymbol(name: name, kind: .enumCase, line: lineNumber, depth: depth)
+        default:
+            return nil
+        }
+    }
+    
+    private static let cKeywords: Set<String> = ["if", "for", "while", "switch", "return", "else", "do", "sizeof", "case", "catch"]
+    
+    private static func clangSymbol(_ line: String, lineNumber: Int, depth: Int, inImplementation: inout Bool) -> DocumentSymbol? {
+        guard !line.hasPrefix("//"), !line.hasPrefix("*"), !line.isEmpty else { return nil }
+        for (prefix, kind) in [("@interface", DocumentSymbol.Kind.classType), ("@implementation", .classType), ("@protocol", .protocolType)] where line.hasPrefix(prefix) {
+            if prefix == "@implementation" { inImplementation = true }
+            let name = String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, !name.hasSuffix(";") else { return nil }
+            return DocumentSymbol(name: prefix + " " + name, kind: kind, line: lineNumber, depth: 0)
+        }
+        if line.hasPrefix("@end") { inImplementation = false; return nil }
+        if line.hasPrefix("#define") {
+            let name = identifier(at: Substring(line.dropFirst("#define".count).trimmingCharacters(in: .whitespaces)))
+            return name.isEmpty ? nil : DocumentSymbol(name: name, kind: .macro, line: lineNumber, depth: 0)
+        }
+        /* Objective-C methods: "- (void)foo:(int)a {" */
+        if depth == 0, line.hasPrefix("-") || line.hasPrefix("+"), line.dropFirst().trimmingCharacters(in: .whitespaces).hasPrefix("(") {
+            var signature = line
+            if let cut = signature.firstIndex(where: { $0 == "{" || $0 == ";" }) { signature = String(signature[..<cut]) }
+            guard inImplementation || !line.hasSuffix(";") else { return nil }
+            return DocumentSymbol(name: signature.trimmingCharacters(in: .whitespaces), kind: .objcMethod, line: lineNumber, depth: 1)
+        }
+        guard depth == 0 else { return nil }
+        /* struct / enum / union / class (C++) definitions */
+        for keyword in ["typedef struct", "typedef enum", "struct", "enum", "union", "class", "namespace"] where line.hasPrefix(keyword + " ") {
+            let name = identifier(at: Substring(line.dropFirst(keyword.count + 1)))
+            guard !name.isEmpty, !line.hasSuffix(";") || keyword.hasPrefix("typedef") else { continue }
+            return DocumentSymbol(name: name.isEmpty ? keyword : name, kind: keyword.contains("enum") ? .enumType : .structType, line: lineNumber, depth: 0)
+        }
+        /* C/C++ function definitions: "type name(args) {" or "type name(args)" followed by "{" */
+        guard let paren = line.firstIndex(of: "("), !line.hasSuffix(";"), !line.hasPrefix("#") else { return nil }
+        let head = line[..<paren].trimmingCharacters(in: .whitespaces)
+        guard let last = head.split(whereSeparator: { $0 == " " || $0 == "*" || $0 == "&" }).last.map(String.init),
+              !cKeywords.contains(last), head.contains(" ") || head.contains("*"),
+              last.first.map({ $0.isLetter || $0 == "_" || $0 == "~" }) == true else { return nil }
+        return DocumentSymbol(name: last + "()", kind: .function, line: lineNumber, depth: 0)
+    }
+}
+
+final class DocumentSymbolsViewController: UITableViewController, UISearchResultsUpdating {
+    private let symbols: [DocumentSymbol]
+    private var shown: [DocumentSymbol]
+    private let currentLine: Int
+    private let onSelect: (DocumentSymbol) -> Void
+    
+    init(symbols: [DocumentSymbol], currentLine: Int, onSelect: @escaping (DocumentSymbol) -> Void) {
+        self.symbols = symbols
+        self.shown = symbols
+        self.currentLine = currentLine
+        self.onSelect = onSelect
+        super.init(style: .plain)
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Symbols"
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "symbol")
+        let search = UISearchController(searchResultsController: nil)
+        search.searchResultsUpdater = self
+        search.obscuresBackgroundDuringPresentation = false
+        search.searchBar.placeholder = "Filter"
+        search.searchBar.autocapitalizationType = .none
+        navigationItem.searchController = search
+        navigationItem.hidesSearchBarWhenScrolling = false
+        navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in
+            self?.dismiss(animated: true)
+        })
+        
+        if symbols.isEmpty {
+            let label = UILabel()
+            label.text = "No functions or types found"
+            label.textColor = .secondaryLabel
+            label.textAlignment = .center
+            tableView.backgroundView = label
+        }
+    }
+    
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        /* the symbol the caret is in */
+        if let index = shown.lastIndex(where: { $0.line <= currentLine && $0.kind != .mark }) ?? shown.lastIndex(where: { $0.line <= currentLine }) {
+            let path = IndexPath(row: index, section: 0)
+            tableView.selectRow(at: path, animated: false, scrollPosition: .middle)
+        }
+    }
+    
+    func updateSearchResults(for searchController: UISearchController) {
+        let query = (searchController.searchBar.text ?? "").trimmingCharacters(in: .whitespaces)
+        shown = query.isEmpty ? symbols : symbols.filter { $0.name.localizedCaseInsensitiveContains(query) }
+        tableView.reloadData()
+    }
+    
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { shown.count }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "symbol", for: indexPath)
+        let symbol = shown[indexPath.row]
+        var content = cell.defaultContentConfiguration()
+        content.text = symbol.name
+        content.textProperties.font = symbol.kind == .mark
+            ? .systemFont(ofSize: 13, weight: .semibold)
+            : .monospacedSystemFont(ofSize: 14, weight: .regular)
+        content.textProperties.numberOfLines = 1
+        content.textProperties.lineBreakMode = .byTruncatingTail
+        content.textProperties.color = symbol.kind == .mark ? .secondaryLabel : .label
+        content.secondaryText = "\(symbol.line)"
+        content.secondaryTextProperties.color = .tertiaryLabel
+        content.prefersSideBySideTextAndSecondaryText = true
+        content.image = UIImage(systemName: symbol.kind.symbolName)
+        content.imageProperties.tintColor = symbol.kind.tint
+        cell.contentConfiguration = content
+        cell.indentationLevel = min(symbol.depth, 4)
+        cell.indentationWidth = 14
+        return cell
+    }
+    
+    override func tableView(_ tableView: UITableView, indentationLevelForRowAt indexPath: IndexPath) -> Int {
+        min(shown[indexPath.row].depth, 4)
+    }
+    
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        let symbol = shown[indexPath.row]
+        dismiss(animated: true) { self.onSelect(symbol) }
+    }
+}
+
+extension CodeEditorViewController {
+    @objc func showDocumentSymbols() {
+        guard presentedViewController == nil else { return }
+        let text = self.textView.text
+        let symbols = DocumentSymbolScanner.scan(text, swift: self.file.isSwift)
+        
+        let caret = min(self.textView.selectedRange.location, (text as NSString).length)
+        let currentLine = (text as NSString).substring(to: caret).reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+        
+        let list = DocumentSymbolsViewController(symbols: symbols, currentLine: currentLine) { [weak self] symbol in
+            self?.goto(location: MDKSourceLocationMake(symbol.line, 1))
+        }
+        let navigation = UINavigationController(rootViewController: list)
+        if traitCollection.horizontalSizeClass == .regular {
+            navigation.modalPresentationStyle = .popover
+            navigation.preferredContentSize = CGSize(width: 420, height: 560)
+            navigation.popoverPresentationController?.sourceView = self.view
+            navigation.popoverPresentationController?.sourceRect = CGRect(x: self.view.bounds.midX, y: self.view.safeAreaInsets.top + 8, width: 1, height: 1)
+            navigation.popoverPresentationController?.permittedArrowDirections = .up
+        } else {
+            navigation.modalPresentationStyle = .pageSheet
+            navigation.sheetPresentationController?.detents = [.medium(), .large()]
+            navigation.sheetPresentationController?.prefersGrabberVisible = true
+        }
+        present(navigation, animated: true)
     }
 }
