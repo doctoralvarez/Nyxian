@@ -1,0 +1,85 @@
+# fork doctoralvarez/Nyxian: weekly check for new commits in emexlab/Nyxian.
+#
+# Compares upstream main with the upstream commit this fork last integrated
+# (.github/upstream-base). When upstream moved on it writes a summary and, if the
+# repository has Issues enabled, opens one issue per upstream commit. If Issues are
+# disabled the run is marked as failed on purpose, so GitHub emails you about it.
+# Nothing is merged automatically: the fork's changes are integrated by hand.
+name: Check upstream (emexLabs)
+
+on:
+  schedule:
+    - cron: '17 15 * * 1'   # Mondays 15:17 UTC (08:17 in Culiacán)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: Compare with emexlab/Nyxian
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compare with upstream
+        id: compare
+        run: |
+          set -e
+          BASE=$(tr -d '[:space:]' < .github/upstream-base)
+          git remote add upstream https://github.com/emexlab/Nyxian.git
+          git fetch --quiet --no-tags upstream main
+          UPSTREAM=$(git rev-parse upstream/main)
+          echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
+
+          if [ "$UPSTREAM" = "$BASE" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "### ✅ Up to date with emexlab/Nyxian (\`${UPSTREAM:0:7}\`)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### 🔔 emexlab/Nyxian has changes"
+            echo ""
+            echo "Integrated in this fork: \`${BASE:0:7}\` → upstream now: \`${UPSTREAM:0:7}\`"
+            echo ""
+            if git merge-base --is-ancestor "$BASE" "$UPSTREAM" 2>/dev/null; then
+              echo "#### New commits"
+              git log --format='- `%h` %s (%an, %ad)' --date=short "$BASE..$UPSTREAM"
+            else
+              echo "Upstream history was rewritten, so the change is shown as a file comparison."
+            fi
+            echo ""
+            if git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+              if ! git diff --quiet "$BASE" "$UPSTREAM" -- LLVM-On-iOS 2>/dev/null; then
+                echo "⚠️ **The LLVM-On-iOS submodule changed**: the next build recompiles the Swift/LLVM toolchain (about 5 hours)."
+                echo ""
+              fi
+              echo "#### Files changed"
+              echo '```'
+              git diff --stat "$BASE" "$UPSTREAM" | tail -n 40
+              echo '```'
+            fi
+          } > report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM: ${{ steps.compare.outputs.upstream }}
+        run: |
+          TITLE="Upstream Nyxian update ${UPSTREAM:0:7}"
+          if gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "$TITLE in:title" --json title --jq '.[].title' 2>/dev/null | grep -qF "$TITLE"; then
+            echo "Issue already exists for ${UPSTREAM:0:7}."
+          elif gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file report.md; then
+            echo "Opened an issue."
+          else
+            echo "::warning::Issues are disabled in this repository; failing the run so GitHub sends an email."
+            exit 1
+          fi
