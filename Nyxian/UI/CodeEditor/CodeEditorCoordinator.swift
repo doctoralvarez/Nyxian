@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-07): also forwards edits to the parameter help.
   - 1.0.0 (2026-11-07): forwards text and selection changes to the code
     completion controller.
 */
@@ -90,6 +91,7 @@ class CodeEditorCoordinator: NSObject, TextViewDelegate {
         }
         /* fork: suggestions follow every edit, also in files without a language server */
         self.parent?.completion?.textDidChange()
+        self.parent?.signatureHelp?.textDidChange()
         guard self.parent?.languageServer != nil else { return }
         if !self.isInvalidated {
             self.isInvalidated = true
@@ -119,6 +121,7 @@ class CodeEditorCoordinator: NSObject, TextViewDelegate {
     
     func textViewDidChangeSelection(_ textView: TextView) {
         self.parent?.completion?.selectionDidChange()
+        self.parent?.signatureHelp?.selectionDidChange()
         if self.isInvalidated {
             self.debounce?.debounce()
         }

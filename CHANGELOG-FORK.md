@@ -4,6 +4,18 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.8.0 — 2026-11-07
+
+- **Parameter help**: typing `(` or `,` in a call shows a bubble above the caret
+  with the function's signature, the current argument in bold and its
+  documentation; `)` or moving to another line closes it, **Esc** too, and
+  **⌃⇧Space** shows it on demand. Swift uses the compiler's signature help
+  (`IDEInspectionInstance::signatureHelp`); C/ObjC/C++ use Clang's overloads.
+- **Documentation in suggestions**: the selected suggestion's doc comment is shown
+  under the list (Clang brief comments, Swift doc comments).
+- `CCASTUnitCopySignatureHelpAtLocation`, `-[MDKASTUnit signatureHelpAtLocation:]`,
+  `-[NXLanguageServer signatureHelpAtLine:utf8Column:content:]`.
+
 ## 1.7.0 — 2026-11-07
 
 - **Format Document (⌃I)**: C, Objective-C and C++ with clang-format (LLVM style,

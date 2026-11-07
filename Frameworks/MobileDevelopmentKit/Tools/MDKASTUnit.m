@@ -23,8 +23,9 @@
  */
 
 /*
- * Fork doctoralvarez/Nyxian — version 1.1.0
+ * Fork doctoralvarez/Nyxian — version 1.2.0
  * Changelog:
+ *  - 1.2.0 (2026-11-07): -signatureHelpAtLocation: (parameter help).
  *  - 1.1.0 (2026-11-07): +formattedSource:fileName: (clang-format).
  *  - 1.0.0 (2026-11-07): -completionsAtLocation: (Clang code completion).
  */
@@ -58,6 +59,12 @@
 - (MDKFileSourceLocation*)fileSourceLocationForDefinitionAtLocation:(MDKSourceLocation)location
 {
     return (__bridge_transfer MDKFileSourceLocation*)CCASTUnitCopyDefinitionAtLocation((__bridge void*)self, (CCSourceLocation){ location.isValid, location.line, location.column });
+}
+
+- (NSDictionary<NSString*,id>*)signatureHelpAtLocation:(MDKSourceLocation)location
+{
+    CFDictionaryRef help = CCASTUnitCopySignatureHelpAtLocation((__bridge void*)self, (CCSourceLocation){ location.isValid, location.line, location.column });
+    return help != NULL ? (__bridge_transfer NSDictionary*)help : nil;
 }
 
 + (NSString*)formattedSource:(NSString*)source fileName:(NSString*)fileName

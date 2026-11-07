@@ -23,8 +23,9 @@
  */
 
 /*
- * Fork doctoralvarez/Nyxian — version 1.1.0
+ * Fork doctoralvarez/Nyxian — version 1.2.0
  * Changelog:
+ *  - 1.2.0 (2026-11-07): -signatureHelpAtLocation: (parameter help).
  *  - 1.1.0 (2026-11-07): +formattedSource:fileName: (clang-format).
  *  - 1.0.0 (2026-11-07): -completionsAtLocation: (Clang code completion).
  */
@@ -52,6 +53,9 @@ typedef NS_ENUM(UInt8, MDKASTUnitType) {
 
 /* fork: code completion for Clang units; dictionaries with text, display, type, kind, priority. Column counts UTF-8 bytes. */
 - (NSArray<NSDictionary<NSString*,id>*>*)completionsAtLocation:(MDKSourceLocation)location;
+
+/* fork: parameter help for the call around `location` (text, doc, activeStart, activeLength, count); nil outside a call */
+- (NSDictionary<NSString*,id>*)signatureHelpAtLocation:(MDKSourceLocation)location;
 
 /* fork: clang-format for C, Objective-C and C++ text; nil when it cannot be formatted */
 + (NSString*)formattedSource:(NSString*)source fileName:(NSString*)fileName NS_SWIFT_NAME(formattedSource(_:fileName:));

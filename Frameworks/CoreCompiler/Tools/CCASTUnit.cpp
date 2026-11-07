@@ -23,8 +23,11 @@
  */
 
 /*
- * Fork doctoralvarez/Nyxian — version 1.2.0
+ * Fork doctoralvarez/Nyxian — version 1.3.0
  * Changelog:
+ *  - 1.3.0 (2026-11-07): brief documentation in completion results (Clang
+ *    and Swift); CCASTUnitCopySignatureHelpAtLocation (Clang overloads,
+ *    Swift IDEInspectionInstance::signatureHelp); shared request helpers.
  *  - 1.2.0 (2026-11-07): CCCopyFormattedSource, clang-format for C,
  *    Objective-C and C++ (LLVM style, tab indentation, no line reflow).
  *  - 1.1.0 (2026-11-07): Swift code completion (phase 2) through
@@ -62,6 +65,8 @@
 #include <swift/IDE/CodeCompletionResult.h>
 #include <swift/IDE/CodeCompletionResultSink.h>
 #include <swift/IDE/CodeCompletionResultPrinter.h>
+#include <swift/IDE/SignatureHelp.h>
+#include <swift/IDE/SignatureHelpFormatter.h>
 #include <swift/AST/PluginRegistry.h>
 #include <llvm/Support/VirtualFileSystem.h>
 #include <mutex>
@@ -1092,11 +1097,19 @@ struct CCCompletionItem {
     std::string text;
     std::string display;
     std::string resultType;
+    std::string doc;
     int kind;
     unsigned priority;
 };
 
-/* Turns Clang's completion results into plain strings while Sema is still alive. */
+struct CCSignatureItem {
+    std::string text;
+    std::string doc;
+    long activeStart;   /* byte offset of the current argument in text, -1 when unknown */
+    long activeLength;
+};
+
+/* Turns Clang's completion results (and call overloads) into plain strings while Sema is still alive. */
 class CCCollectingCompletionConsumer : public clang::CodeCompleteConsumer {
 public:
     explicit CCCollectingCompletionConsumer(const clang::CodeCompleteOptions &options)
@@ -1117,7 +1130,7 @@ public:
                 continue;
             }
             
-            clang::CodeCompletionString *completion = result.CreateCodeCompletionString(S, Context, getAllocator(), CCTUInfo, /*IncludeBriefComments=*/false);
+            clang::CodeCompletionString *completion = result.CreateCodeCompletionString(S, Context, getAllocator(), CCTUInfo, /*IncludeBriefComments=*/true);
             if(completion == nullptr)
             {
                 continue;
@@ -1133,6 +1146,10 @@ public:
             item.text = typed;
             item.kind = (int)result.Kind;
             item.priority = completion->getPriority();
+            if(const char *brief = completion->getBriefComment())
+            {
+                item.doc = brief;
+            }
             
             for(const clang::CodeCompletionString::Chunk &chunk : *completion)
             {
@@ -1156,6 +1173,64 @@ public:
         }
     }
     
+    void ProcessOverloadCandidates(clang::Sema &S,
+                                   unsigned CurrentArg,
+                                   OverloadCandidate *Candidates,
+                                   unsigned NumCandidates,
+                                   clang::SourceLocation OpenParLoc,
+                                   bool Braced) override
+    {
+        for(unsigned i = 0; i < NumCandidates && signatures.size() < 32; i++)
+        {
+            clang::CodeCompletionString *signature = Candidates[i].CreateSignatureString(CurrentArg, S, getAllocator(), CCTUInfo, /*IncludeBriefComments=*/true, Braced);
+            if(signature == nullptr)
+            {
+                continue;
+            }
+            
+            CCSignatureItem item;
+            item.activeStart = -1;
+            item.activeLength = 0;
+            std::string resultType;
+            for(const clang::CodeCompletionString::Chunk &chunk : *signature)
+            {
+                if(chunk.Kind == clang::CodeCompletionString::CK_Optional || chunk.Text == nullptr)
+                {
+                    continue;
+                }
+                if(chunk.Kind == clang::CodeCompletionString::CK_ResultType)
+                {
+                    resultType = chunk.Text;
+                    continue;
+                }
+                if(chunk.Kind == clang::CodeCompletionString::CK_CurrentParameter)
+                {
+                    item.activeStart = (long)item.text.size();
+                    item.activeLength = (long)strlen(chunk.Text);
+                }
+                item.text += chunk.Text;
+            }
+            if(!resultType.empty())
+            {
+                /* "int printf(const char *, ...)" */
+                std::string prefix = resultType + " ";
+                item.text = prefix + item.text;
+                if(item.activeStart >= 0)
+                {
+                    item.activeStart += (long)prefix.size();
+                }
+            }
+            if(const char *brief = signature->getBriefComment())
+            {
+                item.doc = brief;
+            }
+            if(!item.text.empty())
+            {
+                signatures.push_back(std::move(item));
+            }
+        }
+    }
+    
     clang::CodeCompletionAllocator &getAllocator() override
     {
         return CCTUInfo.getAllocator();
@@ -1167,6 +1242,7 @@ public:
     }
     
     std::vector<CCCompletionItem> items;
+    std::vector<CCSignatureItem> signatures;
     
 private:
     clang::CodeCompletionTUInfo CCTUInfo;
@@ -1177,32 +1253,86 @@ static CFStringRef CCCreateCFString(const std::string &value)
     return CFStringCreateWithBytes(kCFAllocatorDefault, (const UInt8 *)value.data(), (CFIndex)value.size(), kCFStringEncodingUTF8, false);
 }
 
+/* UTF-16 length of the first `bytes` UTF-8 bytes of `text` (the editor counts in UTF-16) */
+static CFIndex CCUTF16Length(const std::string &text, size_t bytes)
+{
+    if(bytes > text.size())
+    {
+        bytes = text.size();
+    }
+    CFStringRef head = CFStringCreateWithBytes(kCFAllocatorDefault, (const UInt8 *)text.data(), (CFIndex)bytes, kCFStringEncodingUTF8, false);
+    if(head == nullptr)
+    {
+        return (CFIndex)bytes;
+    }
+    CFIndex length = CFStringGetLength(head);
+    CFRelease(head);
+    return length;
+}
+
+static void CCDictionarySetString(CFMutableDictionaryRef dict, CFStringRef key, const std::string &value)
+{
+    if(value.empty())
+    {
+        return;
+    }
+    CFStringRef string = CCCreateCFString(value);
+    if(string != nullptr)
+    {
+        CFDictionarySetValue(dict, key, string);
+        CFRelease(string);
+    }
+}
+
+static void CCDictionarySetNumber(CFMutableDictionaryRef dict, CFStringRef key, long value)
+{
+    CFNumberRef number = CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &value);
+    if(number != nullptr)
+    {
+        CFDictionarySetValue(dict, key, number);
+        CFRelease(number);
+    }
+}
+
+/* the signature dictionary handed to the editor: text, doc, activeStart/activeLength (UTF-16), count */
+static CFDictionaryRef CCCreateSignatureDictionary(const std::string &text, const std::string &doc, long activeStart, long activeLength, long count)
+{
+    CFMutableDictionaryRef dict = CFDictionaryCreateMutable(kCFAllocatorDefault, 5, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if(dict == nullptr)
+    {
+        return nullptr;
+    }
+    CCDictionarySetString(dict, CFSTR("text"), text);
+    CCDictionarySetString(dict, CFSTR("doc"), doc);
+    if(activeStart >= 0 && activeLength > 0)
+    {
+        CFIndex start = CCUTF16Length(text, (size_t)activeStart);
+        CFIndex end = CCUTF16Length(text, (size_t)(activeStart + activeLength));
+        CCDictionarySetNumber(dict, CFSTR("activeStart"), (long)start);
+        CCDictionarySetNumber(dict, CFSTR("activeLength"), (long)(end - start));
+    }
+    CCDictionarySetNumber(dict, CFSTR("count"), count);
+    return dict;
+}
+
 } /* namespace */
 
-static CFArrayRef _CCASTUnitCopySwiftCompletions(CCASTUnitRef unit, CCSourceLocation location);
-
-CFArrayRef CCASTUnitCopyCompletionsAtLocation(CCASTUnitRef unit,
-                                              CCSourceLocation location)
+/* Runs ASTUnit::CodeComplete for a Clang unit at `location` against the unsaved text. */
+static Boolean _CCASTUnitRunClangCodeComplete(CCASTUnitRef unit, CCSourceLocation location, CCCollectingCompletionConsumer &consumer)
 {
-    if(unit != nullptr && unit->type == kCCASTUnitTypeSwift)
-    {
-        return _CCASTUnitCopySwiftCompletions(unit, location);
-    }
-    
     if(unit == nullptr || unit->type != kCCASTUnitTypeClang || unit->unit == nullptr || unit->file == nullptr)
     {
-        return nullptr;
+        return false;
     }
-    
     if(!location.isValid || location.line <= 0 || location.column <= 0)
     {
-        return nullptr;
+        return false;
     }
     
     char filePath[PATH_MAX];
     if(!CFURLGetFileSystemRepresentation(CCFileGetFileURL(unit->file), true, (UInt8 *)filePath, sizeof(filePath)))
     {
-        return nullptr;
+        return false;
     }
     
     /* complete against the editor's current text, not the file on disk */
@@ -1213,13 +1343,6 @@ CFArrayRef CCASTUnitCopyCompletionsAtLocation(CCASTUnitRef unit,
         llvm::StringRef contentRef((const char *)CFDataGetBytePtr(data), CFDataGetLength(data));
         remaps.push_back(ASTUnit::RemappedFile(filePath, llvm::MemoryBuffer::getMemBufferCopy(contentRef, filePath).release()));
     }
-    
-    clang::CodeCompleteOptions options;
-    options.IncludeMacros = 1;
-    options.IncludeCodePatterns = 0;
-    options.IncludeGlobals = 1;
-    options.IncludeBriefComments = 0;
-    CCCollectingCompletionConsumer consumer(options);
     
     /* the same fresh managers libclang hands to ASTUnit::CodeComplete */
     DiagnosticOptions diagOpts;
@@ -1237,7 +1360,7 @@ CFArrayRef CCASTUnitCopyCompletionsAtLocation(CCASTUnitRef unit,
                                  remaps,
                                  /*IncludeMacros=*/true,
                                  /*IncludeCodePatterns=*/false,
-                                 /*IncludeBriefComments=*/false,
+                                 /*IncludeBriefComments=*/true,
                                  consumer,
                                  std::make_shared<PCHContainerOperations>(),
                                  diag,
@@ -1254,6 +1377,35 @@ CFArrayRef CCASTUnitCopyCompletionsAtLocation(CCASTUnitRef unit,
             delete buffer;
         }
     }
+    return true;
+}
+
+static clang::CodeCompleteOptions CCCompletionOptions(void)
+{
+    clang::CodeCompleteOptions options;
+    options.IncludeMacros = 1;
+    options.IncludeCodePatterns = 0;
+    options.IncludeGlobals = 1;
+    options.IncludeBriefComments = 1;
+    return options;
+}
+
+static CFArrayRef _CCASTUnitCopySwiftCompletions(CCASTUnitRef unit, CCSourceLocation location);
+static CFDictionaryRef _CCASTUnitCopySwiftSignatureHelp(CCASTUnitRef unit, CCSourceLocation location);
+
+CFArrayRef CCASTUnitCopyCompletionsAtLocation(CCASTUnitRef unit,
+                                              CCSourceLocation location)
+{
+    if(unit != nullptr && unit->type == kCCASTUnitTypeSwift)
+    {
+        return _CCASTUnitCopySwiftCompletions(unit, location);
+    }
+    
+    CCCollectingCompletionConsumer consumer(CCCompletionOptions());
+    if(!_CCASTUnitRunClangCodeComplete(unit, location, consumer))
+    {
+        return nullptr;
+    }
     
     CFMutableArrayRef array = CFArrayCreateMutable(kCFAllocatorDefault, (CFIndex)consumer.items.size(), &kCFTypeArrayCallBacks);
     if(array == nullptr)
@@ -1263,35 +1415,52 @@ CFArrayRef CCASTUnitCopyCompletionsAtLocation(CCASTUnitRef unit,
     
     for(const CCCompletionItem &item : consumer.items)
     {
-        CFStringRef text = CCCreateCFString(item.text);
-        if(text == nullptr)
+        CFMutableDictionaryRef dict = CFDictionaryCreateMutable(kCFAllocatorDefault, 6, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        if(dict == nullptr)
         {
             continue;
         }
-        CFStringRef display = CCCreateCFString(item.display.empty() ? item.text : item.display);
-        CFStringRef type = item.resultType.empty() ? nullptr : CCCreateCFString(item.resultType);
-        int kind = item.kind;
-        int priority = (int)item.priority;
-        CFNumberRef kindNumber = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &kind);
-        CFNumberRef priorityNumber = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &priority);
-        
-        CFMutableDictionaryRef dict = CFDictionaryCreateMutable(kCFAllocatorDefault, 5, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-        CFDictionarySetValue(dict, CFSTR("text"), text);
-        if(display != nullptr) CFDictionarySetValue(dict, CFSTR("display"), display);
-        if(type != nullptr) CFDictionarySetValue(dict, CFSTR("type"), type);
-        if(kindNumber != nullptr) CFDictionarySetValue(dict, CFSTR("kind"), kindNumber);
-        if(priorityNumber != nullptr) CFDictionarySetValue(dict, CFSTR("priority"), priorityNumber);
-        CFArrayAppendValue(array, dict);
-        
+        CCDictionarySetString(dict, CFSTR("text"), item.text);
+        CCDictionarySetString(dict, CFSTR("display"), item.display.empty() ? item.text : item.display);
+        CCDictionarySetString(dict, CFSTR("type"), item.resultType);
+        CCDictionarySetString(dict, CFSTR("doc"), item.doc);
+        CCDictionarySetNumber(dict, CFSTR("kind"), (long)item.kind);
+        CCDictionarySetNumber(dict, CFSTR("priority"), (long)item.priority);
+        if(CFDictionaryContainsKey(dict, CFSTR("text")))
+        {
+            CFArrayAppendValue(array, dict);
+        }
         CFRelease(dict);
-        CFRelease(text);
-        if(display != nullptr) CFRelease(display);
-        if(type != nullptr) CFRelease(type);
-        if(kindNumber != nullptr) CFRelease(kindNumber);
-        if(priorityNumber != nullptr) CFRelease(priorityNumber);
     }
     
     return array;
+}
+
+CFDictionaryRef CCASTUnitCopySignatureHelpAtLocation(CCASTUnitRef unit,
+                                                     CCSourceLocation location)
+{
+    if(unit != nullptr && unit->type == kCCASTUnitTypeSwift)
+    {
+        return _CCASTUnitCopySwiftSignatureHelp(unit, location);
+    }
+    
+    CCCollectingCompletionConsumer consumer(CCCompletionOptions());
+    if(!_CCASTUnitRunClangCodeComplete(unit, location, consumer) || consumer.signatures.empty())
+    {
+        return nullptr;
+    }
+    
+    /* prefer an overload that knows which argument is being typed */
+    const CCSignatureItem *best = &consumer.signatures.front();
+    for(const CCSignatureItem &signature : consumer.signatures)
+    {
+        if(signature.activeStart >= 0)
+        {
+            best = &signature;
+            break;
+        }
+    }
+    return CCCreateSignatureDictionary(best->text, best->doc, best->activeStart, best->activeLength, (long)consumer.signatures.size());
 }
 
 #pragma mark - fork: Swift code completion (phase 2)
@@ -1303,6 +1472,7 @@ struct CCSwiftCompletionItem {
     std::string display;
     std::string resultType;
     std::string insert;
+    std::string doc;
     long cursor;
     int kind;
     int priority;
@@ -1431,23 +1601,33 @@ static CFStringRef CCCreateSwiftCFString(const std::string &value)
 
 } /* namespace */
 
-static CFArrayRef _CCASTUnitCopySwiftCompletions(CCASTUnitRef unit, CCSourceLocation location)
+/* Everything the Swift IDE engine needs for a request at `location` of the unit's unsaved text. */
+struct CCSwiftRequest {
+    std::string primaryPath;
+    llvm::SmallVector<const char *, 64> args;
+    swift::CompilerInvocation invocation;
+    std::unique_ptr<llvm::MemoryBuffer> buffer;
+    unsigned offset;
+};
+
+static bool _CCSwiftPrepareRequest(CCASTUnitRef unit, CCSourceLocation location, CCSwiftRequest &request)
 {
     if(unit->file == nullptr || unit->BaseArgs.empty() || !location.isValid || location.line <= 0 || location.column <= 0)
     {
-        return nullptr;
+        return false;
     }
     
     char primaryPath[PATH_MAX];
     if(!CFURLGetFileSystemRepresentation(CCFileGetFileURL(unit->file), true, (UInt8 *)primaryPath, sizeof(primaryPath)))
     {
-        return nullptr;
+        return false;
     }
+    request.primaryPath = primaryPath;
     
     CFDataRef data = CCFileGetUnsavedData(unit->file);
     if(data == nullptr)
     {
-        return nullptr;
+        return false;
     }
     llvm::StringRef content((const char *)CFDataGetBytePtr(data), CFDataGetLength(data));
     
@@ -1458,18 +1638,17 @@ static CFArrayRef _CCASTUnitCopySwiftCompletions(CCASTUnitRef unit, CCSourceLoca
         size_t newline = content.find('\n', offset);
         if(newline == llvm::StringRef::npos)
         {
-            return nullptr;
+            return false;
         }
         offset = newline + 1;
     }
     offset += (size_t)(location.column - 1);
     if(offset > content.size())
     {
-        return nullptr;
+        return false;
     }
     
     /* same frontend arguments as the live type checking in _CCASTUnitReparseSwift */
-    llvm::SmallVector<const char *, 64> args;
     for(size_t i = 0; i < unit->BaseArgs.size(); i++)
     {
         const std::string &arg = unit->BaseArgs[i];
@@ -1477,49 +1656,58 @@ static CFArrayRef _CCASTUnitCopySwiftCompletions(CCASTUnitRef unit, CCSourceLoca
         {
             if(i + 1 < unit->BaseArgs.size())
             {
-                args.push_back(unit->BaseArgs[++i].c_str());
+                request.args.push_back(unit->BaseArgs[++i].c_str());
             }
             continue;
         }
-        args.push_back(arg.c_str());
+        request.args.push_back(arg.c_str());
     }
     
     CCInitializeSwiftModulesOnce();
     
     swift::SourceManager parseSM;
     swift::DiagnosticEngine parseDiags(parseSM);
-    swift::CompilerInvocation invocation;
-    if(invocation.parseArgs(args, parseDiags, nullptr, "", ""))
+    if(request.invocation.parseArgs(request.args, parseDiags, nullptr, "", ""))
     {
-        return nullptr;
+        return false;
     }
-    invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::Typecheck;
+    request.invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::Typecheck;
     
-    /* the edited file is the primary input; its text comes from the completion buffer */
+    /* the edited file is the primary input; its text comes from the request buffer */
     {
-        auto &io = invocation.getFrontendOptions().InputsAndOutputs;
+        auto &io = request.invocation.getFrontendOptions().InputsAndOutputs;
         swift::FrontendInputsAndOutputs rebuilt;
         bool foundPrimary = false;
         for(const auto &in : io.getAllInputs())
         {
-            bool isPrimary = (in.getFileName() == primaryPath);
+            bool isPrimary = (in.getFileName() == request.primaryPath);
             foundPrimary = foundPrimary || isPrimary;
             rebuilt.addInput(swift::InputFile(in.getFileName(), isPrimary));
         }
         if(!foundPrimary)
         {
-            rebuilt.addInput(swift::InputFile(primaryPath, true));
+            rebuilt.addInput(swift::InputFile(request.primaryPath, true));
         }
         io = std::move(rebuilt);
     }
     
-    std::unique_ptr<llvm::MemoryBuffer> original = llvm::MemoryBuffer::getMemBufferCopy(content, primaryPath);
-    unsigned completionOffset = (unsigned)offset;
-    std::unique_ptr<llvm::MemoryBuffer> completionBuffer = swift::ide::makeCodeCompletionMemoryBuffer(original.get(), completionOffset, primaryPath);
-    if(completionBuffer == nullptr)
+    std::unique_ptr<llvm::MemoryBuffer> original = llvm::MemoryBuffer::getMemBufferCopy(content, request.primaryPath);
+    request.offset = (unsigned)offset;
+    request.buffer = swift::ide::makeCodeCompletionMemoryBuffer(original.get(), request.offset, request.primaryPath);
+    return request.buffer != nullptr;
+}
+
+static CFArrayRef _CCASTUnitCopySwiftCompletions(CCASTUnitRef unit, CCSourceLocation location)
+{
+    CCSwiftRequest request;
+    if(!_CCSwiftPrepareRequest(unit, location, request))
     {
         return nullptr;
     }
+    swift::CompilerInvocation &invocation = request.invocation;
+    llvm::SmallVector<const char *, 64> &args = request.args;
+    std::unique_ptr<llvm::MemoryBuffer> &completionBuffer = request.buffer;
+    unsigned completionOffset = request.offset;
     
     std::vector<CCSwiftCompletionItem> items;
     
@@ -1566,6 +1754,9 @@ static CFArrayRef _CCASTUnitCopySwiftCompletions(CCASTUnitRef unit, CCSourceLoca
                         llvm::raw_string_ostream os(source);
                         swift::ide::printCodeCompletionResultSourceText(*completion, os);
                     }
+                    
+                    llvm::StringRef brief = completion->getBriefDocComment();
+                    item.doc = brief.str();
                     
                     item.name = CCSwiftCompletionName(item.display);
                     if(item.name.empty())
@@ -1630,6 +1821,7 @@ static CFArrayRef _CCASTUnitCopySwiftCompletions(CCASTUnitRef unit, CCSourceLoca
         CFDictionarySetValue(dict, CFSTR("text"), text);
         CFDictionarySetValue(dict, CFSTR("display"), display);
         CFDictionarySetValue(dict, CFSTR("insert"), insert);
+        CCDictionarySetString(dict, CFSTR("doc"), item.doc);
         if(type != nullptr) CFDictionarySetValue(dict, CFSTR("type"), type);
         if(kindNumber != nullptr) CFDictionarySetValue(dict, CFSTR("kind"), kindNumber);
         if(priorityNumber != nullptr) CFDictionarySetValue(dict, CFSTR("priority"), priorityNumber);
@@ -1647,6 +1839,73 @@ static CFArrayRef _CCASTUnitCopySwiftCompletions(CCASTUnitRef unit, CCSourceLoca
     }
     
     return array;
+}
+
+#pragma mark - fork: Swift signature help
+
+static CFDictionaryRef _CCASTUnitCopySwiftSignatureHelp(CCASTUnitRef unit, CCSourceLocation location)
+{
+    CCSwiftRequest request;
+    if(!_CCSwiftPrepareRequest(unit, location, request))
+    {
+        return nullptr;
+    }
+    
+    std::string text;
+    std::string doc;
+    long activeStart = -1;
+    long activeLength = 0;
+    long count = 0;
+    
+    {
+        std::lock_guard<std::mutex> guard(gCCSwiftCompletionMutex);
+        
+        CCSharedIDEInspectionInstance().signatureHelp(
+            request.invocation,
+            request.args,
+            llvm::vfs::getRealFileSystem(),
+            request.buffer.get(),
+            request.offset,
+            /*DiagC=*/nullptr,
+            /*CancellationFlag=*/nullptr,
+            [&](swift::ide::CancellableResult<swift::ide::SignatureHelpResults> result) {
+                if(result.getKind() != swift::ide::CancellableResultKind::Success)
+                {
+                    return;
+                }
+                const swift::ide::SignatureHelpResults &success = result.getResult();
+                if(success.Result == nullptr)
+                {
+                    return;
+                }
+                
+                llvm::BumpPtrAllocator allocator;
+                swift::ide::SignatureHelpFormatter formatter(allocator);
+                swift::ide::FormattedSignatureHelp formatted = formatter.format(*success.Result);
+                if(formatted.Signatures.empty())
+                {
+                    return;
+                }
+                
+                count = (long)formatted.Signatures.size();
+                unsigned index = formatted.ActiveSignature < formatted.Signatures.size() ? formatted.ActiveSignature : 0;
+                const swift::ide::FormattedSignatureHelp::Signature &signature = formatted.Signatures[index];
+                text = signature.Text.str();
+                doc = signature.DocComment.str();
+                if(signature.ActiveParam.has_value() && *signature.ActiveParam < signature.Params.size())
+                {
+                    const swift::ide::FormattedSignatureHelp::Parameter &parameter = signature.Params[*signature.ActiveParam];
+                    activeStart = (long)parameter.Offset;
+                    activeLength = (long)parameter.Length;
+                }
+            });
+    }
+    
+    if(text.empty())
+    {
+        return nullptr;
+    }
+    return CCCreateSignatureDictionary(text, doc, activeStart, activeLength, count);
 }
 
 #pragma mark - fork: clang-format

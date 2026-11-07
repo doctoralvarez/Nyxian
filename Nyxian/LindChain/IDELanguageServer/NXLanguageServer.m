@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-07): -signatureHelpAtLine:utf8Column:content:.
   - 1.1.0 (2026-11-07): completions for Swift files too (phase 2).
   - 1.0.0 (2026-11-07): -completionsAtLine:utf8Column:content: for the
     editor's code completion (Clang files).
@@ -178,6 +179,28 @@
     os_unfair_lock_unlock(&_lock);
     
     return items;
+}
+
+- (NSDictionary<NSString*,id>*)signatureHelpAtLine:(NSInteger)line utf8Column:(NSInteger)column content:(NSString*)content
+{
+    NSData *data = [content dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO];
+    if(data == nil)
+    {
+        return nil;
+    }
+    
+    os_unfair_lock_lock(&_lock);
+    if(_unit == nil)
+    {
+        os_unfair_lock_unlock(&_lock);
+        return nil;
+    }
+    
+    [_file setUnsavedData:data];
+    NSDictionary<NSString*,id> *help = [_unit signatureHelpAtLocation:MDKSourceLocationMake(line, column)];
+    os_unfair_lock_unlock(&_lock);
+    
+    return help;
 }
 
 - (MDKFileSourceLocation*)getDefinitionAtLocation:(MDKSourceLocation)location

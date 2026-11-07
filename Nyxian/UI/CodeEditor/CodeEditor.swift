@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.0
+ Fork doctoralvarez/Nyxian — version 1.5.0
  Changelog:
+  - 1.5.0 (2026-11-07): parameter help bubble while typing a call (after "("
+    and ","; ⌃⇧Space shows it, Esc hides it) with the current argument in
+    bold; documentation of the selected suggestion under the list.
   - 1.4.0 (2026-11-07): ⌃I Format Document (clang-format for C/ObjC/C++,
     brace re-indentation for Swift); ⌃⌘E Rename Symbol across the project
     (open tabs edited in place and undoable, closed files written);
@@ -80,6 +83,8 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
     
     /* fork: suggestions while typing */
     private(set) var completion: EditorCompletionController?
+    /* fork: parameter help bubble */
+    private(set) var signatureHelp: SignatureHelpController?
     
     let isReadOnly: Bool
     
@@ -297,8 +302,9 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         self.coordinator = CodeEditorCoordinator(parent: self)
         self.textView.editorDelegate = self.coordinator
         
-        /* fork: code completion */
+        /* fork: code completion and parameter help */
         self.completion = EditorCompletionController(editor: self)
+        self.signatureHelp = SignatureHelpController(editor: self)
         /* fork: project-wide edits (rename) reach this tab through the registry */
         LiveEditorRegistry.register(self)
         
@@ -687,6 +693,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
     
     override func viewWillDisappear(_ animated: Bool) {
         self.completion?.hide()
+        self.signatureHelp?.hide()
         self.document?.autosave()
         self.coordinator?.debounce?.invalidate()
         self.languageServer?.releaseMemory()
@@ -756,10 +763,15 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
                 command("Duplicate Line", #selector(duplicateLines), "d"),
                 command("Move Line Up", #selector(moveLinesUp), UIKeyCommand.inputUpArrow, [.command, .alternate]),
                 command("Move Line Down", #selector(moveLinesDown), UIKeyCommand.inputDownArrow, [.command, .alternate]),
-                command("Rename Symbol", #selector(promptRenameSymbol), "e", [.command, .control])
+                command("Rename Symbol", #selector(promptRenameSymbol), "e", [.command, .control]),
+                command("Show Signature", #selector(signatureHelpShow), " ", [.control, .shift])
             ])
             if self.file.isClang || self.file.isSwift {
                 commands.append(command("Format Document", #selector(formatDocument), "i", [.control]))
+            }
+            /* fork: Esc closes the parameter help (the suggestion list, when open, takes Esc first) */
+            if self.signatureHelp?.isVisible == true {
+                commands.append(command("Dismiss Parameter Help", #selector(signatureHelpDismiss), UIKeyCommand.inputEscape, []))
             }
             if self.lineCommentPrefix != nil {
                 commands.append(command("Toggle Comment", #selector(toggleComment), "/"))
@@ -1140,6 +1152,8 @@ struct EditorCompletionItem {
     /// Secondary text: a result type or where the word came from.
     let detail: String?
     let symbolName: String
+    /// One-line documentation shown under the list for the selected row.
+    var doc: String? = nil
 }
 
 /// The floating suggestion list shown under (or above) the caret.
@@ -1147,9 +1161,17 @@ final class CompletionPopupView: UIView, UITableViewDataSource, UITableViewDeleg
     static let rowHeight: CGFloat = 32
     static let maximumVisibleRows = 7
     
+    static let docHeight: CGFloat = 46
+    
     var onPick: ((EditorCompletionItem) -> Void)?
     private(set) var selectedIndex = 0
     private let tableView = UITableView(frame: .zero, style: .plain)
+    /* fork: documentation of the selected suggestion */
+    private let docLabel = UILabel()
+    private var docHeightConstraint: NSLayoutConstraint?
+    
+    /// True when some suggestion carries documentation, so the footer is shown.
+    var hasDocs: Bool { items.contains { $0.doc != nil } }
     
     var items: [EditorCompletionItem] = [] {
         didSet {
@@ -1158,7 +1180,13 @@ final class CompletionPopupView: UIView, UITableViewDataSource, UITableViewDeleg
             if !items.isEmpty {
                 tableView.scrollToRow(at: IndexPath(row: 0, section: 0), at: .top, animated: false)
             }
+            docHeightConstraint?.constant = hasDocs ? CompletionPopupView.docHeight : 0
+            updateDoc()
         }
+    }
+    
+    private func updateDoc() {
+        docLabel.text = selectedItem?.doc ?? ""
     }
     
     var selectedItem: EditorCompletionItem? {
@@ -1186,11 +1214,25 @@ final class CompletionPopupView: UIView, UITableViewDataSource, UITableViewDeleg
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "completion")
         tableView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(tableView)
+        
+        docLabel.font = UIFont.systemFont(ofSize: 12)
+        docLabel.textColor = .secondaryLabel
+        docLabel.numberOfLines = 2
+        docLabel.lineBreakMode = .byTruncatingTail
+        docLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(docLabel)
+        
+        let docHeight = docLabel.heightAnchor.constraint(equalToConstant: 0)
+        docHeightConstraint = docHeight
         NSLayoutConstraint.activate([
             tableView.topAnchor.constraint(equalTo: topAnchor),
-            tableView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            tableView.bottomAnchor.constraint(equalTo: docLabel.topAnchor),
             tableView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            tableView.trailingAnchor.constraint(equalTo: trailingAnchor)
+            tableView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            docLabel.bottomAnchor.constraint(equalTo: bottomAnchor),
+            docLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            docLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            docHeight
         ])
     }
     
@@ -1204,6 +1246,7 @@ final class CompletionPopupView: UIView, UITableViewDataSource, UITableViewDeleg
         selectedIndex = (selectedIndex + delta + items.count) % items.count
         tableView.reloadRows(at: [IndexPath(row: previous, section: 0), IndexPath(row: selectedIndex, section: 0)], with: .none)
         tableView.scrollToRow(at: IndexPath(row: selectedIndex, section: 0), at: .none, animated: false)
+        updateDoc()
     }
     
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
@@ -1391,7 +1434,8 @@ final class EditorCompletionController {
         let caretRect = textView.convert(textView.caretRect(for: end), to: editor.view)
         let bounds = editor.view.bounds
         let width = min(380, bounds.width - 16)
-        let height = CompletionPopupView.rowHeight * CGFloat(min(items.count, CompletionPopupView.maximumVisibleRows))
+        let docsHeight: CGFloat = items.contains { $0.doc != nil } ? CompletionPopupView.docHeight : 0
+        let height = CompletionPopupView.rowHeight * CGFloat(min(items.count, CompletionPopupView.maximumVisibleRows)) + docsHeight
         let x = min(max(8, caretRect.minX - 28), bounds.width - width - 8)
         let bottomLimit = bounds.height - textView.contentInset.bottom - 4
         var y = caretRect.maxY + 4
@@ -1458,7 +1502,8 @@ final class EditorCompletionController {
             /* Swift results bring their own insertion text, e.g. "font()" with the caret inside */
             let insert = (entry["insert"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? text
             let cursor = (entry["cursor"] as? NSNumber)?.intValue
-            let item = EditorCompletionItem(text: insert, cursorOffset: cursor, display: display, detail: entry["type"] as? String, symbolName: symbol)
+            let doc = (entry["doc"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let item = EditorCompletionItem(text: insert, cursorOffset: cursor, display: display, detail: entry["type"] as? String, symbolName: symbol, doc: (doc?.isEmpty ?? true) ? nil : doc)
             scored.append((item, text.hasPrefix(prefix), priority))
         }
         
@@ -1916,5 +1961,209 @@ enum SymbolRenamer {
             }
         }
         return failures
+    }
+}
+
+// MARK: - Fork: parameter help (signature help)
+
+/// The bubble above the caret showing the called function's signature.
+final class SignatureHelpView: UIView {
+    private let signatureLabel = UILabel()
+    private let docLabel = UILabel()
+    
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .secondarySystemBackground
+        layer.cornerRadius = 10
+        layer.borderWidth = 0.5
+        layer.borderColor = UIColor.separator.cgColor
+        layer.shadowColor = UIColor.black.cgColor
+        layer.shadowOpacity = 0.2
+        layer.shadowRadius = 8
+        layer.shadowOffset = CGSize(width: 0, height: 3)
+        isUserInteractionEnabled = false
+        
+        signatureLabel.numberOfLines = 3
+        docLabel.numberOfLines = 2
+        docLabel.font = UIFont.systemFont(ofSize: 12)
+        docLabel.textColor = .secondaryLabel
+        
+        let stack = UIStackView(arrangedSubviews: [signatureLabel, docLabel])
+        stack.axis = .vertical
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12)
+        ])
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    func configure(text: String, activeRange: NSRange?, doc: String?, overloads: Int) {
+        let font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let attributed = NSMutableAttributedString(string: text, attributes: [.font: font, .foregroundColor: UIColor.label])
+        if let range = activeRange, range.location + range.length <= (text as NSString).length {
+            attributed.addAttributes([
+                .font: UIFont.monospacedSystemFont(ofSize: 13, weight: .bold),
+                .foregroundColor: UIColor.tintColor
+            ], range: range)
+        }
+        if overloads > 1 {
+            attributed.append(NSAttributedString(string: "   +\(overloads - 1)", attributes: [
+                .font: UIFont.systemFont(ofSize: 11),
+                .foregroundColor: UIColor.secondaryLabel
+            ]))
+        }
+        signatureLabel.attributedText = attributed
+        docLabel.text = doc
+        docLabel.isHidden = (doc ?? "").isEmpty
+    }
+}
+
+/// Asks the compiler for the signature of the call being typed and keeps the bubble up to date.
+final class SignatureHelpController {
+    private weak var editor: CodeEditorViewController?
+    private let bubble = SignatureHelpView()
+    private var generation = 0
+    private var busy = false
+    private var anchorLine: Int?
+    
+    var isVisible: Bool { bubble.superview != nil && !bubble.isHidden }
+    
+    init(editor: CodeEditorViewController) {
+        self.editor = editor
+        bubble.isHidden = true
+    }
+    
+    func textDidChange() {
+        guard EditorCompletionController.isEnabled, let editor = editor, !editor.isReadOnly,
+              editor.file.isClang || editor.file.isSwift else { return }
+        let text = editor.textView.text as NSString
+        let caret = editor.textView.selectedRange.location
+        guard caret > 0, caret <= text.length else { hide(); return }
+        let typed = text.character(at: caret - 1)
+        
+        if typed == 0x29 /* ) */ {
+            hide()
+            return
+        }
+        /* open on "(" and ","; while open, follow every edit so the active argument moves */
+        if typed == 0x28 /* ( */ || typed == 0x2C /* , */ || isVisible {
+            request()
+        }
+    }
+    
+    func selectionDidChange() {
+        guard isVisible, let editor = editor, let line = anchorLine else { return }
+        if currentLine(in: editor) != line {
+            hide()
+        }
+    }
+    
+    func hide() {
+        generation += 1
+        anchorLine = nil
+        bubble.isHidden = true
+    }
+    
+    /// Shows the signature for the call around the caret (also used by ⌃⇧Space).
+    func request() {
+        guard let editor = editor, let server = editor.languageServer, !busy else { return }
+        generation += 1
+        let currentGeneration = generation
+        let text = editor.textView.text
+        let caret = editor.textView.selectedRange.location
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self = self, currentGeneration == self.generation, !self.busy else { return }
+            self.busy = true
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let position = SignatureHelpController.lineAndUTF8Column(text, utf16Offset: caret)
+                let help = server.signatureHelp(line: position.line, utf8Column: position.column, content: text)
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    self.busy = false
+                    guard currentGeneration == self.generation, let editor = self.editor,
+                          editor.textView.selectedRange.location == caret else { return }
+                    guard let help = help, let signature = help["text"] as? String, !signature.isEmpty else {
+                        self.hide()
+                        return
+                    }
+                    var active: NSRange? = nil
+                    if let start = (help["activeStart"] as? NSNumber)?.intValue,
+                       let length = (help["activeLength"] as? NSNumber)?.intValue, length > 0 {
+                        active = NSRange(location: start, length: length)
+                    }
+                    let doc = (help["doc"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let overloads = (help["count"] as? NSNumber)?.intValue ?? 1
+                    self.show(text: signature, active: active, doc: doc, overloads: overloads)
+                }
+            }
+        }
+    }
+    
+    private func show(text: String, active: NSRange?, doc: String?, overloads: Int) {
+        guard let editor = editor, let end = editor.textView.selectedTextRange?.end else { return }
+        if bubble.superview == nil {
+            editor.view.addSubview(bubble)
+        }
+        bubble.configure(text: text, activeRange: active, doc: doc, overloads: overloads)
+        
+        let bounds = editor.view.bounds
+        let width = min(560, bounds.width - 16)
+        let size = bubble.systemLayoutSizeFitting(
+            CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel
+        )
+        let caretRect = editor.textView.convert(editor.textView.caretRect(for: end), to: editor.view)
+        let x = min(max(8, caretRect.minX - 40), bounds.width - width - 8)
+        /* above the caret line; the suggestion list uses the space below */
+        var y = caretRect.minY - size.height - 6
+        if y < editor.view.safeAreaInsets.top + 4 {
+            y = caretRect.maxY + 6
+        }
+        bubble.frame = CGRect(x: x, y: y, width: width, height: size.height)
+        bubble.isHidden = false
+        anchorLine = currentLine(in: editor)
+        editor.view.bringSubviewToFront(bubble)
+    }
+    
+    private func currentLine(in editor: CodeEditorViewController) -> Int {
+        let text = editor.textView.text as NSString
+        let caret = min(editor.textView.selectedRange.location, text.length)
+        return text.substring(to: caret).utf16.reduce(0) { $1 == 0x0A ? $0 + 1 : $0 }
+    }
+    
+    private static func lineAndUTF8Column(_ text: String, utf16Offset: Int) -> (line: Int, column: Int) {
+        let ns = text as NSString
+        let before = ns.substring(to: min(utf16Offset, ns.length))
+        var line = 1
+        var bytesSinceNewline = 0
+        for byte in before.utf8 {
+            if byte == 0x0A {
+                line += 1
+                bytesSinceNewline = 0
+            } else {
+                bytesSinceNewline += 1
+            }
+        }
+        return (line, bytesSinceNewline + 1)
+    }
+}
+
+extension CodeEditorViewController {
+    @objc func signatureHelpShow() {
+        self.signatureHelp?.request()
+    }
+    
+    @objc func signatureHelpDismiss() {
+        self.signatureHelp?.hide()
     }
 }

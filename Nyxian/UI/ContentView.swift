@@ -1029,7 +1029,8 @@ final class KeyboardShortcutsHUD {
         "Next Suggestion": "Sugerencia siguiente",
         "Format Document": "Formatear código",
         "Rename Symbol": "Renombrar símbolo",
-        "Show Signature": "Ver parámetros"
+        "Show Signature": "Ver parámetros",
+        "Dismiss Parameter Help": "Cerrar ayuda de parámetros"
     ]
     
     func start() {

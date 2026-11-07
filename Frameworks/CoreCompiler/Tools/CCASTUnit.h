@@ -23,8 +23,10 @@
  */
 
 /*
- * Fork doctoralvarez/Nyxian — version 1.2.0
+ * Fork doctoralvarez/Nyxian — version 1.3.0
  * Changelog:
+ *  - 1.3.0 (2026-11-07): CCASTUnitCopySignatureHelpAtLocation; completion
+ *    dictionaries carry "doc".
  *  - 1.2.0 (2026-11-07): CCCopyFormattedSource (clang-format).
  *  - 1.1.0 (2026-11-07): Swift units are completed too (phase 2).
  *  - 1.0.0 (2026-11-07): CCASTUnitCopyCompletionsAtLocation, code completion
@@ -79,6 +81,15 @@ CC_EXPORT CFArrayRef CCASTUnitCopyDiagnostics(CCASTUnitRef unit);
  * bytes.
  */
 CC_EXPORT CFArrayRef CCASTUnitCopyCompletionsAtLocation(CCASTUnitRef unit, CCSourceLocation location);
+
+/*
+ * fork doctoralvarez/Nyxian: parameter help for the call around `location`
+ * (Clang overloads or Swift signature help). Keys: "text" (CFString),
+ * "doc" (CFString, may be absent), "activeStart"/"activeLength" (CFNumber,
+ * UTF-16 range of the current argument in text, may be absent), "count"
+ * (CFNumber, number of overloads). NULL when there is no call.
+ */
+CC_EXPORT CFDictionaryRef CCASTUnitCopySignatureHelpAtLocation(CCASTUnitRef unit, CCSourceLocation location);
 
 /* fork doctoralvarez/Nyxian: clang-format a C/Objective-C/C++ source (language guessed from fileName); NULL on failure */
 CC_EXPORT CFStringRef CCCopyFormattedSource(CFStringRef source, CFStringRef fileName);
