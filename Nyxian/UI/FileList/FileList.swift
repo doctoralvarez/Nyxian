@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.0
+ Fork doctoralvarez/Nyxian — version 1.5.0
  Changelog:
+  - 1.5.0 (2026-11-07): debugger UI — breakpoints per project
+    (ForkBreakpoints), the session that attaches NXForkDebugger to every run
+    (ForkDebugSession), Pause / Continue next to the profiler and the stop
+    sheet with every thread's backtrace (ForkDebugControlView,
+    ForkStopViewController).
   - 1.4.0 (2026-11-07): ⋯ > Add Metal Helper writes MetalLibrary+App.swift
     (MTLDevice.makeAppLibrary(): Xcode's default library, or the .metal
     sources Nyxian bundles, compiled on the device). Profiler pill over the console (CPU, memory,
@@ -371,6 +376,7 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
                                 /* fork: print() output goes to the Console window */
                                 let pid = PEProcessManager.shared().spawnProcess(withBundleIdentifier: project.projectConfig.bundleid, withItems: ForkPhoneConsole.shared.itemsForNewRun(name: project.projectConfig.displayName ?? "App"), withKernelSurfaceProcess: nil, doRestartIfRunning: true)
                                 ForkPhoneConsole.shared.attach(processIdentifier: pid)
+                                ForkDebugSession.shared.start(processIdentifier: pid, project: project)
                             } else if project.projectConfig.schemeKind == .utility, let execPath = execPath {
                                 let terminalSession: NXWindowSessionTerminal = NXWindowSessionTerminal(utilityPath: execPath)
                                 NXWindowServer.shared().openWindow(with: terminalSession, withCompletion: nil)
@@ -2091,6 +2097,7 @@ final class ForkPhoneConsole: NSObject, PEProcessObserver {
     }
     
     func process(_ process: PEProcess!, didExitWithWait4Code code: Int32) {
+        ForkDebugSession.shared.processExited(process)
         DispatchQueue.main.async {
             let signal = code & 0x7F
             if signal == 0 {
@@ -2135,8 +2142,13 @@ final class ForkConsoleSession: NXWindowSession {
             console.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
         /* fork: CPU / memory of the app this console belongs to */
-        let profiler = ForkProfilerView { ForkPhoneConsole.shared.process }
-        profiler.attach(to: view)
+        let bar = ForkRuntimeBar { ForkPhoneConsole.shared.process }
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(bar)
+        NSLayoutConstraint.activate([
+            bar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            bar.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -10)
+        ])
         return true
     }
     
@@ -2967,5 +2979,305 @@ extension FileListViewController {
         }
         performRefresh()
         forkGitHubAlert("Metal Helper", "Added MetalLibrary+App.swift and Shaders.metal. Load your shaders with:\n\nlet library = try device.makeAppLibrary()\n\nNyxian puts every .metal file of the project into the app and compiles them on the device; Xcode builds still use the compiled library.")
+    }
+}
+
+// MARK: - Fork: debugger (breakpoints, session, controls)
+
+/// Line breakpoints per project, by project-relative path. Kept in UserDefaults.
+enum ForkBreakpoints {
+    static let changed = Notification.Name("ForkBreakpointsChanged")
+    
+    private static func key(_ project: NXProject) -> String {
+        let root: URL = project.url
+        return "fork.breakpoints." + root.lastPathComponent
+    }
+    
+    private static func load(_ project: NXProject) -> [String: [Int]] {
+        UserDefaults.standard.dictionary(forKey: key(project)) as? [String: [Int]] ?? [:]
+    }
+    
+    static func lines(project: NXProject, url: URL) -> [Int] {
+        let root: URL = project.url
+        return (load(project)[ProjectFileIndex.relativePath(url, root: root)] ?? []).sorted()
+    }
+    
+    static func toggle(project: NXProject, url: URL, line: Int) {
+        let root: URL = project.url
+        let relative = ProjectFileIndex.relativePath(url, root: root)
+        var all = load(project)
+        var lines = Set(all[relative] ?? [])
+        if lines.contains(line) { lines.remove(line) } else { lines.insert(line) }
+        all[relative] = lines.isEmpty ? nil : Array(lines).sorted()
+        UserDefaults.standard.set(all, forKey: key(project))
+        NotificationCenter.default.post(name: changed, object: project)
+    }
+    
+    static func removeAll(project: NXProject) {
+        UserDefaults.standard.removeObject(forKey: key(project))
+        NotificationCenter.default.post(name: changed, object: project)
+    }
+    
+    /// For NXForkDebugger: absolute paths and lines.
+    static func all(project: NXProject) -> [[String: Any]] {
+        let root: URL = project.url
+        return load(project).sorted { $0.key < $1.key }.flatMap { relative, lines in
+            lines.map { ["path": root.appendingPathComponent(relative).path, "line": $0] }
+        }
+    }
+}
+
+/// Attaches the debugger to each app Nyxian runs and relays its stops to the UI.
+final class ForkDebugSession {
+    static let shared = ForkDebugSession()
+    static let stateChanged = Notification.Name("ForkDebuggerStateChanged")
+    static let stopped = Notification.Name("ForkDebuggerStopped")
+    
+    private(set) var project: NXProject?
+    private(set) var lastStop: [String: Any]?
+    private(set) var stopNumber = 0
+    private weak var process: PEProcess?
+    private var observer: NSObjectProtocol?
+    
+    /// Customization > "Debugger" (on by default)
+    var isEnabled: Bool { UserDefaults.standard.object(forKey: "fork.debugger") as? Bool ?? true }
+    var debugger: NXForkDebugger { NXForkDebugger.shared() }
+    
+    private init() {
+        debugger.stopHandler = { [weak self] stop in
+            guard let self else { return }
+            self.stopNumber += 1
+            self.lastStop = stop
+            if UIDevice.current.userInterfaceIdiom != .pad {
+                ForkPhoneConsole.shared.show()
+            } else if let threads = stop["threads"] as? [[String: Any]],
+                      let index = stop["thread"] as? Int, index < threads.count,
+                      let frames = threads[index]["frames"] as? [[String: Any]],
+                      let top = frames.first(where: { $0["file"] != nil }),
+                      let file = top["file"] as? String, let line = top["line"] as? Int,
+                      FileManager.default.fileExists(atPath: file) {
+                /* iPad: show the line in the editor */
+                NotificationCenter.default.post(name: Notification.Name("FileListAct"), object: ["open", file, "\(line)", "1", "0"])
+            }
+            NotificationCenter.default.post(name: ForkDebugSession.stopped, object: nil)
+        }
+        debugger.stateHandler = { [weak self] in
+            guard let self else { return }
+            if !self.debugger.stopped { self.lastStop = nil }
+            NotificationCenter.default.post(name: ForkDebugSession.stateChanged, object: nil)
+        }
+        observer = NotificationCenter.default.addObserver(forName: ForkBreakpoints.changed, object: nil, queue: .main) { [weak self] note in
+            guard let self, let project = self.project, let changed = note.object as? NXProject,
+                  (changed.url as URL).path == (project.url as URL).path else { return }
+            self.debugger.setBreakpoints(ForkBreakpoints.all(project: project))
+        }
+    }
+    
+    /// Called right after a run spawned the app.
+    func start(processIdentifier pid: pid_t, project: NXProject) {
+        guard isEnabled, pid > 0 else { return }
+        self.project = project
+        self.lastStop = nil
+        let executable = (project.machoURL as URL).path
+        let objects = (project.cacheURL as URL).path
+        let breakpoints = ForkBreakpoints.all(project: project)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            self.debugger.setBreakpoints(breakpoints)
+            /* the task port reaches Nyxian a moment after the spawn */
+            for _ in 0..<50 {
+                if let process = PEProcessManager.shared().process(forProcessIdentifier: pid) {
+                    self.process = process
+                    if self.debugger.attach(to: process, executablePath: executable, objectRoot: objects) { return }
+                }
+                usleep(100_000)
+            }
+        }
+    }
+    
+    func processExited(_ process: PEProcess?) {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            if process == nil || process === self.process {
+                self.debugger.detach()
+            }
+        }
+    }
+}
+
+/// Pause / Continue and the current state, left of the profiler pill.
+final class ForkDebugControlView: UIView {
+    private let button = UIButton(type: .system)
+    private let label = UILabel()
+    private var presentedStop = 0
+    private var observers: [NSObjectProtocol] = []
+    
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.92)
+        layer.cornerRadius = 11
+        layer.cornerCurve = .continuous
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = .secondaryLabel
+        label.lineBreakMode = .byTruncatingMiddle
+        button.addAction(UIAction { [weak self] _ in self?.tapped() }, for: .touchUpInside)
+        let details = UIButton(type: .system)
+        details.setImage(UIImage(systemName: "list.bullet.rectangle", withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .semibold)), for: .normal)
+        details.addAction(UIAction { [weak self] _ in self?.showStop(force: true) }, for: .touchUpInside)
+        let stack = UIStackView(arrangedSubviews: [button, label, details])
+        stack.spacing = 6
+        stack.alignment = .center
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 2),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            label.widthAnchor.constraint(lessThanOrEqualToConstant: 220)
+        ])
+        for name in [ForkDebugSession.stateChanged, ForkDebugSession.stopped] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                self?.refresh()
+                if note.name == ForkDebugSession.stopped { self?.showStop(force: false) }
+            })
+        }
+        refresh()
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    deinit { observers.forEach { NotificationCenter.default.removeObserver($0) } }
+    
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        refresh()
+        /* a stop that happened while this window was being opened */
+        if window != nil, ForkDebugSession.shared.lastStop != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.showStop(force: false) }
+        }
+    }
+    
+    private func refresh() {
+        let debugger = NXForkDebugger.shared()
+        isHidden = !debugger.attached
+        let symbol = debugger.stopped ? "play.fill" : "pause.fill"
+        button.setImage(UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .bold)), for: .normal)
+        button.tintColor = debugger.stopped ? .systemGreen : .label
+        label.text = debugger.stopped ? (ForkDebugSession.shared.lastStop?["message"] as? String ?? "Stopped") : debugger.status
+        label.textColor = debugger.stopped ? .systemOrange : .secondaryLabel
+    }
+    
+    private func tapped() {
+        let debugger = NXForkDebugger.shared()
+        if debugger.stopped {
+            debugger.resume()
+        } else {
+            DispatchQueue.global(qos: .userInitiated).async { _ = debugger.pause() }
+        }
+    }
+    
+    private func showStop(force: Bool) {
+        let session = ForkDebugSession.shared
+        guard window != nil, let stop = session.lastStop else { return }
+        guard force || presentedStop != session.stopNumber else { return }
+        guard let presenter = sequence(first: self as UIResponder, next: { $0.next }).first(where: { $0 is UIViewController }) as? UIViewController,
+              presenter.presentedViewController == nil else { return }
+        presentedStop = session.stopNumber
+        let navigation = UINavigationController(rootViewController: ForkStopViewController(stop: stop, project: session.project))
+        navigation.modalPresentationStyle = .pageSheet
+        navigation.sheetPresentationController?.detents = [.medium(), .large()]
+        navigation.sheetPresentationController?.prefersGrabberVisible = true
+        presenter.present(navigation, animated: true)
+    }
+}
+
+/// Debugger controls + profiler, side by side.
+final class ForkRuntimeBar: UIStackView {
+    init(provider: @escaping () -> PEProcess?) {
+        super.init(frame: .zero)
+        axis = .horizontal
+        spacing = 8
+        alignment = .center
+        addArrangedSubview(ForkDebugControlView())
+        addArrangedSubview(ForkProfilerView(provider: provider))
+    }
+    
+    required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+/// Where the app stopped: every thread with its frames; tap a frame with source to open it.
+final class ForkStopViewController: UITableViewController {
+    private let stop: [String: Any]
+    private let project: NXProject?
+    private let threads: [(name: String, frames: [[String: Any]])]
+    
+    init(stop: [String: Any], project: NXProject?) {
+        self.stop = stop
+        self.project = project
+        var list: [(String, [[String: Any]])] = []
+        let raw = stop["threads"] as? [[String: Any]] ?? []
+        let stoppedIndex = stop["thread"] as? Int ?? 0
+        for (index, thread) in raw.enumerated() {
+            let entry = (thread["name"] as? String ?? "Thread", thread["frames"] as? [[String: Any]] ?? [])
+            if index == stoppedIndex { list.insert(entry, at: 0) } else { list.append(entry) }
+        }
+        self.threads = list.map { (name: $0.0, frames: $0.1) }
+        super.init(style: .insetGrouped)
+        let reason = stop["reason"] as? String ?? ""
+        title = reason == "breakpoint" ? "Breakpoint" : reason == "pause" ? "Paused" : "Stopped"
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "frame")
+        navigationItem.prompt = stop["message"] as? String
+        navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Continue", image: UIImage(systemName: "play.fill"), primaryAction: UIAction { [weak self] _ in
+            NXForkDebugger.shared().resume()
+            self?.dismiss(animated: true)
+        }, menu: nil)
+    }
+    
+    override func numberOfSections(in tableView: UITableView) -> Int { threads.count }
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        section == 0 && (stop["reason"] as? String) != "pause" ? threads[section].name + " — stopped here" : threads[section].name
+    }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { threads[section].frames.count }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "frame", for: indexPath)
+        let frame = threads[indexPath.section].frames[indexPath.row]
+        var content = cell.defaultContentConfiguration()
+        content.text = "\(indexPath.row)  " + (frame["symbol"] as? String ?? "?")
+        content.textProperties.font = .monospacedSystemFont(ofSize: 12, weight: frame["file"] != nil ? .semibold : .regular)
+        content.textProperties.color = frame["file"] != nil ? .label : .secondaryLabel
+        content.textProperties.numberOfLines = 2
+        if let file = frame["file"] as? String, let line = frame["line"] as? Int {
+            content.secondaryText = "\((file as NSString).lastPathComponent):\(line)"
+            content.secondaryTextProperties.color = .systemBlue
+            cell.accessoryType = .disclosureIndicator
+        } else {
+            content.secondaryText = nil
+            cell.accessoryType = .none
+        }
+        content.secondaryTextProperties.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        cell.contentConfiguration = content
+        return cell
+    }
+    
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        let frame = threads[indexPath.section].frames[indexPath.row]
+        guard let file = frame["file"] as? String, let line = frame["line"] as? Int, FileManager.default.fileExists(atPath: file) else { return }
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            dismiss(animated: true) {
+                NotificationCenter.default.post(name: Notification.Name("FileListAct"), object: ["open", file, "\(line)", "1", "0"])
+            }
+        } else if let editor = CodeEditorViewController(project: project, url: URL(fileURLWithPath: file), line: line, column: 1, isReadOnly: true) {
+            navigationController?.pushViewController(editor, animated: true)
+        }
     }
 }

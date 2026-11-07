@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.9.0
+ Fork doctoralvarez/Nyxian — version 1.10.0
  Changelog:
+  - 1.10.0 (2026-11-07): breakpoints — ⌘\\ (or the breakpoint button in the
+    editor toolbar) toggles one on the caret's line; lines with a breakpoint
+    are tinted blue, the line the debugger stopped at green. Previews are
+    debugged too.
   - 1.9.0 (2026-11-07): SwiftUI Preview (⌥⌘P, or the edit menu) — builds a
     copy of the project whose app shows only the chosen #Preview /
     PreviewProvider and runs it in its own window (ForkSwiftUIPreview).
@@ -324,6 +328,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         self.signatureHelp = SignatureHelpController(editor: self)
         /* fork: project-wide edits (rename) reach this tab through the registry */
         LiveEditorRegistry.register(self)
+        forkSetupBreakpoints()
         
         self.goto(location: self.location)
     }
@@ -551,6 +556,15 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         })
         items.append(fixBarButton)
         items.append(spawnSeparator())
+        
+        /* fork: breakpoint on the caret's line */
+        if self.project != nil {
+            let breakpointBarButton = UIBarButtonItem(customView: SymbolButton(symbolName: "smallcircle.filled.circle", width: 35.0) { [weak self] in
+                self?.forkToggleBreakpoint()
+            })
+            items.append(breakpointBarButton)
+            items.append(spawnSeparator())
+        }
         
         /* fork: functions and types of this file */
         let symbolsBarButton = UIBarButtonItem(customView: SymbolButton(symbolName: "list.bullet.indent", width: 35.0) { [weak self] in
@@ -785,6 +799,9 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             command("Go to Line", #selector(promptGoToLine), "l"),
             command("Document Symbols", #selector(showDocumentSymbols), "6", [.control])
         ]
+        if self.project != nil, !self.isReadOnly {
+            commands.append(command("Toggle Breakpoint", #selector(forkToggleBreakpoint), "\\"))
+        }
         /* fork: navigation by meaning */
         if self.languageServer != nil {
             commands.append(command("Jump to Definition", #selector(jumpToDefinition), "j", [.command, .control]))
@@ -3202,6 +3219,58 @@ extension CodeEditorViewController {
             guard result else { return }
             let pid = PEProcessManager.shared().spawnProcess(withBundleIdentifier: previewProject.projectConfig.bundleid, withItems: ForkPhoneConsole.shared.itemsForNewRun(name: name), withKernelSurfaceProcess: nil, doRestartIfRunning: true)
             ForkPhoneConsole.shared.attach(processIdentifier: pid)
+            ForkDebugSession.shared.start(processIdentifier: pid, project: previewProject)
         }
+    }
+}
+
+// MARK: - Fork: breakpoints in the editor
+
+extension CodeEditorViewController {
+    func forkSetupBreakpoints() {
+        guard self.project != nil else { return }
+        for name in [ForkBreakpoints.changed, ForkDebugSession.stopped, ForkDebugSession.stateChanged] {
+            NotificationCenter.default.addObserver(self, selector: #selector(forkRefreshBreakpointMarks), name: name, object: nil)
+        }
+        DispatchQueue.main.async { [weak self] in self?.forkRefreshBreakpointMarks() }
+    }
+    
+    @objc func forkToggleBreakpoint() {
+        guard let project = self.project, let url = self.file.fileURL else { return }
+        let text = self.textView.text as NSString
+        let caret = min(self.textView.selectedRange.location, text.length)
+        let line = text.substring(to: caret).reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+        ForkBreakpoints.toggle(project: project, url: url, line: line)
+    }
+    
+    /// Tints breakpoint lines blue and the line the debugger stopped at green.
+    @objc func forkRefreshBreakpointMarks() {
+        guard let project = self.project, let url = self.file.fileURL else { return }
+        let text = self.textView.text as NSString
+        var lineStarts: [Int] = [0]
+        for i in 0..<text.length where text.character(at: i) == 10 { lineStarts.append(i + 1) }
+        func range(of line: Int) -> NSRange? {
+            guard line >= 1, line <= lineStarts.count else { return nil }
+            let start = lineStarts[line - 1]
+            let end = line < lineStarts.count ? lineStarts[line] - 1 : text.length
+            return NSRange(location: start, length: max(0, end - start))
+        }
+        var ranges: [HighlightedRange] = []
+        for line in ForkBreakpoints.lines(project: project, url: url) {
+            if let r = range(of: line) {
+                ranges.append(HighlightedRange(id: "fork.bp.\(line)", range: r, color: UIColor.systemBlue.withAlphaComponent(0.22), cornerRadius: 3))
+            }
+        }
+        if let stop = ForkDebugSession.shared.lastStop,
+           let threads = stop["threads"] as? [[String: Any]],
+           let index = stop["thread"] as? Int, index < threads.count,
+           let frames = threads[index]["frames"] as? [[String: Any]],
+           let top = frames.first(where: { $0["file"] != nil }),
+           let file = top["file"] as? String, let line = top["line"] as? Int,
+           URL(fileURLWithPath: file).lastPathComponent == url.lastPathComponent,
+           let r = range(of: line) {
+            ranges.append(HighlightedRange(id: "fork.stop", range: r, color: UIColor.systemGreen.withAlphaComponent(0.3), cornerRadius: 3))
+        }
+        self.textView.highlightedRanges = ranges
     }
 }

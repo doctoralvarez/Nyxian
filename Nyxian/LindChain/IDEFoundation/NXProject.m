@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-07): Swift builds and live checking pass
+    -enable-cross-import-overlays (SpriteView, SceneView and the other
+    framework + SwiftUI overlays now resolve); line-table debug info for C,
+    Objective-C and Swift (debugger backtraces and line breakpoints).
   - 1.0.0 (2026-11-07): link fix for apps whose display name differs from the
     executable name (e.g. "ZCS Explorer" vs "ZCSExplorer", common in imported
     .swiftpm apps). The bundle folder is always <executable>.app, but the
@@ -140,6 +144,33 @@
         
         /* MARK: swift flags */
         _swiftFlags = [self.dictionary arrayForKey:@"NXSwiftFlags" allowedTypes:[NSSet setWithArray:@[[NSString class]]]];
+        
+        /*
+         * fork: cross-import overlays (SpriteView = SpriteKit + SwiftUI, SceneView,
+         * Map/MapKit + SwiftUI, …) are off by default in the Swift frontend; Xcode
+         * and Swift Playgrounds turn them on. Added here so existing projects get it.
+         */
+        if(_swiftFlags.count > 0 && ![_swiftFlags containsObject:@"-enable-cross-import-overlays"])
+        {
+            _swiftFlags = [_swiftFlags arrayByAddingObjectsFromArray:@[@"-Xfrontend", @"-enable-cross-import-overlays"]];
+        }
+        
+        /*
+         * fork: line tables (address <-> file:line) for the debugger's backtraces and
+         * line breakpoints. Passed to the frontend / cc1 directly, so the drivers do
+         * not add a dSYM job. Off for kernel extensions.
+         */
+        if(_schemeKind != NXProjectSchemeKindKSurfaceKext)
+        {
+            if(_swiftFlags.count > 0 && ![_swiftFlags containsObject:@"-gline-tables-only"] && ![_swiftFlags containsObject:@"-g"])
+            {
+                _swiftFlags = [_swiftFlags arrayByAddingObjectsFromArray:@[@"-Xfrontend", @"-gline-tables-only"]];
+            }
+            if(![_compilerFlags containsObject:@"-g"] && ![_compilerFlags containsObject:@"-debug-info-kind=line-tables-only"])
+            {
+                _compilerFlags = [_compilerFlags arrayByAddingObjectsFromArray:@[@"-Xclang", @"-debug-info-kind=line-tables-only", @"-Xclang", @"-dwarf-version=4"]];
+            }
+        }
     }
     return reloaded;
 }

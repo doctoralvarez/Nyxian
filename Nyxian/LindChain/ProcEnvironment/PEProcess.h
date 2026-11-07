@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-07): NXForkDebugger — attaches to a running app through
+    its task port: pause / continue, stop on Swift traps, line breakpoints
+    with the CPU's hardware breakpoint registers, backtraces of every thread
+    with file:line from the line tables.
   - 1.0.0 (2026-11-07): -forkResourceUsage (CPU %, memory footprint and
     thread count of the process, read through its task port) for the
     profiler in the console.
@@ -69,6 +73,35 @@
 /* fork: @{ @"cpu": percent (all threads, 100 = one core), @"memory": bytes (phys footprint), @"threads": count }, nil when the task is gone */
 - (NSDictionary<NSString*,NSNumber*>*)forkResourceUsage;
 - (void)removeObserver:(id<PEProcessObserver>)observer;
+
+@end
+
+/*
+ * fork doctoralvarez/Nyxian: a small debugger for apps run from Nyxian.
+ * Stop dictionaries (main queue): @"reason" (@"breakpoint", @"pause", @"trap"),
+ * @"message", @"thread" (index of the stopped thread), @"threads": @[ @{ @"name",
+ * @"frames": @[ @{ @"address", @"symbol", @"file"?, @"line"?, @"image"? } ] } ].
+ */
+@interface NXForkDebugger : NSObject
+
++ (instancetype)shared;
+
+@property (nonatomic, copy) void (^stopHandler)(NSDictionary<NSString*,id> *stop);
+@property (nonatomic, copy) void (^stateHandler)(void);
+
+@property (atomic, readonly) BOOL attached;
+@property (atomic, readonly) BOOL stopped;
+/* @[ @{ @"path", @"line", @"resolvedLine"?, @"ok" } ] after the last -setBreakpoints: */
+@property (atomic, readonly, copy) NSArray<NSDictionary<NSString*,id>*> *resolvedBreakpoints;
+@property (atomic, readonly, copy) NSString *status;
+
+/* executablePath: the linked app binary; objectRoot: folder with the build's .o files */
+- (BOOL)attachToProcess:(PEProcess*)process executablePath:(NSString*)executablePath objectRoot:(NSString*)objectRoot;
+/* @[ @{ @"path": absolute source path, @"line": 1-based } ], at most 6 are armed */
+- (void)setBreakpoints:(NSArray<NSDictionary<NSString*,id>*>*)breakpoints;
+- (BOOL)pause;
+- (void)resume;
+- (void)detach;
 
 @end
 

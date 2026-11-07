@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-07): "Debugger (pause, breakpoints)" toggle.
   - 1.1.0 (2026-11-07): toggles for "Code Completion" and
     "Shortcut List (hold ⌘)".
   - 1.0.0 (2026-11-07): editor font size defaults to 20 (was 12); the
@@ -90,7 +91,7 @@ class CustomizationViewController: NXUITableViewController {
         case 0:
             return 2
         case 1:
-            return 10
+            return 11
         case 2:
             return self.icons.count
         default:
@@ -165,10 +166,14 @@ int main(void)
                 /* fork: suggestions while typing */
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
                 (cell as! ToggleTableCell).configure(title: "Code Completion", key: "LDECodeCompletion", defaultValue: true)
-            } else {
+            } else if indexPath.row == 9 {
                 /* fork: hold ⌘ for the shortcut list */
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
                 (cell as! ToggleTableCell).configure(title: "Shortcut List (hold ⌘)", key: "fork.shortcutHUD", defaultValue: true)
+            } else {
+                /* fork: attach the debugger to every run */
+                cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
+                (cell as! ToggleTableCell).configure(title: "Debugger (pause, breakpoints)", key: "fork.debugger", defaultValue: true)
             }
         } else {
             cell = UITableViewCell(style: .default, reuseIdentifier: nil)

@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-07): the debugger attaches to every run (Pause /
+    Continue next to the profiler, ⌃⌘Y); ⌘\\ toggles a breakpoint (editor).
   - 1.3.0 (2026-11-07): the export button opens the export assistant;
     profiler pill (CPU, memory, threads) over the console while the app runs.
   - 1.2.0 (2026-11-07): ⌃⇥ switches to the previously used tab (press again
@@ -250,7 +252,21 @@ class MainSplitViewController: UISplitViewController, UISplitViewControllerDeleg
         previousFileCommand.wantsPriorityOverSystemBehavior = true
         oldestFileCommand.wantsPriorityOverSystemBehavior = true
         
-        return [closeCommand, runCommand, buildCommand, issuesCommand, searchCommand, quickOpenCommand, previousFileCommand, oldestFileCommand]
+        /* fork: debugger */
+        let pauseCommand = UIKeyCommand(title: "Pause or Continue", action: #selector(self.debugPauseOrContinue), input: "y", modifierFlags: [.command, .control])
+        pauseCommand.wantsPriorityOverSystemBehavior = true
+        
+        return [closeCommand, runCommand, buildCommand, issuesCommand, searchCommand, quickOpenCommand, previousFileCommand, oldestFileCommand, pauseCommand]
+    }
+    
+    @objc func debugPauseOrContinue() {
+        let debugger = NXForkDebugger.shared()
+        guard debugger.attached else { return }
+        if debugger.stopped {
+            debugger.resume()
+        } else {
+            DispatchQueue.global(qos: .userInitiated).async { _ = debugger.pause() }
+        }
     }
     
     @objc func showPreviousFile() {
@@ -356,6 +372,8 @@ class MainSplitViewController: UISplitViewController, UISplitViewControllerDeleg
                            let process: PEProcess = PEProcessManager.shared().process(forProcessIdentifier: processIdentifier) {
                             process.add(detailVC)
                             detailVC.process = process
+                            /* fork: debugger */
+                            ForkDebugSession.shared.start(processIdentifier: processIdentifier, project: project)
                         } else {
                             if let logView = detailVC.logView {
                                 logView.writeMessage(toConsole: "failed to spawn process")
@@ -699,7 +717,7 @@ class SplitScreenDetailViewController: UIViewController, PEProcessObserver {
         self.view.addSubview(self.resizeHandle)
         
         /* fork: live CPU / memory of the running app, over the console */
-        let profiler = ForkProfilerView { [weak self] in self?.process }
+        let profiler = ForkRuntimeBar { [weak self] in self?.process }
         profiler.translatesAutoresizingMaskIntoConstraints = false
         self.view.addSubview(profiler)
         NSLayoutConstraint.activate([
@@ -868,6 +886,7 @@ class SplitScreenDetailViewController: UIViewController, PEProcessObserver {
     }
     
     func process(_ process: PEProcess!, didExitWithWait4Code code: Int32) {
+        ForkDebugSession.shared.processExited(process)
         DispatchQueue.main.sync {
             if let logView = self.logView {
                 let signalBits = code & 0x7F

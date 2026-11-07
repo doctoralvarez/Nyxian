@@ -1907,7 +1907,9 @@ final class KeyboardShortcutsHUD {
         "Review Changes": "Revisar cambios",
         "Jump to Definition": "Ir a definición",
         "Find References": "Buscar referencias",
-        "Run Preview": "Ejecutar preview"
+        "Run Preview": "Ejecutar preview",
+        "Toggle Breakpoint": "Poner/quitar breakpoint",
+        "Pause or Continue": "Pausar o continuar"
     ]
     
     func start() {

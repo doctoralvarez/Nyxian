@@ -4,6 +4,26 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.17.0 — 2026-11-07
+
+- **Debugger** (attached to every Run and Preview; Customization > Debugger):
+  - **Pause / Continue** (button left of the profiler pill, or ⌃⌘Y): every
+    thread with its backtrace — app frames with function names (Swift
+    demangled) and file:line; tap a frame to open it.
+  - **Breakpoints**: ⌘\ or the breakpoint button in the editor toolbar
+    toggles one on the caret's line (tinted blue). Up to 6 at a time — they use
+    the CPU's hardware breakpoint registers (iOS does not allow patching app
+    code). When one is hit the app stops, the line turns green and the stop
+    sheet opens; Continue goes on.
+  - Swift runtime errors (traps) stop in the debugger too; Continue then lets
+    the app crash as before.
+  - Variables are not shown (that needs a full LLDB).
+- Builds now carry line tables (`-gline-tables-only`), so the first build of
+  each project recompiles everything once.
+- **Cross-import overlays on**: `SpriteView`, `SceneView` and the other
+  framework + SwiftUI overlays are found (Swift flag
+  `-enable-cross-import-overlays`, added to every project).
+
 ## 1.16.0 — 2026-11-07
 
 - **Git**: ⋯ > GitHub > **Branches…** (list, create from the current state,
