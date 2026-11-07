@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.17.2 — 2026-11-07
+
+- `Package.swift` (and `Package@swift-*.swift`, `.swiftpm/`, `.build/`) inside
+  a project is no longer compiled as app code. It only describes a Swift
+  package and imports `PackageDescription`, which apps do not have ("no such
+  module 'PackageDescription'"). The file stays in the project, so exporting
+  or pushing it keeps working.
+
 ## 1.17.1 — 2026-11-07
 
 - Build fix for 1.17.0 (debugger nullability).
