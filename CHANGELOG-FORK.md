@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.2.0 — 2026-11-07
+
+### File list (project editor)
+- Selection mode (⋯ > Select) gets a "Select All" button right after Delete.
+  It turns into "Deselect All" once every file is selected, and back again.
+  Delete, Copy and Share then act on whatever is selected.
+- Checkmarks no longer disappear from selected rows while scrolling.
+- File: `Nyxian/UI/FileList/FileList.swift`.
+
 ## 1.1.0 — 2026-11-07
 
 ### Boot

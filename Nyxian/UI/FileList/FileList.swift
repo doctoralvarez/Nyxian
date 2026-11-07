@@ -20,6 +20,14 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): "Select All" / "Deselect All" button in the
+    selection toolbar (next to Delete); checkmarks now survive cell reuse
+    while scrolling in selection mode.
+*/
+
 import UIKit
 import UniformTypeIdentifiers
 
@@ -31,6 +39,8 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
     let isReadOnly: Bool
     var isSelecting: Bool = false
     var selectedPaths: Set<String> = []
+    /* fork: toolbar button that toggles between "Select All" and "Deselect All" */
+    private var selectAllButton: UIBarButtonItem?
     
     var observation: NSKeyValueObservation?
 
@@ -161,9 +171,12 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             deleteButton.tintColor = .systemRed
             let copyButton = UIBarButtonItem(title: "Copy", style: .plain, target: self, action: #selector(copySelected))
             let shareButton = UIBarButtonItem(title: "Share", style: .plain, target: self, action: #selector(shareSelected))
+            let selectAllButton = UIBarButtonItem(title: "Select All", style: .plain, target: self, action: #selector(toggleSelectAll))
+            self.selectAllButton = selectAllButton
+            self.updateSelectAllButton()
             let spacer = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
             
-            setToolbarItems([deleteButton, spacer, copyButton, spacer, shareButton], animated: true)
+            setToolbarItems([deleteButton, spacer, selectAllButton, spacer, copyButton, spacer, shareButton], animated: true)
             navigationController?.setToolbarHidden(false, animated: true)
             tabBarController?.tabBar.isHidden = true
             
@@ -171,6 +184,7 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             navigationItem.setLeftBarButton(doneButton, animated: true)
             self.refreshControl = nil
         } else {
+            self.selectAllButton = nil
             setToolbarItems(nil, animated: true)
             navigationController?.setToolbarHidden(true, animated: true)
             tabBarController?.tabBar.isHidden = false
@@ -192,6 +206,37 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
         }
     }
 
+    // MARK: - Fork: select all / deselect all
+    
+    private var allEntriesSelected: Bool {
+        !entries.isEmpty && entries.allSatisfy { selectedPaths.contains($0.path) }
+    }
+    
+    private func updateSelectAllButton() {
+        selectAllButton?.title = allEntriesSelected ? "Deselect All" : "Select All"
+        selectAllButton?.isEnabled = !entries.isEmpty
+    }
+    
+    @objc func toggleSelectAll() {
+        guard isSelecting else { return }
+        
+        let selectEverything = !allEntriesSelected
+        for (row, entry) in entries.enumerated() {
+            let indexPath = IndexPath(row: row, section: 0)
+            if selectEverything {
+                selectedPaths.insert(entry.path)
+                tableView.selectRow(at: indexPath, animated: false, scrollPosition: .none)
+                tableView.cellForRow(at: indexPath)?.accessoryType = .checkmark
+            } else {
+                selectedPaths.remove(entry.path)
+                tableView.deselectRow(at: indexPath, animated: false)
+                tableView.cellForRow(at: indexPath)?.accessoryType = (entry.type == .dir) ? .disclosureIndicator : .none
+            }
+        }
+        
+        updateSelectAllButton()
+    }
+    
     @objc func deleteSelected() {
         guard !selectedPaths.isEmpty else { return }
 
@@ -521,6 +566,7 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
         if isSelecting {
             selectedPaths.insert(entries[indexPath.row].path)
             tableView.cellForRow(at: indexPath)?.accessoryType = .checkmark
+            updateSelectAllButton()
             return
         }
         
@@ -569,6 +615,7 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             selectedPaths.remove(entries[indexPath.row].path)
             
             tableView.cellForRow(at: indexPath)?.accessoryType = (entries[indexPath.row].type == .dir) ? .disclosureIndicator : .none
+            updateSelectAllButton()
         }
     }
 
@@ -577,6 +624,11 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             
         let entry = entries[indexPath.row]
         cell.configure(with: entry)
+        
+        /* fork: reused cells must show the checkmark of a selected entry */
+        if isSelecting, selectedPaths.contains(entry.path) {
+            cell.accessoryType = .checkmark
+        }
             
         return cell
     }
