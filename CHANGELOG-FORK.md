@@ -4,6 +4,18 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.11.0 — 2026-11-07
+
+- **Export as Swift Playgrounds App (.swiftpm)**: long-press a project, or
+  swipe it right > Export. Writes `Package.swift` (`.iOSApplication`, target
+  `AppModule`, path `.`), copies the Swift files with their folders, turns loose
+  images (`name.png`, `name@2x.png`…) into `Assets.xcassets` image sets, puts
+  other resources in `Resources/` and saves the package with "Export to Files".
+  It warns about C/Objective-C files (left out), a missing SwiftUI `@main App`,
+  `Bundle.module`, and usage descriptions to re-add in App Settings.
+- **Swipe actions in the project list**: swipe left for **Delete** (asks
+  first), swipe right for **Export** (Nyxian `.zip` or `.swiftpm`).
+
 ## 1.10.0 — 2026-11-07
 
 - **GitHub sync** without a git binary (REST "Git Data" API):

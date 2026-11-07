@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-07): export a project as a Swift Playgrounds app (.swiftpm,
+    SwiftPlaygroundsExporter at the end of this file); swipe a project left to
+    delete it and right to export it (.zip or .swiftpm); the long-press menu
+    gains "Export as Swift Playgrounds App".
   - 1.3.0 (2026-11-07): the import button is now a menu: "Import File…" or
     "Clone from GitHub…" (a Nyxian project stays linked to the repository; a
     Swift Playgrounds package is converted). "GitHub Account…" is there too.
@@ -353,18 +357,83 @@ import GameController
         }
     }
     
+    /* fork: the project shown at a row */
+    private func forkProject(at indexPath: IndexPath) -> NXProject? {
+        let keys = sortedSectionKeys
+        guard indexPath.section < keys.count else { return nil }
+        let sectionProjects = self.projectsList[keys[indexPath.section]] ?? []
+        guard indexPath.row < sectionProjects.count else { return nil }
+        return sectionProjects[indexPath.row]
+    }
+    
+    /* fork: Nyxian's own export, a zipped project folder */
+    private func forkExportZip(_ project: NXProject) {
+        DispatchQueue.global().async {
+            let zipPath: String = "\(NSTemporaryDirectory())/\(project.projectConfig.displayName!).zip"
+            zipDirectoryAtPath(project.url.path, zipPath, true)
+            share(url: URL(fileURLWithPath: zipPath), remove: true)
+        }
+    }
+    
+    /* fork: swipe left to delete */
+    override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard let project = forkProject(at: indexPath) else { return nil }
+        let delete = UIContextualAction(style: .destructive, title: "Delete") { [weak self] _, _, completion in
+            guard let self = self else { completion(false); return }
+            self.presentConfirmationAlert(
+                title: "Warning",
+                message: "Are you sure you want to remove \"\(project.projectConfig.displayName!)\"?",
+                confirmTitle: "Remove",
+                confirmStyle: .destructive)
+            {
+                self.removeProject(project)
+            }
+            completion(false)
+        }
+        delete.image = UIImage(systemName: "trash.fill")
+        let configuration = UISwipeActionsConfiguration(actions: [delete])
+        configuration.performsFirstActionWithFullSwipe = false
+        return configuration
+    }
+    
+    /* fork: swipe right to export */
+    override func tableView(_ tableView: UITableView, leadingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard let project = forkProject(at: indexPath) else { return nil }
+        let export = UIContextualAction(style: .normal, title: "Export") { [weak self] _, sourceView, completion in
+            guard let self = self else { completion(false); return }
+            let sheet = UIAlertController(title: "Export \"\(project.projectConfig.displayName ?? "Project")\"", message: nil, preferredStyle: .actionSheet)
+            sheet.addAction(UIAlertAction(title: "Nyxian Project (.zip)", style: .default) { _ in
+                self.forkExportZip(project)
+            })
+            sheet.addAction(UIAlertAction(title: "Swift Playgrounds App (.swiftpm)", style: .default) { _ in
+                self.forkExportSwiftPlaygrounds(project)
+            })
+            sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            if let popover = sheet.popoverPresentationController {
+                popover.sourceView = tableView.cellForRow(at: indexPath) ?? sourceView
+                popover.sourceRect = popover.sourceView?.bounds ?? .zero
+            }
+            self.present(sheet, animated: true)
+            completion(true)
+        }
+        export.backgroundColor = .systemBlue
+        export.image = UIImage(systemName: "square.and.arrow.up.fill")
+        let configuration = UISwipeActionsConfiguration(actions: [export])
+        configuration.performsFirstActionWithFullSwipe = false
+        return configuration
+    }
+    
     override func tableView(_ tableView: UITableView, contextMenuConfigurationForRowAt indexPath: IndexPath, point: CGPoint) -> UIContextMenuConfiguration? {
         return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { suggestedActions in
             let export: UIAction = UIAction(title: "Export", image: UIImage(systemName: "square.and.arrow.up.fill")) { _ in
-                DispatchQueue.global().async {
-                    let key = self.sortedSectionKeys[indexPath.section]
-                    let sectionProjects = self.projectsList[key] ?? []
-                    let project: NXProject = sectionProjects[indexPath.row]
-                    
-                    let zipPath: String = "\(NSTemporaryDirectory())/\(project.projectConfig.displayName!).zip"
-                    zipDirectoryAtPath(project.url.path, zipPath, true)
-                    share(url: URL(fileURLWithPath: zipPath), remove: true)
-                }
+                guard let project = self.forkProject(at: indexPath) else { return }
+                self.forkExportZip(project)
+            }
+            
+            /* fork */
+            let exportSwiftPM: UIAction = UIAction(title: "Export as Swift Playgrounds App", image: UIImage(systemName: "swift")) { _ in
+                guard let project = self.forkProject(at: indexPath) else { return }
+                self.forkExportSwiftPlaygrounds(project)
             }
             
             let item: UIAction = UIAction(title: "Remove", image: UIImage(systemName: "trash.fill"), attributes: .destructive) { _ in
@@ -382,7 +451,7 @@ import GameController
                 }
             }
             
-            return UIMenu(children: [export, item])
+            return UIMenu(children: [export, exportSwiftPM, item])
         }
     }
     
@@ -989,6 +1058,303 @@ extension ContentViewController {
             alert.addAction(UIAlertAction(title: "OK", style: .default))
             self.present(alert, animated: true)
         } catch {
+            NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: error.localizedDescription, withDelay: 0.0)
+        }
+    }
+}
+
+// MARK: - Fork: export as a Swift Playgrounds app package (.swiftpm)
+
+/// Writes a Nyxian app project as a Swift Playgrounds app package (the reverse of SwiftPlaygroundsImporter).
+enum SwiftPlaygroundsExporter {
+    struct Result {
+        let packageURL: URL
+        let swiftFileCount: Int
+        let imageCount: Int
+        let resourceCount: Int
+        let warnings: [String]
+    }
+    
+    enum ExportError: LocalizedError {
+        case notAnApp
+        case noSwiftSources
+        
+        var errorDescription: String? {
+            switch self {
+            case .notAnApp: return "Only app projects can become Swift Playgrounds apps."
+            case .noSwiftSources: return "The project has no Swift files. Swift Playgrounds only compiles Swift."
+            }
+        }
+    }
+    
+    private static let cFamilyExtensions: Set<String> = ["c", "m", "mm", "cpp", "cc", "cxx", "h", "hpp", "hh", "s"]
+    private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "heic", "pdf"]
+    private static let ignoredNames: Set<String> = ["Config", ".git", ".build", ".swiftpm", "Package.swift", "Package.resolved"]
+    
+    static func export(_ project: NXProject, into folder: URL) throws -> Result {
+        guard project.projectConfig.schemeKind == .app else { throw ExportError.notAnApp }
+        let fm = FileManager.default
+        let root: URL = project.url
+        var warnings: [String] = []
+        
+        /* identity, from Config/Project.plist */
+        let config = project.projectConfig!
+        let displayName = config.displayName ?? config.executable ?? "App"
+        let rawPlist = (try? Data(contentsOf: root.appendingPathComponent("Config/Project.plist")))
+            .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] } ?? [:]
+        let bundleVersion = (rawPlist["NXBundleVersion"] as? String) ?? "1.0"
+        let displayVersion = (rawPlist["NXBundleShortVersion"] as? String) ?? bundleVersion
+        
+        var packageName = displayName.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        if packageName.isEmpty { packageName = "App" }
+        let package = folder.appendingPathComponent("\(packageName).swiftpm")
+        if fm.fileExists(atPath: package.path) { try fm.removeItem(at: package) }
+        try fm.createDirectory(at: package, withIntermediateDirectories: true)
+        
+        /* collect files */
+        var swiftCount = 0
+        var resourceCount = 0
+        var skippedCFamily = 0
+        var hasAppLifecycle = false
+        var images: [(source: URL, set: String, scale: String)] = []
+        
+        let keys: [URLResourceKey] = [.isDirectoryKey]
+        if let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) {
+            for case let url as URL in enumerator {
+                let relative = ProjectFileIndex.relativePath(url, root: root)
+                if ignoredNames.contains(url.lastPathComponent) && !relative.contains("/") {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                let isDirectory = (try? url.resourceValues(forKeys: Set(keys)).isDirectory) ?? false
+                if isDirectory {
+                    if url.pathExtension == "xcassets" {
+                        try copy(url, to: package.appendingPathComponent(url.lastPathComponent))
+                        enumerator.skipDescendants()
+                    }
+                    continue
+                }
+                
+                let ext = url.pathExtension.lowercased()
+                if ext == "swift" {
+                    try copy(url, to: package.appendingPathComponent(relative))
+                    swiftCount += 1
+                    if !hasAppLifecycle, let text = try? String(contentsOf: url, encoding: .utf8),
+                       text.range(of: #"@main[\s\S]{0,200}?:\s*App\b"#, options: .regularExpression) != nil {
+                        hasAppLifecycle = true
+                    }
+                } else if cFamilyExtensions.contains(ext) {
+                    skippedCFamily += 1
+                } else if imageExtensions.contains(ext) {
+                    /* loose images become an asset catalog, so Image("name") keeps working */
+                    var base = url.deletingPathExtension().lastPathComponent
+                    var scale = "1x"
+                    for candidate in ["@2x", "@3x"] where base.hasSuffix(candidate) {
+                        base = String(base.dropLast(candidate.count))
+                        scale = String(candidate.dropFirst())
+                    }
+                    images.append((url, base, scale))
+                } else {
+                    var resourceRelative = relative
+                    if resourceRelative.hasPrefix("Resources/") {
+                        resourceRelative = String(resourceRelative.dropFirst("Resources/".count))
+                    }
+                    try copy(url, to: package.appendingPathComponent("Resources").appendingPathComponent(resourceRelative))
+                    resourceCount += 1
+                }
+            }
+        }
+        
+        guard swiftCount > 0 else {
+            try? fm.removeItem(at: package)
+            throw ExportError.noSwiftSources
+        }
+        
+        /* asset catalog for the images */
+        var imageSetCount = 0
+        if !images.isEmpty {
+            let catalog = package.appendingPathComponent("Assets.xcassets")
+            try fm.createDirectory(at: catalog, withIntermediateDirectories: true)
+            let catalogInfo = catalog.appendingPathComponent("Contents.json")
+            if !fm.fileExists(atPath: catalogInfo.path) {
+                try json(["info": ["author": "xcode", "version": 1]]).write(to: catalogInfo)
+            }
+            let grouped = Dictionary(grouping: images, by: { $0.set })
+            for (setName, files) in grouped.sorted(by: { $0.key < $1.key }) {
+                let set = catalog.appendingPathComponent("\(setName).imageset")
+                guard !fm.fileExists(atPath: set.path) else {
+                    warnings.append("\(setName): an image set with that name already exists in Assets.xcassets, so the loose file was not added.")
+                    continue
+                }
+                try fm.createDirectory(at: set, withIntermediateDirectories: true)
+                var entries: [[String: Any]] = []
+                for file in files {
+                    let name = file.source.lastPathComponent
+                    try copy(file.source, to: set.appendingPathComponent(name))
+                    var entry: [String: Any] = ["idiom": "universal", "filename": name]
+                    if file.source.pathExtension.lowercased() != "pdf" { entry["scale"] = file.scale }
+                    entries.append(entry)
+                }
+                var contents: [String: Any] = ["images": entries, "info": ["author": "xcode", "version": 1]]
+                if files.contains(where: { $0.source.pathExtension.lowercased() == "pdf" }) {
+                    contents["properties"] = ["preserves-vector-representation": true]
+                }
+                try json(contents).write(to: set.appendingPathComponent("Contents.json"))
+                imageSetCount += 1
+            }
+        }
+        
+        /* manifest */
+        let hasResources = resourceCount > 0
+        try manifest(name: displayName,
+                     bundleIdentifier: config.bundleid ?? "com.example.\(packageName)",
+                     displayVersion: displayVersion,
+                     bundleVersion: bundleVersion,
+                     resources: hasResources)
+            .write(to: package.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+        
+        /* what Swift Playgrounds will not take as is */
+        if skippedCFamily > 0 {
+            warnings.append("\(skippedCFamily) C / Objective-C file(s) were left out: Swift Playgrounds only compiles Swift.")
+        }
+        if !hasAppLifecycle {
+            warnings.append("No SwiftUI \"@main struct …: App\" was found. Swift Playgrounds apps start from a SwiftUI App, so a UIKit app delegate needs a small SwiftUI wrapper.")
+        }
+        if hasResources {
+            warnings.append("\(resourceCount) non-image resource(s) are in Resources/. In a Swift package they are read with Bundle.module instead of Bundle.main.")
+        }
+        let info = project.projectConfig.infoDictionary ?? [:]
+        let usageKeys = info.keys.compactMap { $0 as? String }.filter { $0.hasSuffix("UsageDescription") }.sorted()
+        if !usageKeys.isEmpty {
+            warnings.append("Add these again in Swift Playgrounds > App Settings > Capabilities: " + usageKeys.joined(separator: ", ") + ".")
+        }
+        
+        return Result(packageURL: package, swiftFileCount: swiftCount, imageCount: imageSetCount, resourceCount: resourceCount, warnings: warnings)
+    }
+    
+    // MARK: helpers
+    
+    private static func copy(_ source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
+        try fm.copyItem(at: source, to: destination)
+    }
+    
+    private static func json(_ object: Any) throws -> Data {
+        try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+    }
+    
+    /// A Swift string literal.
+    private static func literal(_ value: String) -> String {
+        "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+    }
+    
+    private static func manifest(name: String, bundleIdentifier: String, displayVersion: String, bundleVersion: String, resources: Bool) -> String {
+        let resourcesLine = resources ? ",\n            resources: [\n                .process(\"Resources\")\n            ]" : ""
+        return """
+        // swift-tools-version: 5.9
+
+        // WARNING:
+        // This file is automatically generated.
+        // Do not edit it by hand because the contents will be replaced.
+
+        import PackageDescription
+        import AppleProductTypes
+
+        let package = Package(
+            name: \(literal(name)),
+            platforms: [
+                .iOS("17.0")
+            ],
+            products: [
+                .iOSApplication(
+                    name: \(literal(name)),
+                    targets: ["AppModule"],
+                    bundleIdentifier: \(literal(bundleIdentifier)),
+                    teamIdentifier: "",
+                    displayVersion: \(literal(displayVersion)),
+                    bundleVersion: \(literal(bundleVersion)),
+                    appIcon: .placeholder(icon: .gear),
+                    accentColor: .presetColor(.blue),
+                    supportedDeviceFamilies: [
+                        .pad,
+                        .phone
+                    ],
+                    supportedInterfaceOrientations: [
+                        .portrait,
+                        .landscapeRight,
+                        .landscapeLeft,
+                        .portraitUpsideDown(.when(deviceFamilies: [.pad]))
+                    ]
+                )
+            ],
+            targets: [
+                .executableTarget(
+                    name: "AppModule",
+                    path: "."\(resourcesLine)
+                )
+            ]
+        )
+
+        """
+    }
+}
+
+/// Saves the exported package with the system "Export to Files" sheet, then reports and cleans up.
+final class SwiftPlaygroundsExportDelegate: NSObject, UIDocumentPickerDelegate {
+    private static var current: SwiftPlaygroundsExportDelegate?
+    
+    private let temporaryFolder: URL
+    private let summary: String
+    private weak var presenter: UIViewController?
+    
+    init(temporaryFolder: URL, summary: String, presenter: UIViewController) {
+        self.temporaryFolder = temporaryFolder
+        self.summary = summary
+        self.presenter = presenter
+    }
+    
+    func present(_ packageURL: URL) {
+        Self.current = self
+        let picker = UIDocumentPickerViewController(forExporting: [packageURL], asCopy: true)
+        picker.delegate = self
+        presenter?.present(picker, animated: true)
+    }
+    
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        let presenter = self.presenter
+        let summary = self.summary
+        finish()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            presenter?.forkGitHubAlert("Exported", summary + "\n\nOpen it from Files with Swift Playgrounds.")
+        }
+    }
+    
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        finish()
+    }
+    
+    private func finish() {
+        try? FileManager.default.removeItem(at: temporaryFolder)
+        Self.current = nil
+    }
+}
+
+extension ContentViewController {
+    /// Builds the .swiftpm package in a temporary folder and offers to save it in Files.
+    func forkExportSwiftPlaygrounds(_ project: NXProject) {
+        let temp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("SwiftPMExport-\(UUID().uuidString)")
+        do {
+            try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+            let result = try SwiftPlaygroundsExporter.export(project, into: temp)
+            var summary = "\(result.swiftFileCount) Swift file\(result.swiftFileCount == 1 ? "" : "s"), \(result.imageCount) image\(result.imageCount == 1 ? "" : "s") in Assets.xcassets, \(result.resourceCount) other resource\(result.resourceCount == 1 ? "" : "s")."
+            if !result.warnings.isEmpty {
+                summary += "\n\n" + result.warnings.map { "• " + $0 }.joined(separator: "\n\n")
+            }
+            SwiftPlaygroundsExportDelegate(temporaryFolder: temp, summary: summary, presenter: self).present(result.packageURL)
+        } catch {
+            try? FileManager.default.removeItem(at: temp)
             NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: error.localizedDescription, withDelay: 0.0)
         }
     }
