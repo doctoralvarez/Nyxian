@@ -23,8 +23,10 @@
  */
 
 /*
- * Fork doctoralvarez/Nyxian — version 1.0.0
+ * Fork doctoralvarez/Nyxian — version 1.0.1
  * Changelog:
+ *  - 1.0.1 (2026-11-07): include FrontendActions.h (complete SyntaxOnlyAction
+ *    type for ASTUnit::CodeComplete's unique_ptr argument).
  *  - 1.0.0 (2026-11-07): CCASTUnitCopyCompletionsAtLocation, code completion
  *    for Clang units through ASTUnit::CodeComplete.
  */
@@ -45,6 +47,7 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <CoreCompiler/CCUtils.h>
 #include <clang/Sema/CodeCompleteConsumer.h>
+#include <clang/Frontend/FrontendActions.h>
 #include <clang/Basic/SourceManager.h>
 #include <clang/Basic/FileManager.h>
 

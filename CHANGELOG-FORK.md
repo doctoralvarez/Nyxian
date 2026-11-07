@@ -4,6 +4,10 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.4.1 — 2026-11-07
+
+- Build fix in `CCASTUnit.cpp`: include `clang/Frontend/FrontendActions.h`.
+
 ## 1.4.0 — 2026-11-07
 
 ### Code completion (improvement 9, phases 0 and 1)
