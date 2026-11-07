@@ -23,8 +23,10 @@
  */
 
 /*
- * Fork doctoralvarez/Nyxian — version 1.1.0
+ * Fork doctoralvarez/Nyxian — version 1.2.0
  * Changelog:
+ *  - 1.2.0 (2026-11-07): CCCopyFormattedSource, clang-format for C,
+ *    Objective-C and C++ (LLVM style, tab indentation, no line reflow).
  *  - 1.1.0 (2026-11-07): Swift code completion (phase 2) through
  *    swift::ide::IDEInspectionInstance, the engine SourceKit uses;
  *    CCASTUnitCopyCompletionsAtLocation now serves Swift units too.
@@ -51,6 +53,8 @@
 #include <CoreCompiler/CCUtils.h>
 #include <clang/Sema/CodeCompleteConsumer.h>
 #include <clang/Frontend/FrontendActions.h>
+#include <clang/Format/Format.h>
+#include <clang/Tooling/Core/Replacement.h>
 #include <swift/IDETool/IDEInspectionInstance.h>
 #include <swift/IDE/CancellableResult.h>
 #include <swift/IDE/CodeCompletionCache.h>
@@ -1643,4 +1647,57 @@ static CFArrayRef _CCASTUnitCopySwiftCompletions(CCASTUnitRef unit, CCSourceLoca
     }
     
     return array;
+}
+
+#pragma mark - fork: clang-format
+
+CFStringRef CCCopyFormattedSource(CFStringRef source, CFStringRef fileName)
+{
+    if(source == nullptr)
+    {
+        return nullptr;
+    }
+    
+    auto toUTF8 = [](CFStringRef string) -> std::string {
+        if(string == nullptr)
+        {
+            return std::string();
+        }
+        CFIndex length = CFStringGetLength(string);
+        CFIndex maxSize = CFStringGetMaximumSizeForEncoding(length, kCFStringEncodingUTF8) + 1;
+        std::string buffer((size_t)maxSize, '\0');
+        if(!CFStringGetCString(string, &buffer[0], maxSize, kCFStringEncodingUTF8))
+        {
+            return std::string();
+        }
+        buffer.resize(strlen(buffer.c_str()));
+        return buffer;
+    };
+    
+    std::string code = toUTF8(source);
+    std::string name = toUTF8(fileName);
+    if(name.empty())
+    {
+        name = "source.m";
+    }
+    
+    clang::format::FormatStyle::LanguageKind language = clang::format::guessLanguage(name, code);
+    clang::format::FormatStyle style = clang::format::getLLVMStyle(language);
+    /* match the editor: tabs of width 4, and never re-wrap the user's lines */
+    style.IndentWidth = 4;
+    style.TabWidth = 4;
+    style.UseTab = clang::format::FormatStyle::UT_ForIndentation;
+    style.ColumnLimit = 0;
+    
+    std::vector<clang::tooling::Range> ranges;
+    ranges.push_back(clang::tooling::Range(0, (unsigned)code.size()));
+    clang::tooling::Replacements replacements = clang::format::reformat(style, code, ranges, name);
+    llvm::Expected<std::string> formatted = clang::tooling::applyAllReplacements(code, replacements);
+    if(!formatted)
+    {
+        llvm::consumeError(formatted.takeError());
+        return nullptr;
+    }
+    
+    return CFStringCreateWithBytes(kCFAllocatorDefault, (const UInt8 *)formatted->data(), (CFIndex)formatted->size(), kCFStringEncodingUTF8, false);
 }

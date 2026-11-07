@@ -23,8 +23,9 @@
  */
 
 /*
- * Fork doctoralvarez/Nyxian — version 1.1.0
+ * Fork doctoralvarez/Nyxian — version 1.2.0
  * Changelog:
+ *  - 1.2.0 (2026-11-07): CCCopyFormattedSource (clang-format).
  *  - 1.1.0 (2026-11-07): Swift units are completed too (phase 2).
  *  - 1.0.0 (2026-11-07): CCASTUnitCopyCompletionsAtLocation, code completion
  *    for Clang units through ASTUnit::CodeComplete.
@@ -78,5 +79,8 @@ CC_EXPORT CFArrayRef CCASTUnitCopyDiagnostics(CCASTUnitRef unit);
  * bytes.
  */
 CC_EXPORT CFArrayRef CCASTUnitCopyCompletionsAtLocation(CCASTUnitRef unit, CCSourceLocation location);
+
+/* fork doctoralvarez/Nyxian: clang-format a C/Objective-C/C++ source (language guessed from fileName); NULL on failure */
+CC_EXPORT CFStringRef CCCopyFormattedSource(CFStringRef source, CFStringRef fileName);
 
 #endif /* CORECOMPILER_CCASTUNIT_T */

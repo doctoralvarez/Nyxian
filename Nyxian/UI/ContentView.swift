@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-07): the shortcut list honours its Customization toggle;
+    Spanish names for Format Document and Rename Symbol.
   - 1.1.0 (2026-11-07): holding ⌘ alone for 2 seconds shows the keyboard
     shortcuts of the current screen (KeyboardShortcutsHUD); editor font size
     defaults to 20 (ForkDefaults, one-time move from the old default 12).
@@ -1024,7 +1026,10 @@ final class KeyboardShortcutsHUD {
         "Accept Suggestion": "Aceptar sugerencia",
         "Dismiss Suggestions": "Cerrar sugerencias",
         "Previous Suggestion": "Sugerencia anterior",
-        "Next Suggestion": "Sugerencia siguiente"
+        "Next Suggestion": "Sugerencia siguiente",
+        "Format Document": "Formatear código",
+        "Rename Symbol": "Renombrar símbolo",
+        "Show Signature": "Ver parámetros"
     ]
     
     func start() {
@@ -1067,6 +1072,8 @@ final class KeyboardShortcutsHUD {
     
     private func scheduleShow() {
         pendingShow?.cancel()
+        /* Settings > Customization > "Shortcut List (hold ⌘)" */
+        guard booleanDefaults(key: "fork.shortcutHUD", defaultValue: true) else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self = self, self.commandDown else { return }
             self.show()

@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-07): ⌃I Format Document (clang-format for C/ObjC/C++,
+    brace re-indentation for Swift); ⌃⌘E Rename Symbol across the project
+    (open tabs edited in place and undoable, closed files written);
+    LiveEditorRegistry; completion can be turned off in Customization.
   - 1.3.0 (2026-11-07): phase 2 — Swift files ask the Swift compiler for
     completions (types, members after ".", argument labels); "font()" is
     inserted with the caret inside the parentheses. While the compiler is
@@ -295,6 +299,8 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         
         /* fork: code completion */
         self.completion = EditorCompletionController(editor: self)
+        /* fork: project-wide edits (rename) reach this tab through the registry */
+        LiveEditorRegistry.register(self)
         
         self.goto(location: self.location)
     }
@@ -749,8 +755,12 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
                 command("Shift Left", #selector(outdentLines), "["),
                 command("Duplicate Line", #selector(duplicateLines), "d"),
                 command("Move Line Up", #selector(moveLinesUp), UIKeyCommand.inputUpArrow, [.command, .alternate]),
-                command("Move Line Down", #selector(moveLinesDown), UIKeyCommand.inputDownArrow, [.command, .alternate])
+                command("Move Line Down", #selector(moveLinesDown), UIKeyCommand.inputDownArrow, [.command, .alternate]),
+                command("Rename Symbol", #selector(promptRenameSymbol), "e", [.command, .control])
             ])
+            if self.file.isClang || self.file.isSwift {
+                commands.append(command("Format Document", #selector(formatDocument), "i", [.control]))
+            }
             if self.lineCommentPrefix != nil {
                 commands.append(command("Toggle Comment", #selector(toggleComment), "/"))
             }
@@ -1230,7 +1240,7 @@ final class CompletionPopupView: UIView, UITableViewDataSource, UITableViewDeleg
 
 /// Decides what to suggest while typing and inserts the chosen suggestion.
 final class EditorCompletionController {
-    /// Off with `defaults write ... LDECodeCompletion -bool NO` (no UI toggle yet).
+    /// Settings > Customization > "Code Completion".
     static var isEnabled: Bool { booleanDefaults(key: "LDECodeCompletion", defaultValue: true) }
     
     private weak var editor: CodeEditorViewController?
@@ -1629,5 +1639,282 @@ extension CodeEditorViewController {
     
     @objc func completionDismiss() {
         self.completion?.hide()
+    }
+}
+
+// MARK: - Fork: live editor registry (so project-wide edits reach open tabs)
+
+enum LiveEditorRegistry {
+    private static let editors = NSHashTable<CodeEditorViewController>.weakObjects()
+    
+    static func register(_ editor: CodeEditorViewController) {
+        editors.add(editor)
+    }
+    
+    /// The open, writable editor showing `path`, if any.
+    static func editor(forPath path: String) -> CodeEditorViewController? {
+        let wanted = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        return editors.allObjects.first {
+            !$0.isReadOnly && $0.file.fileURL.resolvingSymlinksInPath().standardizedFileURL.path == wanted
+        }
+    }
+}
+
+// MARK: - Fork: format document and rename symbol
+
+/// Re-indents Swift code by brace depth (tabs), Xcode style: `case` lines align with their `switch`.
+enum SwiftReindenter {
+    static func reindent(_ text: String) -> String {
+        var depth = 0
+        var inBlockComment = false
+        var inMultilineString = false
+        var output: [String] = []
+        
+        for rawLine in text.components(separatedBy: "\n") {
+            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+            
+            /* multi-line string literals keep their exact text */
+            if inMultilineString {
+                output.append(rawLine)
+                if trimmed.components(separatedBy: "\"\"\"").count - 1 > 0 {
+                    inMultilineString = false
+                }
+                continue
+            }
+            if trimmed.isEmpty {
+                output.append("")
+                continue
+            }
+            
+            var lineDepth = depth
+            if !inBlockComment {
+                var leadingClosers = 0
+                for character in trimmed {
+                    if character == "}" || character == ")" || character == "]" { leadingClosers += 1 } else { break }
+                }
+                lineDepth = max(depth - leadingClosers, 0)
+                if trimmed.hasPrefix("case ") || trimmed.hasPrefix("default:") || trimmed.hasPrefix("@unknown default") {
+                    lineDepth = max(lineDepth - 1, 0)
+                }
+            }
+            
+            let commentPad = (inBlockComment && trimmed.hasPrefix("*")) ? " " : ""
+            output.append(String(repeating: "\t", count: lineDepth) + commentPad + trimmed)
+            
+            let scanned = scan(trimmed, depth: depth, inBlockComment: inBlockComment)
+            depth = scanned.depth
+            inBlockComment = scanned.inBlockComment
+            inMultilineString = scanned.opensMultilineString
+        }
+        return output.joined(separator: "\n")
+    }
+    
+    /// Follows brackets outside strings and comments.
+    private static func scan(_ line: String, depth startDepth: Int, inBlockComment startInComment: Bool) -> (depth: Int, inBlockComment: Bool, opensMultilineString: Bool) {
+        let characters = Array(line)
+        var depth = startDepth
+        var inBlockComment = startInComment
+        var inString = false
+        var index = 0
+        
+        while index < characters.count {
+            let character = characters[index]
+            let next: Character? = index + 1 < characters.count ? characters[index + 1] : nil
+            
+            if inBlockComment {
+                if character == "*" && next == "/" { inBlockComment = false; index += 2; continue }
+                index += 1
+                continue
+            }
+            if inString {
+                if character == "\\" { index += 2; continue }
+                if character == "\"" { inString = false }
+                index += 1
+                continue
+            }
+            if character == "/" && next == "/" { break }
+            if character == "/" && next == "*" { inBlockComment = true; index += 2; continue }
+            if character == "\"" {
+                /* a line that opens """ without closing it starts a multi-line string */
+                if index + 2 < characters.count && characters[index + 1] == "\"" && characters[index + 2] == "\"" {
+                    let rest = String(characters[(index + 3)...])
+                    if !rest.contains("\"\"\"") {
+                        return (max(depth, 0), inBlockComment, true)
+                    }
+                    if let range = rest.range(of: "\"\"\"") {
+                        index += 3 + rest.distance(from: rest.startIndex, to: range.upperBound)
+                        continue
+                    }
+                }
+                inString = true
+                index += 1
+                continue
+            }
+            switch character {
+            case "{", "(", "[": depth += 1
+            case "}", ")", "]": depth = max(depth - 1, 0)
+            default: break
+            }
+            index += 1
+        }
+        return (depth, inBlockComment, false)
+    }
+}
+
+extension CodeEditorViewController {
+    /// Replaces the whole text as one undoable edit, keeping the caret near where it was.
+    func replaceWholeText(_ newText: String) {
+        let oldText = self.textView.text
+        guard newText != oldText else { return }
+        let caret = self.textView.selectedRange.location
+        let oldLength = (oldText as NSString).length
+        self.replaceBypassingAutoindent(NSRange(location: 0, length: oldLength), with: newText)
+        let newLength = (newText as NSString).length
+        self.textView.selectedRange = NSRange(location: min(caret, newLength), length: 0)
+    }
+    
+    @objc func formatDocument() {
+        guard !self.isReadOnly else { return }
+        let original = self.textView.text
+        var formatted: String? = nil
+        if self.file.isClang {
+            formatted = MDKASTUnit.formattedSource(original, fileName: self.file.fileURL.lastPathComponent)
+        } else if self.file.isSwift {
+            formatted = SwiftReindenter.reindent(original)
+        }
+        guard let result = formatted else { return }
+        self.replaceWholeText(result)
+    }
+    
+    /// The identifier under (or right before) the caret.
+    private func identifierAtCaret() -> String? {
+        let text = self.textView.text as NSString
+        let selection = self.textView.selectedRange
+        if selection.length > 0 {
+            let selected = text.substring(with: selection)
+            return SymbolRenamer.isIdentifier(selected) ? selected : nil
+        }
+        func isIdentifierUnit(_ unit: unichar) -> Bool {
+            (unit >= 0x30 && unit <= 0x39) || (unit >= 0x41 && unit <= 0x5A) || (unit >= 0x61 && unit <= 0x7A) || unit == 0x5F
+        }
+        var start = min(selection.location, text.length)
+        var end = start
+        while start > 0, isIdentifierUnit(text.character(at: start - 1)) { start -= 1 }
+        while end < text.length, isIdentifierUnit(text.character(at: end)) { end += 1 }
+        guard end > start else { return nil }
+        let word = text.substring(with: NSRange(location: start, length: end - start))
+        return SymbolRenamer.isIdentifier(word) ? word : nil
+    }
+    
+    @objc func promptRenameSymbol() {
+        guard !self.isReadOnly else { return }
+        guard let symbol = identifierAtCaret() else {
+            let alert = UIAlertController(title: "Rename Symbol", message: "Place the cursor on a name first.", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            self.present(alert, animated: true)
+            return
+        }
+        
+        let alert = UIAlertController(title: "Rename \"\(symbol)\"", message: "Whole-word replacement in every project file.", preferredStyle: .alert)
+        alert.addTextField { field in
+            field.text = symbol
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+            field.clearButtonMode = .whileEditing
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Continue", style: .default) { [weak self, weak alert] _ in
+            guard let self = self,
+                  let newName = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespaces),
+                  newName != symbol else { return }
+            guard SymbolRenamer.isIdentifier(newName) else {
+                let invalid = UIAlertController(title: "Invalid Name", message: "\"\(newName)\" is not a valid identifier.", preferredStyle: .alert)
+                invalid.addAction(UIAlertAction(title: "OK", style: .default))
+                self.present(invalid, animated: true)
+                return
+            }
+            self.confirmRename(symbol, to: newName)
+        })
+        self.present(alert, animated: true)
+    }
+    
+    private func confirmRename(_ symbol: String, to newName: String) {
+        let plan = SymbolRenamer.plan(renaming: symbol, to: newName, in: self.project, currentEditor: self)
+        guard plan.occurrences > 0 else { return }
+        
+        let fileWord = plan.changes.count == 1 ? "file" : "files"
+        let alert = UIAlertController(
+            title: "Rename to \"\(newName)\"?",
+            message: "\(plan.occurrences) occurrence\(plan.occurrences == 1 ? "" : "s") in \(plan.changes.count) \(fileWord). Matches in comments and strings are renamed too. Open files can be undone with ⌘Z; closed files are written directly.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Rename", style: .destructive) { _ in
+            let failures = SymbolRenamer.apply(plan)
+            if !failures.isEmpty {
+                NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Could not write: \(failures.joined(separator: ", "))", withDelay: 0.0)
+            }
+        })
+        self.present(alert, animated: true)
+    }
+}
+
+/// Text-based, whole-word renaming across the project.
+enum SymbolRenamer {
+    struct Change {
+        let url: URL
+        let newText: String
+        let count: Int
+    }
+    
+    struct Plan {
+        let changes: [Change]
+        var occurrences: Int { changes.reduce(0) { $0 + $1.count } }
+    }
+    
+    static func isIdentifier(_ text: String) -> Bool {
+        text.range(of: "^[A-Za-z_][A-Za-z0-9_]*$", options: .regularExpression) != nil
+    }
+    
+    static func plan(renaming symbol: String, to newName: String, in project: NXProject?, currentEditor: CodeEditorViewController) -> Plan {
+        guard let regex = try? NSRegularExpression(pattern: "(?<![A-Za-z0-9_])" + NSRegularExpression.escapedPattern(for: symbol) + "(?![A-Za-z0-9_])") else {
+            return Plan(changes: [])
+        }
+        let template = NSRegularExpression.escapedTemplate(for: newName)
+        
+        var urls: [URL] = []
+        if let project = project {
+            let root: URL = project.url
+            urls = ProjectFileIndex.files(in: root)
+        }
+        let currentURL = currentEditor.file.fileURL
+        if !urls.contains(where: { $0.resolvingSymlinksInPath().path == currentURL.resolvingSymlinksInPath().path }) {
+            urls.append(currentURL)
+        }
+        
+        var changes: [Change] = []
+        for url in urls {
+            let live = LiveEditorRegistry.editor(forPath: url.path)
+            guard let text = live?.textView.text ?? (try? String(contentsOf: url, encoding: .utf8)) else { continue }
+            let range = NSRange(location: 0, length: (text as NSString).length)
+            let count = regex.numberOfMatches(in: text, range: range)
+            guard count > 0 else { continue }
+            let newText = regex.stringByReplacingMatches(in: text, range: range, withTemplate: template)
+            changes.append(Change(url: url, newText: newText, count: count))
+        }
+        return Plan(changes: changes)
+    }
+    
+    /// Applies the plan; returns the names of files that could not be written.
+    static func apply(_ plan: Plan) -> [String] {
+        var failures: [String] = []
+        for change in plan.changes {
+            if let editor = LiveEditorRegistry.editor(forPath: change.url.path) {
+                editor.replaceWholeText(change.newText)
+            } else if (try? change.newText.write(to: change.url, atomically: true, encoding: .utf8)) == nil {
+                failures.append(change.url.lastPathComponent)
+            }
+        }
+        return failures
     }
 }

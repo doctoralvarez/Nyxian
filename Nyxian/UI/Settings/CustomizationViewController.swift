@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-07): toggles for "Code Completion" and
+    "Shortcut List (hold ⌘)".
   - 1.0.0 (2026-11-07): editor font size defaults to 20 (was 12); the
     stepper now goes up to 32.
 */
@@ -88,7 +90,7 @@ class CustomizationViewController: NXUITableViewController {
         case 0:
             return 2
         case 1:
-            return 8
+            return 10
         case 2:
             return self.icons.count
         default:
@@ -156,9 +158,17 @@ int main(void)
                 (cell as! ToggleTableCell).configure(title: "Show Line Breaks", key: "LDEShowLineBreaks", defaultValue: true) { newValue in
                     self.themePreviewCell!.switchTheme(theme: LDEThemeReader.shared.currentlySelectedTheme())
                 }
-            } else {
+            } else if indexPath.row == 7 {
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
                 (cell as! ToggleTableCell).configure(title: "Autoindent", key: "LDEAutoindent", defaultValue: true)
+            } else if indexPath.row == 8 {
+                /* fork: suggestions while typing */
+                cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
+                (cell as! ToggleTableCell).configure(title: "Code Completion", key: "LDECodeCompletion", defaultValue: true)
+            } else {
+                /* fork: hold ⌘ for the shortcut list */
+                cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
+                (cell as! ToggleTableCell).configure(title: "Shortcut List (hold ⌘)", key: "fork.shortcutHUD", defaultValue: true)
             }
         } else {
             cell = UITableViewCell(style: .default, reuseIdentifier: nil)

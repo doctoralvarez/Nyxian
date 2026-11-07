@@ -23,8 +23,9 @@
  */
 
 /*
- * Fork doctoralvarez/Nyxian — version 1.0.0
+ * Fork doctoralvarez/Nyxian — version 1.1.0
  * Changelog:
+ *  - 1.1.0 (2026-11-07): +formattedSource:fileName: (clang-format).
  *  - 1.0.0 (2026-11-07): -completionsAtLocation: (Clang code completion).
  */
 
@@ -57,6 +58,12 @@
 - (MDKFileSourceLocation*)fileSourceLocationForDefinitionAtLocation:(MDKSourceLocation)location
 {
     return (__bridge_transfer MDKFileSourceLocation*)CCASTUnitCopyDefinitionAtLocation((__bridge void*)self, (CCSourceLocation){ location.isValid, location.line, location.column });
+}
+
++ (NSString*)formattedSource:(NSString*)source fileName:(NSString*)fileName
+{
+    CFStringRef formatted = CCCopyFormattedSource((__bridge CFStringRef)source, (__bridge CFStringRef)fileName);
+    return formatted != NULL ? (__bridge_transfer NSString*)formatted : nil;
 }
 
 - (NSArray<NSDictionary<NSString*,id>*>*)completionsAtLocation:(MDKSourceLocation)location

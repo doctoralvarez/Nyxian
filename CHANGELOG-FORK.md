@@ -4,6 +4,19 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.7.0 — 2026-11-07
+
+- **Format Document (⌃I)**: C, Objective-C and C++ with clang-format (LLVM style,
+  tab indentation, lines are never re-wrapped; `CCCopyFormattedSource`);
+  Swift with a brace-depth re-indenter (`case` aligned with `switch`,
+  multi-line strings left untouched). One undoable edit.
+- **Rename Symbol (⌃⌘E)**: whole-word rename across every project text file.
+  Shows how many occurrences in how many files before applying. Open tabs are
+  edited in place (undo with ⌘Z); closed files are written directly. Text
+  based: matches in comments and strings are renamed too.
+- **Customization toggles**: "Code Completion" and "Shortcut List (hold ⌘)".
+- Console tap-to-open stays iPad-only: the iPhone layout has no console pane.
+
 ## 1.6.0 — 2026-11-07
 
 - **Shortcut list**: hold **⌘ alone for 2 seconds** to see the keyboard
