@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.1.1
  Changelog:
+  - 1.1.1 (2026-11-07): fix build — project.url is an implicitly unwrapped
+    optional from Objective-C; store it as URL in search and quick open.
   - 1.1.0 (2026-11-07): "Search in Project" and "Open Quickly" (⋯ menu, and
     ⇧⌘F / ⇧⌘O on iPad); ProjectSearchViewController, QuickOpenViewController
     and ProjectFileIndex live at the end of this file.
@@ -876,7 +878,7 @@ final class ProjectSearchViewController: UITableViewController, UISearchBarDeleg
         statusText = "Searching…"
         tableView.reloadData()
         
-        let root = project.url
+        let root: URL = project.url
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var found: [FileMatches] = []
             var total = 0
@@ -1011,7 +1013,7 @@ final class QuickOpenViewController: UITableViewController, UISearchBarDelegate 
         tableView.keyboardDismissMode = .onDrag
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "file")
         
-        let root = project.url
+        let root: URL = project.url
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let entries = ProjectFileIndex.files(in: root).map {
                 Entry(url: $0, name: $0.lastPathComponent, relativePath: ProjectFileIndex.relativePath($0, root: root))
