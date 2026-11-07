@@ -22,6 +22,13 @@
  * SOFTWARE.
  */
 
+/*
+ * Fork doctoralvarez/Nyxian — version 1.0.0
+ * Changelog:
+ *  - 1.0.0 (2026-11-07): CCASTUnitCopyCompletionsAtLocation, code completion
+ *    for Clang units through ASTUnit::CodeComplete.
+ */
+
 #ifndef CORECOMPILER_CCASTUNIT_T
 #define CORECOMPILER_CCASTUNIT_T
 
@@ -55,5 +62,17 @@ CC_EXPORT Boolean CCASTUnitErrorOccured(CCASTUnitRef unit);
 CC_EXPORT CCFileSourceLocationRef CCASTUnitCopyDefinitionAtLocation(CCASTUnitRef unit, CCSourceLocation location);
 
 CC_EXPORT CFArrayRef CCASTUnitCopyDiagnostics(CCASTUnitRef unit);
+
+/*
+ * fork doctoralvarez/Nyxian: code completion (Clang units only).
+ *
+ * Returns an array of CFDictionaries, or NULL when the unit is not a parsed
+ * Clang unit. Keys: "text" (CFString, what is typed/inserted), "display"
+ * (CFString, the full signature), "type" (CFString, result type, may be
+ * absent), "kind" (CFNumber: 0 declaration, 1 keyword, 2 macro, 3 pattern),
+ * "priority" (CFNumber, lower is better). `location` is 1-based; the column
+ * counts UTF-8 bytes, like every Clang column.
+ */
+CC_EXPORT CFArrayRef CCASTUnitCopyCompletionsAtLocation(CCASTUnitRef unit, CCSourceLocation location);
 
 #endif /* CORECOMPILER_CCASTUNIT_T */

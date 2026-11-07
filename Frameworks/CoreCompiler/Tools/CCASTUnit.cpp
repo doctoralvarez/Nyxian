@@ -22,6 +22,13 @@
  * SOFTWARE.
  */
 
+/*
+ * Fork doctoralvarez/Nyxian — version 1.0.0
+ * Changelog:
+ *  - 1.0.0 (2026-11-07): CCASTUnitCopyCompletionsAtLocation, code completion
+ *    for Clang units through ASTUnit::CodeComplete.
+ */
+
 #include <CoreCompiler/CCASTUnit.h>
 #include <clang/Frontend/ASTUnit.h>
 #include <clang/Frontend/CompilerInstance.h>
@@ -37,6 +44,9 @@
 #include <swift/Basic/SourceManager.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <CoreCompiler/CCUtils.h>
+#include <clang/Sema/CodeCompleteConsumer.h>
+#include <clang/Basic/SourceManager.h>
+#include <clang/Basic/FileManager.h>
 
 using namespace clang;
 using namespace clang::driver;
@@ -1052,4 +1062,207 @@ CFArrayRef CCASTUnitCopyDiagnostics(CCASTUnitRef unit)
         return nullptr;
     }
     return (CFArrayRef)CFRetain(unit->diagnostics);
+}
+
+#pragma mark - fork: code completion
+
+namespace {
+
+struct CCCompletionItem {
+    std::string text;
+    std::string display;
+    std::string resultType;
+    int kind;
+    unsigned priority;
+};
+
+/* Turns Clang's completion results into plain strings while Sema is still alive. */
+class CCCollectingCompletionConsumer : public clang::CodeCompleteConsumer {
+public:
+    explicit CCCollectingCompletionConsumer(const clang::CodeCompleteOptions &options)
+        : clang::CodeCompleteConsumer(options),
+          CCTUInfo(std::make_shared<clang::GlobalCodeCompletionAllocator>()) {}
+    
+    void ProcessCodeCompleteResults(clang::Sema &S,
+                                    clang::CodeCompletionContext Context,
+                                    clang::CodeCompletionResult *Results,
+                                    unsigned NumResults) override
+    {
+        for(unsigned i = 0; i < NumResults && items.size() < 5000; i++)
+        {
+            clang::CodeCompletionResult &result = Results[i];
+            if(result.Availability == CXAvailability_NotAvailable ||
+               result.Availability == CXAvailability_NotAccessible)
+            {
+                continue;
+            }
+            
+            clang::CodeCompletionString *completion = result.CreateCodeCompletionString(S, Context, getAllocator(), CCTUInfo, /*IncludeBriefComments=*/false);
+            if(completion == nullptr)
+            {
+                continue;
+            }
+            
+            const char *typed = completion->getTypedText();
+            if(typed == nullptr || typed[0] == '\0')
+            {
+                continue;
+            }
+            
+            CCCompletionItem item;
+            item.text = typed;
+            item.kind = (int)result.Kind;
+            item.priority = completion->getPriority();
+            
+            for(const clang::CodeCompletionString::Chunk &chunk : *completion)
+            {
+                switch(chunk.Kind)
+                {
+                    case clang::CodeCompletionString::CK_Optional:
+                        /* nested optional parameters are left out of the summary */
+                        break;
+                    case clang::CodeCompletionString::CK_ResultType:
+                        if(chunk.Text != nullptr) item.resultType = chunk.Text;
+                        break;
+                    case clang::CodeCompletionString::CK_Informative:
+                        break;
+                    default:
+                        if(chunk.Text != nullptr) item.display += chunk.Text;
+                        break;
+                }
+            }
+            
+            items.push_back(std::move(item));
+        }
+    }
+    
+    clang::CodeCompletionAllocator &getAllocator() override
+    {
+        return CCTUInfo.getAllocator();
+    }
+    
+    clang::CodeCompletionTUInfo &getCodeCompletionTUInfo() override
+    {
+        return CCTUInfo;
+    }
+    
+    std::vector<CCCompletionItem> items;
+    
+private:
+    clang::CodeCompletionTUInfo CCTUInfo;
+};
+
+static CFStringRef CCCreateCFString(const std::string &value)
+{
+    return CFStringCreateWithBytes(kCFAllocatorDefault, (const UInt8 *)value.data(), (CFIndex)value.size(), kCFStringEncodingUTF8, false);
+}
+
+} /* namespace */
+
+CFArrayRef CCASTUnitCopyCompletionsAtLocation(CCASTUnitRef unit,
+                                              CCSourceLocation location)
+{
+    if(unit == nullptr || unit->type != kCCASTUnitTypeClang || unit->unit == nullptr || unit->file == nullptr)
+    {
+        return nullptr;
+    }
+    
+    if(!location.isValid || location.line <= 0 || location.column <= 0)
+    {
+        return nullptr;
+    }
+    
+    char filePath[PATH_MAX];
+    if(!CFURLGetFileSystemRepresentation(CCFileGetFileURL(unit->file), true, (UInt8 *)filePath, sizeof(filePath)))
+    {
+        return nullptr;
+    }
+    
+    /* complete against the editor's current text, not the file on disk */
+    SmallVector<ASTUnit::RemappedFile, 1> remaps;
+    CFDataRef data = CCFileGetUnsavedData(unit->file);
+    if(data != nullptr)
+    {
+        llvm::StringRef contentRef((const char *)CFDataGetBytePtr(data), CFDataGetLength(data));
+        remaps.push_back(ASTUnit::RemappedFile(filePath, llvm::MemoryBuffer::getMemBufferCopy(contentRef, filePath).release()));
+    }
+    
+    clang::CodeCompleteOptions options;
+    options.IncludeMacros = 1;
+    options.IncludeCodePatterns = 0;
+    options.IncludeGlobals = 1;
+    options.IncludeBriefComments = 0;
+    CCCollectingCompletionConsumer consumer(options);
+    
+    /* the same fresh managers libclang hands to ASTUnit::CodeComplete */
+    DiagnosticOptions diagOpts;
+    {
+        IntrusiveRefCntPtr<DiagnosticsEngine> diag(new DiagnosticsEngine(new DiagnosticIDs(), diagOpts, new clang::IgnoringDiagConsumer(), /*ShouldOwnClient=*/true));
+        IntrusiveRefCntPtr<FileManager> fileMgr = unit->unit->getFileManagerPtr();
+        IntrusiveRefCntPtr<SourceManager> sourceMgr(new SourceManager(*diag, *fileMgr));
+        LangOptions langOpts = unit->unit->getLangOpts();
+        SmallVector<StoredDiagnostic, 8> storedDiagnostics;
+        SmallVector<const llvm::MemoryBuffer *, 1> ownedBuffers;
+        
+        unit->unit->CodeComplete(llvm::StringRef(filePath),
+                                 (unsigned)location.line,
+                                 (unsigned)location.column,
+                                 remaps,
+                                 /*IncludeMacros=*/true,
+                                 /*IncludeCodePatterns=*/false,
+                                 /*IncludeBriefComments=*/false,
+                                 consumer,
+                                 std::make_shared<PCHContainerOperations>(),
+                                 diag,
+                                 langOpts,
+                                 sourceMgr,
+                                 fileMgr,
+                                 storedDiagnostics,
+                                 ownedBuffers,
+                                 nullptr);
+        
+        /* CodeComplete moved the remapped buffers into ownedBuffers */
+        for(const llvm::MemoryBuffer *buffer : ownedBuffers)
+        {
+            delete buffer;
+        }
+    }
+    
+    CFMutableArrayRef array = CFArrayCreateMutable(kCFAllocatorDefault, (CFIndex)consumer.items.size(), &kCFTypeArrayCallBacks);
+    if(array == nullptr)
+    {
+        return nullptr;
+    }
+    
+    for(const CCCompletionItem &item : consumer.items)
+    {
+        CFStringRef text = CCCreateCFString(item.text);
+        if(text == nullptr)
+        {
+            continue;
+        }
+        CFStringRef display = CCCreateCFString(item.display.empty() ? item.text : item.display);
+        CFStringRef type = item.resultType.empty() ? nullptr : CCCreateCFString(item.resultType);
+        int kind = item.kind;
+        int priority = (int)item.priority;
+        CFNumberRef kindNumber = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &kind);
+        CFNumberRef priorityNumber = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &priority);
+        
+        CFMutableDictionaryRef dict = CFDictionaryCreateMutable(kCFAllocatorDefault, 5, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        CFDictionarySetValue(dict, CFSTR("text"), text);
+        if(display != nullptr) CFDictionarySetValue(dict, CFSTR("display"), display);
+        if(type != nullptr) CFDictionarySetValue(dict, CFSTR("type"), type);
+        if(kindNumber != nullptr) CFDictionarySetValue(dict, CFSTR("kind"), kindNumber);
+        if(priorityNumber != nullptr) CFDictionarySetValue(dict, CFSTR("priority"), priorityNumber);
+        CFArrayAppendValue(array, dict);
+        
+        CFRelease(dict);
+        CFRelease(text);
+        if(display != nullptr) CFRelease(display);
+        if(type != nullptr) CFRelease(type);
+        if(kindNumber != nullptr) CFRelease(kindNumber);
+        if(priorityNumber != nullptr) CFRelease(priorityNumber);
+    }
+    
+    return array;
 }

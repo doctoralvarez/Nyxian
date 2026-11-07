@@ -20,6 +20,13 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): -completionsAtLine:utf8Column:content: for the
+    editor's code completion (Clang files).
+*/
+
 #ifndef NXLANGUAGESERVER_H
 #define NXLANGUAGESERVER_H
 
@@ -39,6 +46,9 @@
 
 - (NSArray<MDKDiagnostic *> *)getDiagnostics;
 - (MDKFileSourceLocation*)getDefinitionAtLocation:(MDKSourceLocation)location;
+
+/* fork: code completion at a 1-based line and UTF-8 byte column of `content`; nil when unavailable (not parsed yet, Swift file) */
+- (NSArray<NSDictionary<NSString*,id>*>*)completionsAtLine:(NSInteger)line utf8Column:(NSInteger)column content:(NSString*)content NS_SWIFT_NAME(completions(line:utf8Column:content:));
 
 - (void)releaseMemory;
 

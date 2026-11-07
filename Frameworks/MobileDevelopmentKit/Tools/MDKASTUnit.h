@@ -22,6 +22,12 @@
  * SOFTWARE.
  */
 
+/*
+ * Fork doctoralvarez/Nyxian — version 1.0.0
+ * Changelog:
+ *  - 1.0.0 (2026-11-07): -completionsAtLocation: (Clang code completion).
+ */
+
 #ifndef MOBILEDEVELOPMENTKIT_MDKASTUNIT_H
 #define MOBILEDEVELOPMENTKIT_MDKASTUNIT_H
 
@@ -42,6 +48,9 @@ typedef NS_ENUM(UInt8, MDKASTUnitType) {
 @property (nonatomic, readonly) BOOL hasErrorOccured;
 
 - (MDKFileSourceLocation*)fileSourceLocationForDefinitionAtLocation:(MDKSourceLocation)location;
+
+/* fork: code completion for Clang units; dictionaries with text, display, type, kind, priority. Column counts UTF-8 bytes. */
+- (NSArray<NSDictionary<NSString*,id>*>*)completionsAtLocation:(MDKSourceLocation)location;
 
 @end
 

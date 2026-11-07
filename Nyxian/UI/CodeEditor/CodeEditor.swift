@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-07): code completion while typing. Phase 0 suggests words
+    from this file, the project and the language (all files); phase 1 asks
+    Clang for real completions in C, Objective-C and C++ files (also after
+    "." and "->"). Tab/Return accept, ↑/↓ choose, Esc dismisses, or tap.
+    EditorCompletionController / CompletionPopupView at the end of the file.
   - 1.1.0 (2026-11-07): ⌥⌘↑ / ⌥⌘↓ move the current or selected lines.
   - 1.0.0 (2026-11-06): Find & Replace (UIFindInteraction) with ⌘F, ⌥⌘F,
     ⌘G, ⇧⌘G and a toolbar button; editor shortcuts ⌘/ toggle comment,
@@ -64,6 +69,9 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
     private(set) var redoButton: UIButton?
     
     private(set) var autoindent: Bool = false
+    
+    /* fork: suggestions while typing */
+    private(set) var completion: EditorCompletionController?
     
     let isReadOnly: Bool
     
@@ -280,6 +288,9 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         
         self.coordinator = CodeEditorCoordinator(parent: self)
         self.textView.editorDelegate = self.coordinator
+        
+        /* fork: code completion */
+        self.completion = EditorCompletionController(editor: self)
         
         self.goto(location: self.location)
     }
@@ -665,6 +676,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
     }
     
     override func viewWillDisappear(_ animated: Bool) {
+        self.completion?.hide()
         self.document?.autosave()
         self.coordinator?.debounce?.invalidate()
         self.languageServer?.releaseMemory()
@@ -698,6 +710,21 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             return keyCommand
         }
 
+        /* fork: while suggestions are shown, these keys drive the list */
+        if self.completion?.isVisible == true {
+            return [
+                command("Accept Suggestion", #selector(completionAccept), "\t", []),
+                command("Accept Suggestion", #selector(completionAccept), "\r", []),
+                command("Dismiss Suggestions", #selector(completionDismiss), UIKeyCommand.inputEscape, []),
+                command("Previous Suggestion", #selector(completionMoveUp), UIKeyCommand.inputUpArrow, []),
+                command("Next Suggestion", #selector(completionMoveDown), UIKeyCommand.inputDownArrow, []),
+                UIKeyCommand(title: "Save File",
+                             action: #selector(saveText),
+                             input: "S",
+                             modifierFlags: .command)
+            ]
+        }
+        
         var commands: [UIKeyCommand] = [
             UIKeyCommand(title: "Save File",
                          action: #selector(saveText),
@@ -1084,5 +1111,502 @@ extension CodeEditorViewController {
 
         let shift = (insertion as NSString).length
         self.textView.selectedRange = NSRange(location: selection.location + shift, length: selection.length)
+    }
+}
+
+// MARK: - Fork: code completion (phase 0: words, phase 1: Clang)
+
+struct EditorCompletionItem {
+    /// What replaces the typed prefix.
+    let text: String
+    /// What the list shows (a full signature for Clang results).
+    let display: String
+    /// Secondary text: a result type or where the word came from.
+    let detail: String?
+    let symbolName: String
+}
+
+/// The floating suggestion list shown under (or above) the caret.
+final class CompletionPopupView: UIView, UITableViewDataSource, UITableViewDelegate {
+    static let rowHeight: CGFloat = 32
+    static let maximumVisibleRows = 7
+    
+    var onPick: ((EditorCompletionItem) -> Void)?
+    private(set) var selectedIndex = 0
+    private let tableView = UITableView(frame: .zero, style: .plain)
+    
+    var items: [EditorCompletionItem] = [] {
+        didSet {
+            selectedIndex = 0
+            tableView.reloadData()
+            if !items.isEmpty {
+                tableView.scrollToRow(at: IndexPath(row: 0, section: 0), at: .top, animated: false)
+            }
+        }
+    }
+    
+    var selectedItem: EditorCompletionItem? {
+        items.indices.contains(selectedIndex) ? items[selectedIndex] : nil
+    }
+    
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .secondarySystemBackground
+        layer.cornerRadius = 10
+        layer.borderWidth = 0.5
+        layer.borderColor = UIColor.separator.cgColor
+        layer.shadowColor = UIColor.black.cgColor
+        layer.shadowOpacity = 0.25
+        layer.shadowRadius = 10
+        layer.shadowOffset = CGSize(width: 0, height: 4)
+        
+        tableView.dataSource = self
+        tableView.delegate = self
+        tableView.rowHeight = CompletionPopupView.rowHeight
+        tableView.backgroundColor = .clear
+        tableView.separatorStyle = .none
+        tableView.layer.cornerRadius = 10
+        tableView.clipsToBounds = true
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "completion")
+        tableView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(tableView)
+        NSLayoutConstraint.activate([
+            tableView.topAnchor.constraint(equalTo: topAnchor),
+            tableView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            tableView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            tableView.trailingAnchor.constraint(equalTo: trailingAnchor)
+        ])
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    func moveSelection(by delta: Int) {
+        guard items.count > 1 else { return }
+        let previous = selectedIndex
+        selectedIndex = (selectedIndex + delta + items.count) % items.count
+        tableView.reloadRows(at: [IndexPath(row: previous, section: 0), IndexPath(row: selectedIndex, section: 0)], with: .none)
+        tableView.scrollToRow(at: IndexPath(row: selectedIndex, section: 0), at: .none, animated: false)
+    }
+    
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        items.count
+    }
+    
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "completion", for: indexPath)
+        let item = items[indexPath.row]
+        var content = cell.defaultContentConfiguration()
+        content.text = item.display
+        content.textProperties.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        content.textProperties.numberOfLines = 1
+        content.textProperties.lineBreakMode = .byTruncatingTail
+        content.secondaryText = item.detail
+        content.secondaryTextProperties.font = UIFont.systemFont(ofSize: 11)
+        content.secondaryTextProperties.color = .secondaryLabel
+        content.secondaryTextProperties.numberOfLines = 1
+        content.prefersSideBySideTextAndSecondaryText = true
+        content.image = UIImage(systemName: item.symbolName)
+        content.imageProperties.maximumSize = CGSize(width: 16, height: 16)
+        content.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 2, leading: 10, bottom: 2, trailing: 10)
+        cell.contentConfiguration = content
+        cell.backgroundColor = indexPath.row == selectedIndex ? UIColor.tintColor.withAlphaComponent(0.25) : .clear
+        cell.selectionStyle = .none
+        return cell
+    }
+    
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        guard items.indices.contains(indexPath.row) else { return }
+        onPick?(items[indexPath.row])
+    }
+}
+
+/// Decides what to suggest while typing and inserts the chosen suggestion.
+final class EditorCompletionController {
+    /// Off with `defaults write ... LDECodeCompletion -bool NO` (no UI toggle yet).
+    static var isEnabled: Bool { booleanDefaults(key: "LDECodeCompletion", defaultValue: true) }
+    
+    private weak var editor: CodeEditorViewController?
+    private let popup = CompletionPopupView()
+    private var projectWords: [String: Int] = [:]
+    private var generation = 0
+    private var isInserting = false
+    private var replacementRange: NSRange?
+    
+    var isVisible: Bool { popup.superview != nil && !popup.isHidden }
+    
+    init(editor: CodeEditorViewController) {
+        self.editor = editor
+        popup.isHidden = true
+        popup.onPick = { [weak self] item in self?.accept(item) }
+        buildProjectIndex()
+    }
+    
+    // MARK: triggers
+    
+    func textDidChange() {
+        guard !isInserting, EditorCompletionController.isEnabled, let editor = editor, !editor.isReadOnly else {
+            if !isInserting { hide() }
+            return
+        }
+        
+        let textView = editor.textView
+        let selection = textView.selectedRange
+        guard selection.length == 0 else { hide(); return }
+        
+        let text = textView.text
+        let ns = text as NSString
+        let caret = min(selection.location, ns.length)
+        var start = caret
+        while start > 0, EditorCompletionController.isIdentifierUnit(ns.character(at: start - 1)) {
+            start -= 1
+        }
+        let prefix = ns.substring(with: NSRange(location: start, length: caret - start))
+        
+        /* Clang knows the members after "." and "->" even before anything is typed */
+        let isClang = editor.file.isClang
+        let afterMemberAccess = isClang && start > 0 && (
+            ns.character(at: start - 1) == 0x2E /* . */ ||
+            (start > 1 && ns.character(at: start - 1) == 0x3E /* > */ && ns.character(at: start - 2) == 0x2D /* - */)
+        )
+        
+        if let first = prefix.unicodeScalars.first, CharacterSet.decimalDigits.contains(first) {
+            hide()
+            return
+        }
+        guard prefix.utf16.count >= 2 || afterMemberAccess else {
+            hide()
+            return
+        }
+        
+        generation += 1
+        let currentGeneration = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self = self, currentGeneration == self.generation else { return }
+            self.compute(text: text, prefixStart: start, caret: caret, prefix: prefix, generation: currentGeneration)
+        }
+    }
+    
+    func selectionDidChange() {
+        guard !isInserting, isVisible, let editor = editor, let range = replacementRange else { return }
+        let selection = editor.textView.selectedRange
+        /* keep the list while the caret stays at the end of the word being completed */
+        if selection.length != 0 || selection.location < range.location || selection.location > range.location + range.length + 1 {
+            hide()
+        }
+    }
+    
+    func hide() {
+        generation += 1
+        replacementRange = nil
+        popup.isHidden = true
+    }
+    
+    // MARK: keyboard
+    
+    func moveSelection(by delta: Int) {
+        popup.moveSelection(by: delta)
+    }
+    
+    func acceptSelected() {
+        if let item = popup.selectedItem {
+            accept(item)
+        } else {
+            hide()
+        }
+    }
+    
+    // MARK: computing suggestions
+    
+    private func compute(text: String, prefixStart: Int, caret: Int, prefix: String, generation currentGeneration: Int) {
+        guard let editor = editor else { return }
+        let server = editor.file.isClang ? editor.languageServer : nil
+        let words = projectWords
+        let keywords = editor.file.isSwift ? EditorCompletionController.swiftWords : EditorCompletionController.cWords
+        
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var items: [EditorCompletionItem] = []
+            
+            /* phase 1: real completion from Clang (C, Objective-C, C++) */
+            if let server = server {
+                let position = EditorCompletionController.lineAndUTF8Column(text, utf16Offset: prefixStart)
+                if let raw = server.completions(line: position.line, utf8Column: position.column, content: text) {
+                    items = EditorCompletionController.rankClang(raw, prefix: prefix)
+                }
+            }
+            
+            /* phase 0: words from this file, the project and the language */
+            if items.isEmpty, !prefix.isEmpty {
+                items = EditorCompletionController.rankWords(prefix: prefix, projectWords: words, currentText: text, keywords: keywords)
+            }
+            
+            DispatchQueue.main.async {
+                guard let self = self, currentGeneration == self.generation, let editor = self.editor else { return }
+                guard editor.textView.selectedRange.location == caret, editor.textView.selectedRange.length == 0 else { return }
+                guard !items.isEmpty else {
+                    self.hide()
+                    return
+                }
+                self.replacementRange = NSRange(location: prefixStart, length: caret - prefixStart)
+                self.show(items)
+            }
+        }
+    }
+    
+    private func show(_ items: [EditorCompletionItem]) {
+        guard let editor = editor else { return }
+        let textView = editor.textView
+        if popup.superview == nil {
+            editor.view.addSubview(popup)
+        }
+        
+        guard let end = textView.selectedTextRange?.end else {
+            hide()
+            return
+        }
+        let caretRect = textView.convert(textView.caretRect(for: end), to: editor.view)
+        let bounds = editor.view.bounds
+        let width = min(380, bounds.width - 16)
+        let height = CompletionPopupView.rowHeight * CGFloat(min(items.count, CompletionPopupView.maximumVisibleRows))
+        let x = min(max(8, caretRect.minX - 28), bounds.width - width - 8)
+        let bottomLimit = bounds.height - textView.contentInset.bottom - 4
+        var y = caretRect.maxY + 4
+        if y + height > bottomLimit {
+            y = caretRect.minY - height - 4
+        }
+        y = max(editor.view.safeAreaInsets.top + 4, y)
+        
+        /* size the list first, so scrolling it to the top happens with a real frame */
+        popup.frame = CGRect(x: x, y: y, width: width, height: height)
+        popup.layoutIfNeeded()
+        popup.items = items
+        popup.isHidden = false
+        editor.view.bringSubviewToFront(popup)
+    }
+    
+    private func accept(_ item: EditorCompletionItem) {
+        guard let editor = editor, let start = replacementRange?.location else {
+            hide()
+            return
+        }
+        /* the word may have grown since the list was computed: replace up to the caret */
+        let caret = editor.textView.selectedRange.location
+        let length = (editor.textView.text as NSString).length
+        guard caret >= start, caret <= length else {
+            hide()
+            return
+        }
+        let range = NSRange(location: start, length: caret - start)
+        
+        isInserting = true
+        editor.insertCompletion(item.text, replacing: range)
+        isInserting = false
+        hide()
+    }
+    
+    // MARK: ranking
+    
+    private static func rankClang(_ raw: [[String: Any]], prefix: String) -> [EditorCompletionItem] {
+        let lowerPrefix = prefix.lowercased()
+        var seen = Set<String>()
+        var scored: [(item: EditorCompletionItem, exactCase: Bool, priority: Int)] = []
+        
+        for entry in raw {
+            guard let text = entry["text"] as? String, !text.isEmpty else { continue }
+            if !prefix.isEmpty {
+                guard text.lowercased().hasPrefix(lowerPrefix), text != prefix else { continue }
+            }
+            let display = (entry["display"] as? String) ?? text
+            guard seen.insert(display).inserted else { continue }
+            let kind = (entry["kind"] as? NSNumber)?.intValue ?? 0
+            let priority = (entry["priority"] as? NSNumber)?.intValue ?? 100
+            let symbol: String = {
+                switch kind {
+                case 1: return "textformat"
+                case 2: return "number"
+                case 3: return "curlybraces"
+                default: return "cube"
+                }
+            }()
+            let item = EditorCompletionItem(text: text, display: display, detail: entry["type"] as? String, symbolName: symbol)
+            scored.append((item, text.hasPrefix(prefix), priority))
+        }
+        
+        return scored
+            .sorted { lhs, rhs in
+                if lhs.exactCase != rhs.exactCase { return lhs.exactCase }
+                if lhs.priority != rhs.priority { return lhs.priority < rhs.priority }
+                return lhs.item.text.count < rhs.item.text.count
+            }
+            .prefix(200)
+            .map { $0.item }
+    }
+    
+    private static let wordRegex = try? NSRegularExpression(pattern: "[A-Za-z_][A-Za-z0-9_]{2,}")
+    
+    private static func words(in text: String) -> [String: Int] {
+        guard let regex = wordRegex else { return [:] }
+        var counts: [String: Int] = [:]
+        let ns = text as NSString
+        regex.enumerateMatches(in: text, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+            guard let match = match else { return }
+            counts[ns.substring(with: match.range), default: 0] += 1
+        }
+        return counts
+    }
+    
+    private static func rankWords(prefix: String, projectWords: [String: Int], currentText: String, keywords: [String]) -> [EditorCompletionItem] {
+        let lowerPrefix = prefix.lowercased()
+        var candidates: [String: (count: Int, source: String)] = [:]
+        
+        for keyword in keywords where keyword.lowercased().hasPrefix(lowerPrefix) {
+            candidates[keyword] = (1, "keyword")
+        }
+        for (word, count) in projectWords where word.lowercased().hasPrefix(lowerPrefix) {
+            candidates[word] = (count + (candidates[word]?.count ?? 0), "project")
+        }
+        /* words of the file being edited, without the partial word under the caret */
+        var current = words(in: currentText)
+        if let count = current[prefix] {
+            if count <= 1 { current.removeValue(forKey: prefix) } else { current[prefix] = count - 1 }
+        }
+        for (word, count) in current where word.lowercased().hasPrefix(lowerPrefix) {
+            candidates[word] = (count * 3 + (candidates[word]?.count ?? 0), "this file")
+        }
+        candidates.removeValue(forKey: prefix)
+        
+        return candidates
+            .sorted { lhs, rhs in
+                let lhsExact = lhs.key.hasPrefix(prefix)
+                let rhsExact = rhs.key.hasPrefix(prefix)
+                if lhsExact != rhsExact { return lhsExact }
+                if lhs.value.count != rhs.value.count { return lhs.value.count > rhs.value.count }
+                return lhs.key.count < rhs.key.count
+            }
+            .prefix(50)
+            .map { word, info in
+                EditorCompletionItem(
+                    text: word,
+                    display: word,
+                    detail: info.source,
+                    symbolName: info.source == "keyword" ? "textformat" : "character.cursor.ibeam"
+                )
+            }
+    }
+    
+    private func buildProjectIndex() {
+        guard let editor = editor, let project = editor.project else { return }
+        let root: URL = project.url
+        let isSwift = editor.file.isSwift
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let sourceExtensions: Set<String> = isSwift ? ["swift"] : ["c", "h", "m", "mm", "cpp", "cc", "cxx", "hpp", "hh"]
+            var counts: [String: Int] = [:]
+            var budget = 8 * 1024 * 1024
+            for url in ProjectFileIndex.files(in: root) where sourceExtensions.contains(url.pathExtension.lowercased()) {
+                guard budget > 0, let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                budget -= text.utf8.count
+                for (word, count) in EditorCompletionController.words(in: text) {
+                    counts[word, default: 0] += count
+                }
+            }
+            DispatchQueue.main.async {
+                self?.projectWords = counts
+            }
+        }
+    }
+    
+    // MARK: helpers
+    
+    private static func isIdentifierUnit(_ unit: unichar) -> Bool {
+        (unit >= 0x30 && unit <= 0x39) || (unit >= 0x41 && unit <= 0x5A) || (unit >= 0x61 && unit <= 0x7A) || unit == 0x5F
+    }
+    
+    /// 1-based line and UTF-8 byte column, as Clang expects them.
+    private static func lineAndUTF8Column(_ text: String, utf16Offset: Int) -> (line: Int, column: Int) {
+        let ns = text as NSString
+        let before = ns.substring(to: min(utf16Offset, ns.length))
+        var line = 1
+        var bytesSinceNewline = 0
+        for byte in before.utf8 {
+            if byte == 0x0A {
+                line += 1
+                bytesSinceNewline = 0
+            } else {
+                bytesSinceNewline += 1
+            }
+        }
+        return (line, bytesSinceNewline + 1)
+    }
+    
+    // MARK: vocabularies
+    
+    static let swiftWords: [String] = [
+        "associatedtype", "async", "await", "break", "case", "catch", "class", "continue", "default", "defer",
+        "deinit", "didSet", "else", "enum", "extension", "fallthrough", "false", "fileprivate", "final", "func",
+        "guard", "import", "init", "inout", "internal", "lazy", "let", "mutating", "nil", "nonisolated",
+        "override", "private", "protocol", "public", "repeat", "rethrows", "return", "self", "Self", "some",
+        "static", "struct", "subscript", "super", "switch", "throw", "throws", "true", "typealias", "where",
+        "while", "willSet", "weak", "unowned", "convenience", "required", "optional", "indirect", "consuming",
+        "Int", "Double", "Float", "Bool", "String", "Character", "Array", "Dictionary", "Set", "Optional",
+        "Result", "Error", "Date", "Data", "URL", "UUID", "CGFloat", "CGPoint", "CGSize", "CGRect",
+        "DispatchQueue", "Task", "MainActor", "FileManager", "UserDefaults", "JSONEncoder", "JSONDecoder",
+        "Codable", "Identifiable", "Hashable", "Equatable", "Comparable", "ObservableObject", "Observable",
+        "App", "Scene", "WindowGroup", "View", "ViewModifier", "State", "Binding", "StateObject", "ObservedObject",
+        "EnvironmentObject", "Environment", "Published", "AppStorage", "FocusState", "Namespace",
+        "VStack", "HStack", "ZStack", "LazyVStack", "LazyHStack", "LazyVGrid", "LazyHGrid", "GridItem", "Grid", "GridRow",
+        "Text", "Label", "Image", "Button", "Toggle", "Picker", "Slider", "Stepper", "TextField", "SecureField",
+        "TextEditor", "DatePicker", "ColorPicker", "Menu", "Link", "ShareLink", "ProgressView", "Gauge",
+        "List", "ForEach", "Section", "Form", "ScrollView", "ScrollViewReader", "GeometryReader", "Spacer", "Divider",
+        "NavigationStack", "NavigationSplitView", "NavigationLink", "NavigationPath", "TabView", "Group", "GroupBox",
+        "DisclosureGroup", "Color", "LinearGradient", "RadialGradient", "Circle", "Rectangle", "RoundedRectangle",
+        "Capsule", "Ellipse", "Path", "Canvas", "Chart", "LineMark", "BarMark", "PointMark", "AreaMark", "RuleMark",
+        "padding", "frame", "font", "fontWeight", "foregroundStyle", "foregroundColor", "background", "overlay",
+        "cornerRadius", "clipShape", "shadow", "opacity", "offset", "rotationEffect", "scaleEffect",
+        "onAppear", "onDisappear", "onChange", "onTapGesture", "onSubmit", "task", "sheet", "fullScreenCover",
+        "alert", "confirmationDialog", "popover", "toolbar", "ToolbarItem", "navigationTitle", "navigationBarTitleDisplayMode",
+        "listStyle", "pickerStyle", "buttonStyle", "textFieldStyle", "disabled", "animation", "withAnimation",
+        "transition", "matchedGeometryEffect", "keyboardType", "textInputAutocapitalization", "autocorrectionDisabled",
+        "fileImporter", "fileExporter", "presentationDetents", "searchable", "refreshable", "swipeActions", "contextMenu"
+    ]
+    
+    static let cWords: [String] = [
+        "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern",
+        "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short", "signed",
+        "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while",
+        "bool", "true", "false", "NULL", "nullptr", "class", "namespace", "template", "typename", "public",
+        "private", "protected", "virtual", "override", "const_cast", "static_cast", "dynamic_cast", "reinterpret_cast",
+        "@interface", "@implementation", "@end", "@property", "@synthesize", "@protocol", "@selector", "@class",
+        "nonatomic", "atomic", "strong", "weak", "copy", "assign", "readonly", "readwrite", "nullable", "nonnull",
+        "self", "super", "nil", "YES", "NO", "instancetype", "NSObject", "NSString", "NSArray", "NSDictionary",
+        "NSNumber", "NSData", "NSURL", "NSError", "NSLog", "UIView", "UIViewController", "UIColor", "UIImage",
+        "dispatch_async", "dispatch_get_main_queue", "printf", "malloc", "free", "memcpy", "strlen"
+    ]
+}
+
+extension CodeEditorViewController {
+    /// Replaces the typed prefix with a completion as one undoable edit and puts the caret after it.
+    func insertCompletion(_ text: String, replacing range: NSRange) {
+        let wasAutoIndenting = self.coordinator?.isAutoIndenting ?? false
+        self.coordinator?.isAutoIndenting = true
+        self.textView.replace(range, withText: text)
+        self.coordinator?.isAutoIndenting = wasAutoIndenting
+        self.textView.selectedRange = NSRange(location: range.location + (text as NSString).length, length: 0)
+    }
+    
+    @objc func completionMoveUp() {
+        self.completion?.moveSelection(by: -1)
+    }
+    
+    @objc func completionMoveDown() {
+        self.completion?.moveSelection(by: 1)
+    }
+    
+    @objc func completionAccept() {
+        self.completion?.acceptSelected()
+    }
+    
+    @objc func completionDismiss() {
+        self.completion?.hide()
     }
 }

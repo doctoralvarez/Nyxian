@@ -20,6 +20,13 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): forwards text and selection changes to the code
+    completion controller.
+*/
+
 import Foundation
 import UIKit
 import Runestone
@@ -81,6 +88,8 @@ class CodeEditorCoordinator: NSObject, TextViewDelegate {
         if(!textView.text.isEmpty) {
             self.parent?.document?.updateChangeCount(.done)
         }
+        /* fork: suggestions follow every edit, also in files without a language server */
+        self.parent?.completion?.textDidChange()
         guard self.parent?.languageServer != nil else { return }
         if !self.isInvalidated {
             self.isInvalidated = true
@@ -109,6 +118,7 @@ class CodeEditorCoordinator: NSObject, TextViewDelegate {
     var isAutoIndenting = false
     
     func textViewDidChangeSelection(_ textView: TextView) {
+        self.parent?.completion?.selectionDidChange()
         if self.isInvalidated {
             self.debounce?.debounce()
         }

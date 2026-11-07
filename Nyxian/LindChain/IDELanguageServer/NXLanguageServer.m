@@ -20,6 +20,13 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): -completionsAtLine:utf8Column:content: for the
+    editor's code completion (Clang files).
+*/
+
 #import <LindChain/IDELanguageServer/NXLanguageServer.h>
 #import <MobileDevelopmentKit/MDKASTUnit.h>
 #import <MobileDevelopmentKit/MDKFile.h>
@@ -147,6 +154,29 @@
     os_unfair_lock_unlock(&_lock);
     
     return succeed;
+}
+
+- (NSArray<NSDictionary<NSString*,id>*>*)completionsAtLine:(NSInteger)line utf8Column:(NSInteger)column content:(NSString*)content
+{
+    NSData *data = [content dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO];
+    if(data == nil || _file.isSwift)
+    {
+        return nil;
+    }
+    
+    os_unfair_lock_lock(&_lock);
+    if(_unit == nil)
+    {
+        /* not parsed yet: the editor falls back to word completion */
+        os_unfair_lock_unlock(&_lock);
+        return nil;
+    }
+    
+    [_file setUnsavedData:data];
+    NSArray<NSDictionary<NSString*,id>*> *items = [_unit completionsAtLocation:MDKSourceLocationMake(line, column)];
+    os_unfair_lock_unlock(&_lock);
+    
+    return items;
 }
 
 - (MDKFileSourceLocation*)getDefinitionAtLocation:(MDKSourceLocation)location

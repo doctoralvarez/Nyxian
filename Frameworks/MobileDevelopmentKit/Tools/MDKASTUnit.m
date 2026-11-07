@@ -22,6 +22,12 @@
  * SOFTWARE.
  */
 
+/*
+ * Fork doctoralvarez/Nyxian — version 1.0.0
+ * Changelog:
+ *  - 1.0.0 (2026-11-07): -completionsAtLocation: (Clang code completion).
+ */
+
 #import <MobileDevelopmentKit/MDKASTUnit.h>
 #import <CoreCompiler/CCASTUnit.h>
 #import <objc/runtime.h>
@@ -51,6 +57,12 @@
 - (MDKFileSourceLocation*)fileSourceLocationForDefinitionAtLocation:(MDKSourceLocation)location
 {
     return (__bridge_transfer MDKFileSourceLocation*)CCASTUnitCopyDefinitionAtLocation((__bridge void*)self, (CCSourceLocation){ location.isValid, location.line, location.column });
+}
+
+- (NSArray<NSDictionary<NSString*,id>*>*)completionsAtLocation:(MDKSourceLocation)location
+{
+    CFArrayRef completions = CCASTUnitCopyCompletionsAtLocation((__bridge void*)self, (CCSourceLocation){ location.isValid, location.line, location.column });
+    return completions != NULL ? (__bridge_transfer NSArray*)completions : @[];
 }
 
 @end

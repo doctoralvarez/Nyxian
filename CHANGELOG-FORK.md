@@ -4,6 +4,20 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.4.0 — 2026-11-07
+
+### Code completion (improvement 9, phases 0 and 1)
+- A suggestion list appears under the caret after typing 2+ letters of a word.
+  **Tab** or **Return** accepts, **↑/↓** choose, **Esc** dismisses, or tap a row.
+- **Phase 0 (all languages, Swift included):** words from the file being edited,
+  the rest of the project and a built-in vocabulary (Swift keywords, common
+  Swift/SwiftUI/Charts names; C/Objective-C keywords and common APIs).
+- **Phase 1 (C, Objective-C, C++):** real completions from Clang
+  (`ASTUnit::CodeComplete`), including members after `.` and `->`, with result
+  types. Falls back to phase 0 until the file has been parsed once.
+- Files: `CCASTUnit.cpp/.h` (CoreCompiler), `MDKASTUnit.h/.m`,
+  `NXLanguageServer.h/.m`, `CodeEditor.swift`, `CodeEditorCoordinator.swift`.
+
 ## 1.3.1 — 2026-11-07
 
 - Build fix in `FileList.swift` (search / quick open): `project.url` stored as a
