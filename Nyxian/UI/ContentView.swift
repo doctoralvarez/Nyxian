@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-07): holding ⌘ alone for 2 seconds shows the keyboard
+    shortcuts of the current screen (KeyboardShortcutsHUD); editor font size
+    defaults to 20 (ForkDefaults, one-time move from the old default 12).
   - 1.0.0 (2026-11-07): Import Swift Playgrounds app packages (.swiftpm,
     as a folder or zipped) with the existing import button; they become a
     SwiftUI app project (SwiftPlaygroundsImporter at the end of this file).
@@ -31,6 +34,7 @@
 import Foundation
 import SwiftUI
 import UIKit
+import GameController
 
 @objc class ContentViewController: NXUITableViewController, UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate {
     var sessionIndex: IndexPath? = nil
@@ -76,6 +80,10 @@ import UIKit
             action: #selector(presentImportPicker)
         )
         self.navigationItem.setRightBarButtonItems([createItem, importItem], animated: false)
+        
+        /* fork: hold ⌘ for the shortcut list; editor font size 20 by default */
+        KeyboardShortcutsHUD.shared.start()
+        ForkDefaults.apply()
         
         reloadProjectsFromDisk()
     }
@@ -969,5 +977,283 @@ extension ContentViewController {
         } catch {
             NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: error.localizedDescription, withDelay: 0.0)
         }
+    }
+}
+
+// MARK: - Fork: keyboard shortcut overlay (hold ⌘ for 2 seconds)
+
+extension UIResponder {
+    /// Target of a nil-targeted action: whoever receives it is the first responder.
+    @objc func nx_captureFirstResponder(_ sender: Any?) {
+        KeyboardShortcutsHUD.capturedResponder = self
+    }
+}
+
+/// Shows the shortcuts available on the current screen while ⌘ is held alone for 2 seconds.
+final class KeyboardShortcutsHUD {
+    static let shared = KeyboardShortcutsHUD()
+    fileprivate static weak var capturedResponder: UIResponder?
+    
+    private static let holdDelay: TimeInterval = 2.0
+    
+    private var started = false
+    private var commandDown = false
+    private var pendingShow: DispatchWorkItem?
+    private weak var overlay: UIView?
+    
+    /// Spanish names for the commands this app registers (others keep their own title).
+    private static let spanishTitles: [String: String] = [
+        "Save File": "Guardar archivo",
+        "Find": "Buscar en el archivo",
+        "Find Next": "Buscar siguiente",
+        "Find Previous": "Buscar anterior",
+        "Find and Replace": "Buscar y reemplazar",
+        "Go to Line": "Ir a línea",
+        "Shift Right": "Indentar",
+        "Shift Left": "Quitar indentación",
+        "Duplicate Line": "Duplicar línea",
+        "Move Line Up": "Mover línea arriba",
+        "Move Line Down": "Mover línea abajo",
+        "Toggle Comment": "Comentar / descomentar",
+        "Close": "Cerrar pestaña",
+        "Run": "Compilar y ejecutar",
+        "Build": "Compilar",
+        "Show Issues": "Ver incidencias",
+        "Search in Project": "Buscar en el proyecto",
+        "Open Quickly": "Abrir archivo rápido",
+        "Accept Suggestion": "Aceptar sugerencia",
+        "Dismiss Suggestions": "Cerrar sugerencias",
+        "Previous Suggestion": "Sugerencia anterior",
+        "Next Suggestion": "Sugerencia siguiente"
+    ]
+    
+    func start() {
+        guard !started else { return }
+        started = true
+        install(on: GCKeyboard.coalesced)
+        NotificationCenter.default.addObserver(forName: .GCKeyboardDidConnect, object: nil, queue: .main) { [weak self] notification in
+            self?.install(on: notification.object as? GCKeyboard)
+        }
+        NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.commandDown = false
+            self?.cancelAndHide()
+        }
+    }
+    
+    private func install(on keyboard: GCKeyboard?) {
+        keyboard?.keyboardInput?.keyChangedHandler = { [weak self] _, _, keyCode, pressed in
+            DispatchQueue.main.async {
+                self?.handle(keyCode: keyCode, pressed: pressed)
+            }
+        }
+    }
+    
+    private func handle(keyCode: GCKeyCode, pressed: Bool) {
+        if keyCode == .leftGUI || keyCode == .rightGUI {
+            if pressed {
+                commandDown = true
+                scheduleShow()
+            } else {
+                commandDown = false
+                cancelAndHide()
+            }
+            return
+        }
+        /* any other key (a shortcut, or another modifier) cancels and closes the list */
+        if pressed {
+            cancelAndHide()
+        }
+    }
+    
+    private func scheduleShow() {
+        pendingShow?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, self.commandDown else { return }
+            self.show()
+        }
+        pendingShow = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + KeyboardShortcutsHUD.holdDelay, execute: work)
+    }
+    
+    private func cancelAndHide() {
+        pendingShow?.cancel()
+        pendingShow = nil
+        guard let overlay = overlay else { return }
+        self.overlay = nil
+        UIView.animate(withDuration: 0.15, animations: { overlay.alpha = 0 }) { _ in
+            overlay.removeFromSuperview()
+        }
+    }
+    
+    // MARK: collecting shortcuts
+    
+    private func keyWindow() -> UIWindow? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .filter { $0.activationState == .foregroundActive }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+    }
+    
+    private func currentCommands(in window: UIWindow) -> [(keys: String, title: String)] {
+        /* start at the first responder, or at the top-most screen when nothing is focused */
+        KeyboardShortcutsHUD.capturedResponder = nil
+        UIApplication.shared.sendAction(#selector(UIResponder.nx_captureFirstResponder(_:)), to: nil, from: nil, for: nil)
+        var responder: UIResponder? = KeyboardShortcutsHUD.capturedResponder
+        if responder == nil {
+            var top = window.rootViewController
+            while let presented = top?.presentedViewController { top = presented }
+            responder = top
+        }
+        
+        var seen = Set<String>()
+        var result: [(keys: String, title: String)] = []
+        while let current = responder {
+            for command in current.keyCommands ?? [] {
+                let rawTitle = command.discoverabilityTitle ?? command.title
+                guard !rawTitle.isEmpty else { continue }
+                let keys = KeyboardShortcutsHUD.describe(command)
+                guard seen.insert(keys).inserted else { continue }
+                result.append((keys, KeyboardShortcutsHUD.spanishTitles[rawTitle] ?? rawTitle))
+            }
+            responder = current.next
+        }
+        return result
+    }
+    
+    private static func describe(_ command: UIKeyCommand) -> String {
+        var text = ""
+        let flags = command.modifierFlags
+        if flags.contains(.control) { text += "⌃" }
+        if flags.contains(.alternate) { text += "⌥" }
+        if flags.contains(.shift) { text += "⇧" }
+        if flags.contains(.command) { text += "⌘" }
+        
+        let input = command.input ?? ""
+        switch input {
+        case UIKeyCommand.inputUpArrow: text += "↑"
+        case UIKeyCommand.inputDownArrow: text += "↓"
+        case UIKeyCommand.inputLeftArrow: text += "←"
+        case UIKeyCommand.inputRightArrow: text += "→"
+        case UIKeyCommand.inputEscape: text += "Esc"
+        case "\t": text += "Tab"
+        case "\r": text += "Return"
+        case " ": text += "Espacio"
+        default: text += input.uppercased()
+        }
+        return text
+    }
+    
+    // MARK: overlay
+    
+    private func show() {
+        guard overlay == nil, let window = keyWindow() else { return }
+        let commands = currentCommands(in: window)
+        
+        let container = UIView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.alpha = 0
+        container.isUserInteractionEnabled = false
+        
+        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterial))
+        blur.translatesAutoresizingMaskIntoConstraints = false
+        blur.layer.cornerRadius = 18
+        blur.clipsToBounds = true
+        container.addSubview(blur)
+        
+        let title = UILabel()
+        title.text = "Atajos de teclado"
+        title.font = UIFont.systemFont(ofSize: 17, weight: .semibold)
+        
+        let grid = UIStackView()
+        grid.axis = .vertical
+        grid.spacing = 6
+        
+        if commands.isEmpty {
+            let empty = UILabel()
+            empty.text = "No hay atajos en esta pantalla."
+            empty.textColor = .secondaryLabel
+            empty.font = UIFont.systemFont(ofSize: 14)
+            grid.addArrangedSubview(empty)
+        }
+        
+        for command in commands {
+            let keys = UILabel()
+            keys.text = command.keys
+            keys.font = UIFont.monospacedSystemFont(ofSize: 14, weight: .semibold)
+            keys.textAlignment = .right
+            keys.setContentHuggingPriority(.required, for: .horizontal)
+            keys.widthAnchor.constraint(equalToConstant: 96).isActive = true
+            
+            let name = UILabel()
+            name.text = command.title
+            name.font = UIFont.systemFont(ofSize: 14)
+            name.textColor = .label
+            
+            let row = UIStackView(arrangedSubviews: [keys, name])
+            row.axis = .horizontal
+            row.spacing = 14
+            grid.addArrangedSubview(row)
+        }
+        
+        let content = UIStackView(arrangedSubviews: [title, grid])
+        content.axis = .vertical
+        content.spacing = 12
+        content.translatesAutoresizingMaskIntoConstraints = false
+        
+        let scroll = UIScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.showsVerticalScrollIndicator = true
+        scroll.addSubview(content)
+        blur.contentView.addSubview(scroll)
+        
+        window.addSubview(container)
+        
+        let maxHeight = container.heightAnchor.constraint(lessThanOrEqualTo: window.safeAreaLayoutGuide.heightAnchor, multiplier: 0.8)
+        let fitHeight = scroll.heightAnchor.constraint(equalTo: content.heightAnchor)
+        fitHeight.priority = .defaultHigh
+        
+        NSLayoutConstraint.activate([
+            container.centerXAnchor.constraint(equalTo: window.centerXAnchor),
+            container.centerYAnchor.constraint(equalTo: window.centerYAnchor),
+            container.widthAnchor.constraint(lessThanOrEqualTo: window.widthAnchor, constant: -32),
+            container.widthAnchor.constraint(greaterThanOrEqualToConstant: 320),
+            maxHeight,
+            
+            blur.topAnchor.constraint(equalTo: container.topAnchor),
+            blur.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            blur.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            blur.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            
+            scroll.topAnchor.constraint(equalTo: blur.contentView.topAnchor, constant: 20),
+            scroll.bottomAnchor.constraint(equalTo: blur.contentView.bottomAnchor, constant: -20),
+            scroll.leadingAnchor.constraint(equalTo: blur.contentView.leadingAnchor, constant: 24),
+            scroll.trailingAnchor.constraint(equalTo: blur.contentView.trailingAnchor, constant: -24),
+            fitHeight,
+            
+            content.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+            content.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+            content.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
+            content.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor)
+        ])
+        
+        overlay = container
+        UIView.animate(withDuration: 0.2) { container.alpha = 1 }
+    }
+}
+
+// MARK: - Fork: one-time defaults
+
+enum ForkDefaults {
+    /// Editor font size 20 by default; an earlier untouched default of 12 is moved to 20 once.
+    static func apply() {
+        let defaults = UserDefaults.standard
+        let migrationKey = "fork.defaults.fontSize20"
+        guard !defaults.bool(forKey: migrationKey) else { return }
+        if defaults.object(forKey: "LDEFontSize") == nil || defaults.integer(forKey: "LDEFontSize") == 12 {
+            defaults.set(20, forKey: "LDEFontSize")
+        }
+        defaults.set(true, forKey: migrationKey)
     }
 }

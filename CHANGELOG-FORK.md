@@ -4,6 +4,18 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.6.0 — 2026-11-07
+
+- **Shortcut list**: hold **⌘ alone for 2 seconds** to see the keyboard
+  shortcuts of the current screen (read live from the app's key commands, with
+  Spanish names). It closes when ⌘ is released or any other key is pressed.
+  Uses GameController's keyboard input (`KeyboardShortcutsHUD`, ContentView.swift).
+- **Fork version in Settings**: the footer shows "Fork doctoralvarez 1.6.0" under
+  Nyxian's own version. Source of truth: `NYXIAN_FORK_VERSION` in
+  `Config.xcconfig` (→ `NXForkVersion` in Info.plist); bump it with every release.
+- **Editor font size 20 by default** (was 12); the stepper now goes up to 32. An
+  existing setting still at the old default 12 is moved to 20 once.
+
 ## 1.5.0 — 2026-11-07
 
 ### Code completion phase 2: Swift

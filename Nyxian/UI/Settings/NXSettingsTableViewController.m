@@ -20,6 +20,13 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): the footer also shows the fork version
+    (NXForkVersion in Info.plist, from NYXIAN_FORK_VERSION in Config.xcconfig).
+*/
+
 #import <UI/Settings/NXSettingsTableViewController.h>
 #import <Nyxian-Swift.h>
 
@@ -121,7 +128,14 @@
     if([self numberOfSectionsInTableView:self.tableView] == (section + 1))
     {
         NSBundle *bundle = [NSBundle mainBundle];
-        return [NSString stringWithFormat:@"%@ %@ \"Scriptura\" Beta (%@)", [bundle objectForInfoDictionaryKey:@"CFBundleName"]?: @"Nyxian", [bundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"]?: @"Unknown", [bundle objectForInfoDictionaryKey:@"CFBundleVersion"]?: @"Unknown"];
+        NSString *version = [NSString stringWithFormat:@"%@ %@ \"Scriptura\" Beta (%@)", [bundle objectForInfoDictionaryKey:@"CFBundleName"]?: @"Nyxian", [bundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"]?: @"Unknown", [bundle objectForInfoDictionaryKey:@"CFBundleVersion"]?: @"Unknown"];
+        /* fork: which build of doctoralvarez/Nyxian is installed */
+        NSString *forkVersion = [bundle objectForInfoDictionaryKey:@"NXForkVersion"];
+        if(forkVersion.length > 0 && ![forkVersion hasPrefix:@"$("])
+        {
+            version = [version stringByAppendingFormat:@"\nFork doctoralvarez %@", forkVersion];
+        }
+        return version;
     }
     return nil;
 }

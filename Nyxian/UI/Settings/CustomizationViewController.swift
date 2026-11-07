@@ -20,6 +20,13 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): editor font size defaults to 20 (was 12); the
+    stepper now goes up to 32.
+*/
+
 import UIKit
 import Runestone
 
@@ -125,7 +132,7 @@ int main(void)
                     RevertUI()
                 }
             } else if indexPath.row == 2 {
-                cell = StepperTableCell(title: "Font Size", key: "LDEFontSize", defaultValue: 12, minValue: 6, maxValue: 20)
+                cell = StepperTableCell(title: "Font Size", key: "LDEFontSize", defaultValue: 20, minValue: 6, maxValue: 32)
                 (cell as! StepperTableCell).callback = { newValue in
                     self.themePreviewCell!.switchTheme(theme: LDEThemeReader.shared.currentlySelectedTheme())
                 }

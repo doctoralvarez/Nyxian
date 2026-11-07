@@ -20,6 +20,12 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): editor font size defaults to 20 (was 12).
+*/
+
 import UIKit
 import Runestone
 
@@ -162,7 +168,7 @@ func ldeThemeColorGen(colorEntry: Any) -> UIColor {
     @objc static var currentTheme: LDETheme? = nil
     
     @objc var fontSize: CGFloat {
-        return UserDefaults.standard.object(forKey: "LDEFontSize") == nil ? 12.0 : CGFloat(UserDefaults.standard.integer(forKey: "LDEFontSize"))
+        return UserDefaults.standard.object(forKey: "LDEFontSize") == nil ? 20.0 : CGFloat(UserDefaults.standard.integer(forKey: "LDEFontSize"))
     }
     
     @objc var font: UIFont {
