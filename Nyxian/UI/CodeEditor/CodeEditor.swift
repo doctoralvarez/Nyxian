@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.5.0
+ Fork doctoralvarez/Nyxian — version 1.6.0
  Changelog:
+  - 1.6.0 (2026-11-07): Fix-its — ⌥⌘↩ (or the wrench button) applies the
+    compiler's fix for the caret's line, ⌃⌥⌘F applies every fix in the file;
+    the file is re-checked first so positions match the current text.
   - 1.5.0 (2026-11-07): parameter help bubble while typing a call (after "("
     and ","; ⌃⇧Space shows it, Esc hides it) with the current argument in
     bold; documentation of the selected suggestion under the list.
@@ -528,6 +531,13 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             items.append(spawnSeparator())
         }
         
+        /* fork: apply the compiler's fix on the caret's line */
+        let fixBarButton = UIBarButtonItem(customView: SymbolButton(symbolName: "wrench.adjustable", width: 35.0) { [weak self] in
+            self?.fixIssueOnCurrentLine()
+        })
+        items.append(fixBarButton)
+        items.append(spawnSeparator())
+        
         /* fork: find & replace for touch users (no hardware keyboard) */
         let findBarButton = UIBarButtonItem(customView: SymbolButton(symbolName: "magnifyingglass", width: 35.0) { [weak self] in
             self?.showFindAndReplace()
@@ -764,7 +774,9 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
                 command("Move Line Up", #selector(moveLinesUp), UIKeyCommand.inputUpArrow, [.command, .alternate]),
                 command("Move Line Down", #selector(moveLinesDown), UIKeyCommand.inputDownArrow, [.command, .alternate]),
                 command("Rename Symbol", #selector(promptRenameSymbol), "e", [.command, .control]),
-                command("Show Signature", #selector(signatureHelpShow), " ", [.control, .shift])
+                command("Show Signature", #selector(signatureHelpShow), " ", [.control, .shift]),
+                command("Fix Issue", #selector(fixIssueOnCurrentLine), "\r", [.command, .alternate]),
+                command("Fix All Issues", #selector(fixAllIssues), "f", [.command, .alternate, .control])
             ])
             if self.file.isClang || self.file.isSwift {
                 commands.append(command("Format Document", #selector(formatDocument), "i", [.control]))
@@ -2165,5 +2177,177 @@ extension CodeEditorViewController {
     
     @objc func signatureHelpDismiss() {
         self.signatureHelp?.hide()
+    }
+}
+
+// MARK: - Fork: fix-its
+
+/// One compiler-suggested fix: where the issue is and the edits that resolve it.
+struct EditorFixIt {
+    struct Edit {
+        let startLine: Int
+        let startColumn: Int
+        let endLine: Int
+        let endColumn: Int
+        let text: String
+    }
+    let line: Int
+    let message: String
+    let edits: [Edit]
+    
+    init?(_ raw: [String: Any]) {
+        guard let line = (raw["line"] as? NSNumber)?.intValue,
+              let rawEdits = raw["edits"] as? [[String: Any]] else { return nil }
+        self.line = line
+        self.message = (raw["message"] as? String) ?? "Fix"
+        self.edits = rawEdits.compactMap { edit in
+            guard let startLine = (edit["startLine"] as? NSNumber)?.intValue,
+                  let startColumn = (edit["startColumn"] as? NSNumber)?.intValue,
+                  let endLine = (edit["endLine"] as? NSNumber)?.intValue,
+                  let endColumn = (edit["endColumn"] as? NSNumber)?.intValue else { return nil }
+            return Edit(startLine: startLine, startColumn: startColumn, endLine: endLine, endColumn: endColumn, text: (edit["text"] as? String) ?? "")
+        }
+        if self.edits.isEmpty { return nil }
+    }
+}
+
+enum FixItApplier {
+    /// UTF-16 offset of a 1-based line and UTF-8 byte column.
+    static func utf16Offset(in text: String, line: Int, column: Int) -> Int? {
+        let bytes = Array(text.utf8)
+        var currentLine = 1
+        var index = 0
+        while currentLine < line {
+            guard let newline = bytes[index...].firstIndex(of: 0x0A) else { return nil }
+            index = newline + 1
+            currentLine += 1
+        }
+        let byte = index + max(column, 1) - 1
+        guard byte <= bytes.count else { return nil }
+        let utf8Index = text.utf8.index(text.utf8.startIndex, offsetBy: byte)
+        guard let position = utf8Index.samePosition(in: text.utf16) else { return nil }
+        return text.utf16.distance(from: text.utf16.startIndex, to: position)
+    }
+    
+    /// Applies the edits of several fixes to `text`, back to front, skipping overlaps.
+    static func apply(_ fixes: [EditorFixIt], to text: String) -> String? {
+        var ranges: [(range: NSRange, text: String)] = []
+        for fix in fixes {
+            for edit in fix.edits {
+                guard let start = utf16Offset(in: text, line: edit.startLine, column: edit.startColumn),
+                      let end = utf16Offset(in: text, line: edit.endLine, column: edit.endColumn),
+                      end >= start else { continue }
+                ranges.append((NSRange(location: start, length: end - start), edit.text))
+            }
+        }
+        guard !ranges.isEmpty else { return nil }
+        
+        ranges.sort { $0.range.location > $1.range.location }
+        let result = NSMutableString(string: text)
+        var lowestApplied = Int.max
+        for item in ranges {
+            /* a later (already applied) edit starting before this one ends would overlap */
+            guard item.range.location + item.range.length <= lowestApplied else { continue }
+            result.replaceCharacters(in: item.range, with: item.text)
+            lowestApplied = item.range.location
+        }
+        return result as String
+    }
+}
+
+extension CodeEditorViewController {
+    /// Re-checks the current text, then hands the fresh fixes to `completion` on the main queue.
+    private func fetchFreshFixIts(_ completion: @escaping ([EditorFixIt]) -> Void) {
+        guard let server = self.languageServer else {
+            completion([])
+            return
+        }
+        let text = self.textView.text
+        let isSwift = self.file.isSwift
+        let flags: [String] = self.isReadOnly ? (NXProjectConfig.sdkCompilerFlags() ?? []) : (self.project?.projectConfig.compilerFlags ?? [])
+        let swiftFlags: [String] = self.project?.projectConfig.swiftFlags ?? []
+        let projectPath = self.project?.url.path
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            if isSwift {
+                let swiftFiles: [String] = LDEFilesFinder(projectPath, ["swift"], ["Resources", "Config"])
+                server.reparseFile(text, withArgs: swiftFlags + swiftFiles)
+            } else {
+                server.reparseFile(text, withArgs: flags)
+            }
+            let fixes = server.getFixIts().compactMap { EditorFixIt($0) }
+            DispatchQueue.main.async {
+                completion(fixes)
+            }
+        }
+    }
+    
+    private func currentLineNumber() -> Int {
+        let text = self.textView.text as NSString
+        let caret = min(self.textView.selectedRange.location, text.length)
+        return text.substring(to: caret).utf16.reduce(1) { $1 == 0x0A ? $0 + 1 : $0 }
+    }
+    
+    private func applyFixes(_ fixes: [EditorFixIt]) {
+        let original = self.textView.text
+        guard let fixed = FixItApplier.apply(fixes, to: original) else { return }
+        self.replaceWholeText(fixed)
+    }
+    
+    private func showFixMessage(_ title: String, _ message: String?) {
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        self.present(alert, animated: true)
+    }
+    
+    @objc func fixIssueOnCurrentLine() {
+        guard !self.isReadOnly, self.languageServer != nil else { return }
+        let line = currentLineNumber()
+        fetchFreshFixIts { [weak self] fixes in
+            guard let self = self else { return }
+            let onLine = fixes.filter { $0.line == line }
+            guard !onLine.isEmpty else {
+                self.showFixMessage("No Fix Available", "The compiler has no suggested fix for line \(line).")
+                return
+            }
+            if onLine.count == 1 {
+                self.applyFixes(onLine)
+                return
+            }
+            let sheet = UIAlertController(title: "Fix Line \(line)", message: nil, preferredStyle: .actionSheet)
+            for fix in onLine {
+                sheet.addAction(UIAlertAction(title: fix.message, style: .default) { [weak self] _ in
+                    self?.applyFixes([fix])
+                })
+            }
+            sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            if let popover = sheet.popoverPresentationController {
+                popover.sourceView = self.view
+                popover.sourceRect = CGRect(x: self.view.bounds.midX, y: self.view.bounds.midY, width: 0, height: 0)
+                popover.permittedArrowDirections = []
+            }
+            self.present(sheet, animated: true)
+        }
+    }
+    
+    @objc func fixAllIssues() {
+        guard !self.isReadOnly, self.languageServer != nil else { return }
+        fetchFreshFixIts { [weak self] fixes in
+            guard let self = self else { return }
+            guard !fixes.isEmpty else {
+                self.showFixMessage("No Fixes Available", "The compiler has no suggested fixes for this file.")
+                return
+            }
+            let alert = UIAlertController(
+                title: "Apply \(fixes.count) Fix\(fixes.count == 1 ? "" : "es")?",
+                message: fixes.prefix(6).map { "• Line \($0.line): \($0.message)" }.joined(separator: "\n") + (fixes.count > 6 ? "\n…" : ""),
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            alert.addAction(UIAlertAction(title: "Apply", style: .default) { [weak self] _ in
+                self?.applyFixes(fixes)
+            })
+            self.present(alert, animated: true)
+        }
     }
 }

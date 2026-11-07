@@ -23,8 +23,9 @@
  */
 
 /*
- * Fork doctoralvarez/Nyxian — version 1.3.0
+ * Fork doctoralvarez/Nyxian — version 1.4.0
  * Changelog:
+ *  - 1.4.0 (2026-11-07): CCASTUnitCopyFixIts.
  *  - 1.3.0 (2026-11-07): CCASTUnitCopySignatureHelpAtLocation; completion
  *    dictionaries carry "doc".
  *  - 1.2.0 (2026-11-07): CCCopyFormattedSource (clang-format).
@@ -90,6 +91,15 @@ CC_EXPORT CFArrayRef CCASTUnitCopyCompletionsAtLocation(CCASTUnitRef unit, CCSou
  * (CFNumber, number of overloads). NULL when there is no call.
  */
 CC_EXPORT CFDictionaryRef CCASTUnitCopySignatureHelpAtLocation(CCASTUnitRef unit, CCSourceLocation location);
+
+/*
+ * fork doctoralvarez/Nyxian: the compiler's suggested fixes for the edited file,
+ * from the last parse. Array of dictionaries: "line", "column" (CFNumber, where
+ * the issue is), "message" (CFString), "edits" (CFArray of "startLine",
+ * "startColumn", "endLine", "endColumn" — 1-based, UTF-8 byte columns, end
+ * exclusive — and "text", the replacement).
+ */
+CC_EXPORT CFArrayRef CCASTUnitCopyFixIts(CCASTUnitRef unit);
 
 /* fork doctoralvarez/Nyxian: clang-format a C/Objective-C/C++ source (language guessed from fileName); NULL on failure */
 CC_EXPORT CFStringRef CCCopyFormattedSource(CFStringRef source, CFStringRef fileName);

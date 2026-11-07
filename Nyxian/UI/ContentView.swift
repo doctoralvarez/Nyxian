@@ -1030,7 +1030,9 @@ final class KeyboardShortcutsHUD {
         "Format Document": "Formatear código",
         "Rename Symbol": "Renombrar símbolo",
         "Show Signature": "Ver parámetros",
-        "Dismiss Parameter Help": "Cerrar ayuda de parámetros"
+        "Dismiss Parameter Help": "Cerrar ayuda de parámetros",
+        "Fix Issue": "Arreglar la línea",
+        "Fix All Issues": "Arreglar todo el archivo"
     ]
     
     func start() {

@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-07): -getFixIts.
   - 1.2.0 (2026-11-07): -signatureHelpAtLine:utf8Column:content:.
   - 1.1.0 (2026-11-07): completions for Swift files too (phase 2).
   - 1.0.0 (2026-11-07): -completionsAtLine:utf8Column:content: for the
@@ -201,6 +202,14 @@
     os_unfair_lock_unlock(&_lock);
     
     return help;
+}
+
+- (NSArray<NSDictionary<NSString*,id>*>*)getFixIts
+{
+    os_unfair_lock_lock(&_lock);
+    NSArray<NSDictionary<NSString*,id>*> *fixIts = (_unit != nil) ? [_unit fixIts] : @[];
+    os_unfair_lock_unlock(&_lock);
+    return fixIts;
 }
 
 - (MDKFileSourceLocation*)getDefinitionAtLocation:(MDKSourceLocation)location

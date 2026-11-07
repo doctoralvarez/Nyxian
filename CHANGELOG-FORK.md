@@ -4,6 +4,17 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.9.0 — 2026-11-07
+
+- **Fix-its**: **⌥⌘↩** (or the new wrench button in the editor toolbar) applies
+  the compiler's suggested fix for the caret's line (a list when there are
+  several); **⌃⌥⌘F** applies every fix in the file after a confirmation. The file
+  is re-checked first so the positions match what is on screen; the result is
+  a single undoable edit.
+- Fixes come from Clang's stored diagnostics and from Swift's
+  `DiagnosticInfo::FixIts` (`CCASTUnitCopyFixIts`, `-[MDKASTUnit fixIts]`,
+  `-[NXLanguageServer getFixIts]`).
+
 ## 1.8.0 — 2026-11-07
 
 - **Parameter help**: typing `(` or `,` in a call shows a bubble above the caret

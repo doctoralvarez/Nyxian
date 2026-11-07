@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-07): -getFixIts.
   - 1.2.0 (2026-11-07): -signatureHelpAtLine:utf8Column:content:.
   - 1.1.0 (2026-11-07): completions for Swift files too (phase 2).
   - 1.0.0 (2026-11-07): -completionsAtLine:utf8Column:content: for the
@@ -51,6 +52,9 @@
 
 /* fork: code completion at a 1-based line and UTF-8 byte column of `content` (Clang and Swift files); nil when the file has not been parsed yet */
 - (NSArray<NSDictionary<NSString*,id>*>*)completionsAtLine:(NSInteger)line utf8Column:(NSInteger)column content:(NSString*)content NS_SWIFT_NAME(completions(line:utf8Column:content:));
+
+/* fork: suggested fixes from the last parse (call -reparseFile:withArgs: first for fresh positions) */
+- (NSArray<NSDictionary<NSString*,id>*>*)getFixIts;
 
 /* fork: parameter help for the call around the position; nil outside a call or before the first parse */
 - (NSDictionary<NSString*,id>*)signatureHelpAtLine:(NSInteger)line utf8Column:(NSInteger)column content:(NSString*)content NS_SWIFT_NAME(signatureHelp(line:utf8Column:content:));

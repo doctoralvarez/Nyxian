@@ -23,8 +23,10 @@
  */
 
 /*
- * Fork doctoralvarez/Nyxian — version 1.3.0
+ * Fork doctoralvarez/Nyxian — version 1.4.0
  * Changelog:
+ *  - 1.4.0 (2026-11-07): fix-its kept from Swift (DiagnosticInfo::FixIts)
+ *    and read from Clang's stored diagnostics; CCASTUnitCopyFixIts.
  *  - 1.3.0 (2026-11-07): brief documentation in completion results (Clang
  *    and Swift); CCASTUnitCopySignatureHelpAtLocation (Clang overloads,
  *    Swift IDEInspectionInstance::signatureHelp); shared request helpers.
@@ -57,6 +59,7 @@
 #include <clang/Sema/CodeCompleteConsumer.h>
 #include <clang/Frontend/FrontendActions.h>
 #include <clang/Format/Format.h>
+#include <clang/Lex/Lexer.h>
 #include <clang/Tooling/Core/Replacement.h>
 #include <swift/IDETool/IDEInspectionInstance.h>
 #include <swift/IDE/CancellableResult.h>
@@ -76,12 +79,20 @@
 using namespace clang;
 using namespace clang::driver;
 
+/* fork: one edit of a fix-it, 1-based lines and UTF-8 byte columns, end exclusive */
+struct CapturedFixIt {
+    unsigned startLine = 0, startColumn = 0;
+    unsigned endLine = 0, endColumn = 0;
+    std::string text;
+};
+
 struct CapturedDiag {
     swift::DiagID id;
     swift::DiagnosticKind kind;
     std::string message;
     std::string file;
     unsigned line = 0, column = 0;
+    std::vector<CapturedFixIt> fixIts; /* fork */
 };
 
 class CapturingConsumer : public swift::DiagnosticConsumer {
@@ -108,6 +119,33 @@ public:
             d.line = lc.first;
             d.column = lc.second;
             d.file = SM.getDisplayNameForLoc(Info.Loc).str();
+        }
+        
+        /* fork: keep the compiler's suggested edits */
+        for(const swift::DiagnosticInfo::FixIt &fix : Info.FixIts)
+        {
+            const swift::CharSourceRange &range = fix.getRange();
+            if(!range.getStart().isValid())
+            {
+                continue;
+            }
+            CapturedFixIt edit;
+            auto start = SM.getPresumedLineAndColumnForLoc(range.getStart());
+            edit.startLine = start.first;
+            edit.startColumn = start.second;
+            if(range.getByteLength() > 0 && range.getEnd().isValid())
+            {
+                auto end = SM.getPresumedLineAndColumnForLoc(range.getEnd());
+                edit.endLine = end.first;
+                edit.endColumn = end.second;
+            }
+            else
+            {
+                edit.endLine = edit.startLine;
+                edit.endColumn = edit.startColumn;
+            }
+            edit.text = fix.getText().str();
+            d.fixIts.push_back(std::move(edit));
         }
         diags.push_back(std::move(d));
     }
@@ -1906,6 +1944,146 @@ static CFDictionaryRef _CCASTUnitCopySwiftSignatureHelp(CCASTUnitRef unit, CCSou
         return nullptr;
     }
     return CCCreateSignatureDictionary(text, doc, activeStart, activeLength, count);
+}
+
+#pragma mark - fork: fix-its
+
+static CFDictionaryRef CCCreateFixItDictionary(unsigned line, unsigned column, const std::string &message, const std::vector<CapturedFixIt> &edits)
+{
+    CFMutableDictionaryRef dict = CFDictionaryCreateMutable(kCFAllocatorDefault, 4, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFMutableArrayRef editArray = CFArrayCreateMutable(kCFAllocatorDefault, (CFIndex)edits.size(), &kCFTypeArrayCallBacks);
+    if(dict == nullptr || editArray == nullptr)
+    {
+        if(dict) CFRelease(dict);
+        if(editArray) CFRelease(editArray);
+        return nullptr;
+    }
+    CCDictionarySetNumber(dict, CFSTR("line"), (long)line);
+    CCDictionarySetNumber(dict, CFSTR("column"), (long)column);
+    CCDictionarySetString(dict, CFSTR("message"), message);
+    for(const CapturedFixIt &edit : edits)
+    {
+        CFMutableDictionaryRef e = CFDictionaryCreateMutable(kCFAllocatorDefault, 5, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        if(e == nullptr)
+        {
+            continue;
+        }
+        CCDictionarySetNumber(e, CFSTR("startLine"), (long)edit.startLine);
+        CCDictionarySetNumber(e, CFSTR("startColumn"), (long)edit.startColumn);
+        CCDictionarySetNumber(e, CFSTR("endLine"), (long)edit.endLine);
+        CCDictionarySetNumber(e, CFSTR("endColumn"), (long)edit.endColumn);
+        CFStringRef text = CCCreateCFString(edit.text);
+        if(text != nullptr)
+        {
+            CFDictionarySetValue(e, CFSTR("text"), text);
+            CFRelease(text);
+        }
+        CFArrayAppendValue(editArray, e);
+        CFRelease(e);
+    }
+    CFDictionarySetValue(dict, CFSTR("edits"), editArray);
+    CFRelease(editArray);
+    return dict;
+}
+
+CFArrayRef CCASTUnitCopyFixIts(CCASTUnitRef unit)
+{
+    if(unit == nullptr || unit->file == nullptr)
+    {
+        return nullptr;
+    }
+    
+    char primaryPath[PATH_MAX];
+    if(!CFURLGetFileSystemRepresentation(CCFileGetFileURL(unit->file), true, (UInt8 *)primaryPath, sizeof(primaryPath)))
+    {
+        return nullptr;
+    }
+    
+    CFMutableArrayRef array = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
+    if(array == nullptr)
+    {
+        return nullptr;
+    }
+    
+    if(unit->type == kCCASTUnitTypeSwift)
+    {
+        for(const CapturedDiag &d : unit->consumer.diags)
+        {
+            if(d.fixIts.empty() || d.file != primaryPath)
+            {
+                continue;
+            }
+            CFDictionaryRef dict = CCCreateFixItDictionary(d.line, d.column, d.message, d.fixIts);
+            if(dict != nullptr)
+            {
+                CFArrayAppendValue(array, dict);
+                CFRelease(dict);
+            }
+        }
+        return array;
+    }
+    
+    if(unit->unit == nullptr)
+    {
+        return array;
+    }
+    
+    const clang::SourceManager &SM = unit->unit->getSourceManager();
+    const clang::LangOptions &langOpts = unit->unit->getLangOpts();
+    for(auto it = unit->unit->stored_diag_begin(); it != unit->unit->stored_diag_end(); ++it)
+    {
+        const StoredDiagnostic &diag = *it;
+        if(diag.getFixIts().empty() || !diag.getLocation().isValid())
+        {
+            continue;
+        }
+        clang::PresumedLoc loc = SM.getPresumedLoc(diag.getLocation());
+        if(!loc.isValid() || strncmp(loc.getFilename(), primaryPath, PATH_MAX) != 0)
+        {
+            continue;
+        }
+        
+        std::vector<CapturedFixIt> edits;
+        for(const clang::FixItHint &hint : diag.getFixIts())
+        {
+            clang::CharSourceRange range = hint.RemoveRange;
+            if(!range.getBegin().isValid())
+            {
+                continue;
+            }
+            clang::SourceLocation endLoc = range.getEnd();
+            if(range.isTokenRange() && endLoc.isValid())
+            {
+                /* a token range ends at the start of its last token */
+                endLoc = clang::Lexer::getLocForEndOfToken(endLoc, 0, SM, langOpts);
+            }
+            clang::PresumedLoc begin = SM.getPresumedLoc(range.getBegin());
+            clang::PresumedLoc end = endLoc.isValid() ? SM.getPresumedLoc(endLoc) : begin;
+            if(!begin.isValid() || !end.isValid())
+            {
+                continue;
+            }
+            CapturedFixIt edit;
+            edit.startLine = begin.getLine();
+            edit.startColumn = begin.getColumn();
+            edit.endLine = end.getLine();
+            edit.endColumn = end.getColumn();
+            edit.text = hint.CodeToInsert;
+            edits.push_back(std::move(edit));
+        }
+        if(edits.empty())
+        {
+            continue;
+        }
+        
+        CFDictionaryRef dict = CCCreateFixItDictionary(loc.getLine(), loc.getColumn(), diag.getMessage().str(), edits);
+        if(dict != nullptr)
+        {
+            CFArrayAppendValue(array, dict);
+            CFRelease(dict);
+        }
+    }
+    return array;
 }
 
 #pragma mark - fork: clang-format
