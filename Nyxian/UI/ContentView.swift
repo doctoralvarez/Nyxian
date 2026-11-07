@@ -21,8 +21,16 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.2
+ Fork doctoralvarez/Nyxian — version 1.5.0
  Changelog:
+  - 1.5.0 (2026-11-07): app icons — the importer turns the package's AppIcon
+    into a real icon (CFBundleIcons + PNGs in Resources), "Set App Icon…" for
+    any project, and the exporter writes an AppIcon.appiconset
+    (appIcon: .asset("AppIcon")). Permissions — capabilities with a
+    purposeString become Info.plist usage descriptions on import and go back
+    to capabilities on export (the original block is reused when there is
+    one). "Update from .swiftpm…" re-imports a package into an existing
+    project (ForkProjectPicker).
   - 1.4.2 (2026-11-07): exported Package.swift failed in Swift Playgrounds
     ("PlaceholderIcon has no member 'gear'"); the default icon is now .leaf.
     The importer keeps the original manifest in Config/SwiftPlaygrounds-
@@ -51,9 +59,12 @@ import Foundation
 import SwiftUI
 import UIKit
 import GameController
+import UniformTypeIdentifiers
 
 @objc class ContentViewController: NXUITableViewController, UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate {
     var sessionIndex: IndexPath? = nil
+    /* fork: what the next document picker result is for */
+    var forkPickPurpose: ForkProjectPicker.Purpose = .importProject
     var projectsList: [String:[NXProject]] = [:]
     
     @objc init() {
@@ -141,6 +152,7 @@ import GameController
     }
 
     @objc private func presentImportPicker() {
+        forkPickPurpose = .importProject
         /* fork: also Swift Playgrounds app packages (.swiftpm folders) */
         let documentPicker = UIDocumentPickerViewController(forOpeningContentTypes: [.zip, .folder, .package], asCopy: true)
         documentPicker.delegate = self
@@ -335,7 +347,7 @@ import GameController
         let cell: ProjectTableCell = self.tableView.dequeueReusableCell(withIdentifier: ProjectTableCell.reuseIdentifier) as! ProjectTableCell
         let icon: UIImage? = {
             switch project.projectConfig.schemeKind {
-            case .app: return nil
+            case .app: return ForkAppIcon.sourceImage(of: project) /* fork: the project's own icon, if it has one */
             case .kSurfaceKext: return UIImage(systemName: "puzzlepiece.extension.fill")
             default: return UIImage(named: "UtilityIcon")
             }
@@ -458,11 +470,28 @@ import GameController
                 }
             }
             
-            return UIMenu(children: [export, exportSwiftPM, item])
+            /* fork */
+            let updateSwiftPM: UIAction = UIAction(title: "Update from .swiftpm…", image: UIImage(systemName: "arrow.triangle.2.circlepath")) { _ in
+                guard let project = self.forkProject(at: indexPath) else { return }
+                self.forkPresentPicker(.updateFromSwiftPM(project))
+            }
+            let setIcon: UIAction = UIAction(title: "Set App Icon…", image: UIImage(systemName: "app.badge")) { _ in
+                guard let project = self.forkProject(at: indexPath) else { return }
+                self.forkPresentPicker(.appIcon(project))
+            }
+            
+            return UIMenu(children: [export, exportSwiftPM, updateSwiftPM, setIcon, item])
         }
     }
     
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        /* fork: the picker may have been opened for an update or an icon */
+        let purpose = forkPickPurpose
+        forkPickPurpose = .importProject
+        if case .importProject = purpose {} else {
+            if let url = urls.first { forkHandlePicked(url, for: purpose) }
+            return
+        }
         do {
             guard let selectedURL = urls.first else { return }
             
@@ -839,7 +868,7 @@ enum SwiftPlaygroundsImporter {
         return nil
     }
     
-    static func importPackage(at packageURL: URL, intoProjectsAt projectsURL: URL) throws -> Result {
+    static func importPackage(at packageURL: URL, intoProjectsAt projectsURL: URL, updating existing: NXProject? = nil) throws -> Result {
         let fm = FileManager.default
         guard let root = packageRoot(in: packageURL) else { throw ImportError.notAPackage }
         
@@ -909,8 +938,8 @@ enum SwiftPlaygroundsImporter {
             warnings.append("The code uses Bundle.module, which only exists in Swift packages. Replace it with Bundle.main.")
         }
         
-        /* a regular SwiftUI app project to fill */
-        guard let project = NXProject.createProject(
+        /* a regular SwiftUI app project to fill (or the project being updated) */
+        guard let project = existing ?? NXProject.createProject(
             at: projectsURL,
             withName: executableName,
             withOrganizationIdentifier: organizationPrefix(of: bundleIdentifier),
@@ -922,7 +951,7 @@ enum SwiftPlaygroundsImporter {
         }
         
         do {
-            /* the template's own Swift files would clash with the imported @main app */
+            /* the template's own Swift files (or the previous version's) would clash with the imported @main app */
             for templateFile in ProjectFileIndex.files(in: project.url) where templateFile.pathExtension == "swift" {
                 try? fm.removeItem(at: templateFile)
             }
@@ -937,27 +966,66 @@ enum SwiftPlaygroundsImporter {
                 resourceCount += 1
             }
             
+            /* the app icon, as loose PNGs the system can read without actool */
+            var iconImported = false
+            for catalog in assetCatalogs where !iconImported {
+                if let iconSet = appIconSet(in: catalog), let image = largestImage(in: iconSet) {
+                    iconImported = (try? ForkAppIcon.install(image, in: project)) != nil
+                }
+            }
+            
             for catalog in assetCatalogs {
                 let converted = convertAssetCatalogImages(catalog, into: project.resourcesURL)
                 resourceCount += converted.images
                 if converted.skipped > 0 {
-                    warnings.append("\(catalog.lastPathComponent): \(converted.skipped) item(s) such as colors, the app icon or symbol images were not converted, because asset catalogs cannot be compiled on the device. Images were copied as plain files, so Image(\"name\") should still find them.")
+                    warnings.append("\(catalog.lastPathComponent): \(converted.skipped) item(s) such as colors or symbol images were not converted, because asset catalogs cannot be compiled on the device. Images were copied as plain files, so Image(\"name\") should still find them.")
                 }
             }
             
             updateProjectConfig(project, displayName: displayName, displayVersion: displayVersion, bundleVersion: bundleVersion)
+            let permissions = ForkCapabilities.usageDescriptions(fromManifest: manifest)
+            if !permissions.mapped.isEmpty {
+                ForkCapabilities.mergeIntoBundleInfo(permissions.mapped, project: project)
+            }
+            if !permissions.unmapped.isEmpty {
+                warnings.append("These capabilities have no Info.plist equivalent here and were not carried over: " + permissions.unmapped.joined(separator: ", ") + ".")
+            }
             /* kept so an export back to .swiftpm can reuse its icon and accent color */
             try? manifest.write(to: project.url.appendingPathComponent("Config/\(SwiftPlaygroundsExporter.originalManifestName)"), atomically: true, encoding: .utf8)
             _ = project.reload()
             
             return Result(project: project, swiftFileCount: swiftFiles.count, resourceCount: resourceCount, warnings: warnings)
         } catch {
-            project.remove()
+            if existing == nil { project.remove() }
             throw error
         }
     }
     
     // MARK: helpers
+    
+    private static func appIconSet(in catalog: URL) -> URL? {
+        guard let enumerator = FileManager.default.enumerator(at: catalog, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return nil }
+        for case let url as URL in enumerator where url.pathExtension == "appiconset" {
+            return url
+        }
+        return nil
+    }
+    
+    /// The biggest light-mode image of an icon set (single-size 1024 sets and legacy multi-size sets).
+    private static func largestImage(in iconSet: URL) -> UIImage? {
+        guard let data = try? Data(contentsOf: iconSet.appendingPathComponent("Contents.json")),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entries = json["images"] as? [[String: Any]] else { return nil }
+        var best: UIImage?
+        for entry in entries {
+            guard let filename = entry["filename"] as? String, entry["appearances"] == nil,
+                  let image = UIImage(contentsOfFile: iconSet.appendingPathComponent(filename).path) else { continue }
+            if best == nil || image.size.width * image.scale > best!.size.width * best!.scale {
+                best = image
+            }
+        }
+        return best
+    }
     
     private static func copy(_ source: URL, to destination: URL) throws {
         let fm = FileManager.default
@@ -979,6 +1047,8 @@ enum SwiftPlaygroundsImporter {
             let ext = url.pathExtension
             guard ["imageset", "colorset", "appiconset", "symbolset", "dataset"].contains(ext) else { continue }
             enumerator.skipDescendants()
+            /* fork: the app icon is handled by ForkAppIcon */
+            if ext == "appiconset" { continue }
             
             guard ext == "imageset" else {
                 skipped += 1
@@ -1159,6 +1229,9 @@ enum SwiftPlaygroundsExporter {
                     }
                 } else if cFamilyExtensions.contains(ext) {
                     skippedCFamily += 1
+                } else if imageExtensions.contains(ext) && ForkAppIcon.isGeneratedIconFile(url.lastPathComponent) {
+                    /* the PNGs made by ForkAppIcon come back as an app icon set below */
+                    continue
                 } else if imageExtensions.contains(ext) {
                     /* loose images become an asset catalog, so Image("name") keeps working */
                     var base = url.deletingPathExtension().lastPathComponent
@@ -1221,7 +1294,13 @@ enum SwiftPlaygroundsExporter {
         /* manifest; icon and accent color come from the original package when there was one */
         let hasResources = resourceCount > 0
         let original = (try? String(contentsOf: root.appendingPathComponent("Config/\(originalManifestName)"), encoding: .utf8)) ?? ""
-        let appIcon = firstMatch(in: original, pattern: #"\.placeholder\s*\(\s*icon\s*:\s*\.[A-Za-z]+\s*\)"#) ?? ".placeholder(icon: .leaf)"
+        var appIcon = firstMatch(in: original, pattern: #"\.placeholder\s*\(\s*icon\s*:\s*\.[A-Za-z]+\s*\)"#) ?? ".placeholder(icon: .leaf)"
+        if let iconImage = ForkAppIcon.sourceImage(of: project) {
+            try ForkAppIcon.writeAppIconSet(iconImage, into: package.appendingPathComponent("Assets.xcassets"))
+            appIcon = ".asset(\"AppIcon\")"
+        }
+        let info = project.projectConfig.infoDictionary ?? [:]
+        let capabilities = ForkCapabilities.capabilitiesBlock(original: original, info: info)
         let accentColor = firstMatch(in: original, pattern: #"\.presetColor\s*\(\s*\.[A-Za-z]+\s*\)"#) ?? ".presetColor(.blue)"
         try manifest(name: displayName,
                      bundleIdentifier: config.bundleid ?? "com.example.\(packageName)",
@@ -1229,6 +1308,7 @@ enum SwiftPlaygroundsExporter {
                      bundleVersion: bundleVersion,
                      appIcon: appIcon,
                      accentColor: accentColor,
+                     capabilities: capabilities.block,
                      resources: hasResources)
             .write(to: package.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
         
@@ -1242,10 +1322,8 @@ enum SwiftPlaygroundsExporter {
         if hasResources {
             warnings.append("\(resourceCount) non-image resource(s) are in Resources/. In a Swift package they are read with Bundle.module instead of Bundle.main.")
         }
-        let info = project.projectConfig.infoDictionary ?? [:]
-        let usageKeys = info.keys.compactMap { $0 as? String }.filter { $0.hasSuffix("UsageDescription") }.sorted()
-        if !usageKeys.isEmpty {
-            warnings.append("Add these again in Swift Playgrounds > App Settings > Capabilities: " + usageKeys.joined(separator: ", ") + ".")
+        if !capabilities.unmapped.isEmpty {
+            warnings.append("Add these again in Swift Playgrounds > App Settings > Capabilities: " + capabilities.unmapped.joined(separator: ", ") + ".")
         }
         
         return Result(packageURL: package, swiftFileCount: swiftCount, imageCount: imageSetCount, resourceCount: resourceCount, warnings: warnings)
@@ -1274,7 +1352,8 @@ enum SwiftPlaygroundsExporter {
         return String(text[range])
     }
     
-    private static func manifest(name: String, bundleIdentifier: String, displayVersion: String, bundleVersion: String, appIcon: String, accentColor: String, resources: Bool) -> String {
+    private static func manifest(name: String, bundleIdentifier: String, displayVersion: String, bundleVersion: String, appIcon: String, accentColor: String, capabilities: String?, resources: Bool) -> String {
+        let capabilitiesLine = capabilities.map { ",\n                    capabilities: " + $0 } ?? ""
         let resourcesLine = resources ? ",\n            resources: [\n                .process(\"Resources\")\n            ]" : ""
         return """
         // swift-tools-version: 5.9
@@ -1310,7 +1389,7 @@ enum SwiftPlaygroundsExporter {
                         .landscapeRight,
                         .landscapeLeft,
                         .portraitUpsideDown(.when(deviceFamilies: [.pad]))
-                    ]
+                    ]\(capabilitiesLine)
                 )
             ],
             targets: [
@@ -1380,6 +1459,305 @@ extension ContentViewController {
         } catch {
             try? FileManager.default.removeItem(at: temp)
             NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: error.localizedDescription, withDelay: 0.0)
+        }
+    }
+}
+
+// MARK: - Fork: app icon without asset catalogs
+
+/// Icons as loose PNGs + CFBundleIcons (no actool on the device). The 1024 source lives in Config/AppIcon.png.
+enum ForkAppIcon {
+    /// name, pixel size
+    private static let renditions: [(String, CGFloat)] = [
+        ("AppIcon60x60@2x.png", 120),
+        ("AppIcon60x60@3x.png", 180),
+        ("AppIcon76x76@2x~ipad.png", 152),
+        ("AppIcon83.5x83.5@2x~ipad.png", 167)
+    ]
+    
+    static func isGeneratedIconFile(_ name: String) -> Bool {
+        name.hasPrefix("AppIcon60x60") || name.hasPrefix("AppIcon76x76") || name.hasPrefix("AppIcon83.5x83.5")
+    }
+    
+    private static func sourceURL(of project: NXProject) -> URL {
+        let root: URL = project.url
+        return root.appendingPathComponent("Config/AppIcon.png")
+    }
+    
+    static func sourceImage(of project: NXProject) -> UIImage? {
+        UIImage(contentsOfFile: sourceURL(of: project).path)
+    }
+    
+    /// Square, opaque rendition (icons with transparency show black corners).
+    private static func render(_ image: UIImage, pixels: CGFloat) -> Data? {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let size = CGSize(width: pixels, height: pixels)
+        return UIGraphicsImageRenderer(size: size, format: format).pngData { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+    
+    static func install(_ image: UIImage, in project: NXProject) throws {
+        guard let source = render(image, pixels: 1024) else { throw CocoaError(.fileWriteUnknown) }
+        try source.write(to: sourceURL(of: project), options: .atomic)
+        let resources: URL = project.resourcesURL
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        for (name, pixels) in renditions {
+            guard let data = render(image, pixels: pixels) else { continue }
+            try data.write(to: resources.appendingPathComponent(name), options: .atomic)
+        }
+        ForkCapabilities.mergeIntoBundleInfo([
+            "CFBundleIcons": ["CFBundlePrimaryIcon": ["CFBundleIconFiles": ["AppIcon60x60"]]],
+            "CFBundleIcons~ipad": ["CFBundlePrimaryIcon": ["CFBundleIconFiles": ["AppIcon60x60", "AppIcon76x76", "AppIcon83.5x83.5"]]]
+        ], project: project)
+    }
+    
+    /// A single-size (1024) AppIcon.appiconset for a Swift Playgrounds package.
+    static func writeAppIconSet(_ image: UIImage, into catalog: URL) throws {
+        let fm = FileManager.default
+        let set = catalog.appendingPathComponent("AppIcon.appiconset")
+        try fm.createDirectory(at: set, withIntermediateDirectories: true)
+        let catalogInfo = catalog.appendingPathComponent("Contents.json")
+        let info: [String: Any] = ["author": "xcode", "version": 1]
+        if !fm.fileExists(atPath: catalogInfo.path) {
+            try JSONSerialization.data(withJSONObject: ["info": info], options: [.prettyPrinted, .sortedKeys]).write(to: catalogInfo)
+        }
+        guard let png = render(image, pixels: 1024) else { throw CocoaError(.fileWriteUnknown) }
+        try png.write(to: set.appendingPathComponent("AppIcon.png"))
+        let contents: [String: Any] = [
+            "images": [["filename": "AppIcon.png", "idiom": "universal", "platform": "ios", "size": "1024x1024"]],
+            "info": info
+        ]
+        try JSONSerialization.data(withJSONObject: contents, options: [.prettyPrinted, .sortedKeys]).write(to: set.appendingPathComponent("Contents.json"))
+    }
+}
+
+// MARK: - Fork: Swift Playgrounds capabilities <-> Info.plist usage descriptions
+
+enum ForkCapabilities {
+    /// capability name -> Info.plist keys it stands for (first one is the main key)
+    private static let map: [(String, [String])] = [
+        ("camera", ["NSCameraUsageDescription"]),
+        ("microphone", ["NSMicrophoneUsageDescription"]),
+        ("photoLibrary", ["NSPhotoLibraryUsageDescription"]),
+        ("photoLibraryAdd", ["NSPhotoLibraryAddUsageDescription"]),
+        ("locationWhenInUse", ["NSLocationWhenInUseUsageDescription"]),
+        ("locationAlwaysAndWhenInUse", ["NSLocationAlwaysAndWhenInUseUsageDescription"]),
+        ("contacts", ["NSContactsUsageDescription"]),
+        ("calendars", ["NSCalendarsUsageDescription", "NSCalendarsFullAccessUsageDescription"]),
+        ("reminders", ["NSRemindersUsageDescription", "NSRemindersFullAccessUsageDescription"]),
+        ("motion", ["NSMotionUsageDescription"]),
+        ("faceID", ["NSFaceIDUsageDescription"]),
+        ("bluetoothAlways", ["NSBluetoothAlwaysUsageDescription"]),
+        ("speechRecognition", ["NSSpeechRecognitionUsageDescription"]),
+        ("localNetwork", ["NSLocalNetworkUsageDescription"]),
+        ("appleMusic", ["NSAppleMusicUsageDescription"]),
+        ("homeKit", ["NSHomeKitUsageDescription"])
+    ]
+    
+    /// The `[...]` after `capabilities:` in a manifest, brackets included.
+    static func capabilitiesArray(in manifest: String) -> String? {
+        guard let label = manifest.range(of: #"capabilities\s*:\s*\["#, options: .regularExpression) else { return nil }
+        let chars = Array(manifest[manifest.index(before: label.upperBound)...])
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i, c) in chars.enumerated() {
+            if inString {
+                if escaped { escaped = false } else if c == "\\" { escaped = true } else if c == "\"" { inString = false }
+                continue
+            }
+            if c == "\"" { inString = true }
+            else if c == "[" || c == "(" { depth += 1 }
+            else if c == "]" || c == ")" {
+                depth -= 1
+                if depth == 0 { return String(chars[0...i]) }
+            }
+        }
+        return nil
+    }
+    
+    /// Top-level elements of the array, trimmed.
+    private static func elements(of array: String) -> [String] {
+        let inner = Array(array.dropFirst().dropLast())
+        var result: [String] = []
+        var current = ""
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for c in inner {
+            if inString {
+                if escaped { escaped = false } else if c == "\\" { escaped = true } else if c == "\"" { inString = false }
+                current.append(c)
+                continue
+            }
+            if c == "\"" { inString = true }
+            if c == "[" || c == "(" { depth += 1 }
+            if c == "]" || c == ")" { depth -= 1 }
+            if c == "," && depth == 0 {
+                result.append(current.trimmingCharacters(in: .whitespacesAndNewlines))
+                current = ""
+            } else {
+                current.append(c)
+            }
+        }
+        let last = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !last.isEmpty { result.append(last) }
+        return result.filter { !$0.isEmpty }
+    }
+    
+    static func usageDescriptions(fromManifest manifest: String) -> (mapped: [String: Any], unmapped: [String]) {
+        guard let array = capabilitiesArray(in: manifest) else { return ([:], []) }
+        var mapped: [String: Any] = [:]
+        var unmapped: [String] = []
+        for element in elements(of: array) {
+            guard let nameRange = element.range(of: #"^\.\w+"#, options: .regularExpression) else { continue }
+            let name = String(element[nameRange].dropFirst())
+            let purpose = element.range(of: #"purposeString\s*:\s*"((?:[^"\\]|\\.)*)""#, options: .regularExpression).map { range -> String in
+                let match = String(element[range])
+                let start = match.firstIndex(of: "\"")!
+                return String(match[match.index(after: start)..<match.index(before: match.endIndex)])
+                    .replacingOccurrences(of: "\\\"", with: "\"")
+                    .replacingOccurrences(of: "\\\\", with: "\\")
+            }
+            if let keys = map.first(where: { $0.0 == name })?.1, let purpose {
+                for key in keys { mapped[key] = purpose }
+            } else {
+                unmapped.append(name)
+            }
+        }
+        return (mapped, unmapped)
+    }
+    
+    /// The original manifest's capabilities when there was one, otherwise built from the usage descriptions.
+    static func capabilitiesBlock(original: String, info: [AnyHashable: Any]) -> (block: String?, unmapped: [String]) {
+        if let array = capabilitiesArray(in: original) { return (array, []) }
+        var items: [String] = []
+        var unmapped: [String] = []
+        let usage = info.compactMap { (key, value) -> (String, String)? in
+            guard let key = key as? String, key.hasSuffix("UsageDescription"), let value = value as? String else { return nil }
+            return (key, value)
+        }.sorted { $0.0 < $1.0 }
+        for (key, value) in usage {
+            if let entry = map.first(where: { $0.1.first == key }) {
+                let escaped = value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+                items.append(".\(entry.0)(purposeString: \"\(escaped)\")")
+            } else if !map.contains(where: { $0.1.contains(key) }) {
+                unmapped.append(key)
+            }
+        }
+        guard !items.isEmpty else { return (nil, unmapped) }
+        return ("[\n" + items.map { "                        " + $0 }.joined(separator: ",\n") + "\n                    ]", unmapped)
+    }
+    
+    /// Adds keys to NXBundleInfo in Config/Project.plist (the app's Info.plist).
+    static func mergeIntoBundleInfo(_ values: [String: Any], project: NXProject) {
+        let root: URL = project.url
+        let plistURL = root.appendingPathComponent("Config/Project.plist")
+        guard let data = try? Data(contentsOf: plistURL),
+              var plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else { return }
+        var info = plist["NXBundleInfo"] as? [String: Any] ?? [:]
+        for (key, value) in values { info[key] = value }
+        plist["NXBundleInfo"] = info
+        if let output = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) {
+            try? output.write(to: plistURL, options: .atomic)
+        }
+        _ = project.reload()
+    }
+}
+
+// MARK: - Fork: pickers for "Update from .swiftpm…" and "Set App Icon…"
+
+enum ForkProjectPicker {
+    enum Purpose {
+        case importProject
+        case updateFromSwiftPM(NXProject)
+        case appIcon(NXProject)
+    }
+}
+
+extension ContentViewController {
+    func forkPresentPicker(_ purpose: ForkProjectPicker.Purpose) {
+        let types: [UTType]
+        switch purpose {
+        case .importProject:
+            return
+        case .updateFromSwiftPM(let project):
+            /* replacing every Swift file is not undoable, so ask first */
+            let name = project.projectConfig.displayName ?? "the project"
+            presentConfirmationAlert(
+                title: "Update from .swiftpm",
+                message: "All Swift files of \"\(name)\" are replaced by the package's. Resources with the same name are overwritten; Config and the rest stay.",
+                confirmTitle: "Choose Package",
+                confirmStyle: .default)
+            {
+                self.forkPickPurpose = purpose
+                let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.zip, .folder, .package], asCopy: true)
+                picker.delegate = self
+                self.present(picker, animated: true)
+            }
+            return
+        case .appIcon:
+            types = [.image]
+        }
+        forkPickPurpose = purpose
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+        picker.delegate = self
+        present(picker, animated: true)
+    }
+    
+    @objc func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        forkPickPurpose = .importProject
+    }
+    
+    func forkHandlePicked(_ url: URL, for purpose: ForkProjectPicker.Purpose) {
+        defer { try? FileManager.default.removeItem(at: url) }
+        switch purpose {
+        case .importProject:
+            return
+        case .appIcon(let project):
+            guard let image = UIImage(contentsOfFile: url.path) else {
+                NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "That file is not an image.", withDelay: 0.0)
+                return
+            }
+            do {
+                try ForkAppIcon.install(image, in: project)
+                tableView.reloadData()
+                forkGitHubAlert("App Icon", "Saved. Build and run the app again to see it on the app. A square image of 1024 × 1024 works best.")
+            } catch {
+                NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: error.localizedDescription, withDelay: 0.0)
+            }
+        case .updateFromSwiftPM(let project):
+            let fm = FileManager.default
+            var temp: URL?
+            defer { if let temp { try? fm.removeItem(at: temp) } }
+            do {
+                var source = url
+                var isDirectory: ObjCBool = false
+                if !(fm.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue) {
+                    let folder = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("SwiftPMUpdate-\(UUID().uuidString)")
+                    try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+                    temp = folder
+                    guard unzipArchiveAtPath(url.path, folder.path) else { throw CocoaError(.fileReadCorruptFile) }
+                    source = folder
+                }
+                let result = try SwiftPlaygroundsImporter.importPackage(
+                    at: source,
+                    intoProjectsAt: NXBootstrap.shared().rootURL.appendingPathComponent("Projects"),
+                    updating: project)
+                reloadProjectsFromDisk()
+                var message = "\(result.swiftFileCount) Swift file\(result.swiftFileCount == 1 ? "" : "s") and \(result.resourceCount) resource\(result.resourceCount == 1 ? "" : "s") updated."
+                if !result.warnings.isEmpty {
+                    message += "\n\n" + result.warnings.map { "• " + $0 }.joined(separator: "\n\n")
+                }
+                forkGitHubAlert("Updated \"\(result.project.projectConfig.displayName ?? "App")\"", message)
+            } catch {
+                NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: error.localizedDescription, withDelay: 0.0)
+            }
         }
     }
 }

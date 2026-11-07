@@ -4,6 +4,20 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.13.0 — 2026-11-07
+
+- **App icons**: importing a `.swiftpm` turns its `AppIcon` into a real icon
+  (loose PNGs + `CFBundleIcons`, no asset catalog compiler needed);
+  long-press a project > **Set App Icon…** for any project; the project list
+  shows the icon; exporting writes `AppIcon.appiconset` and
+  `appIcon: .asset("AppIcon")`.
+- **Permissions**: `capabilities` with a `purposeString` (camera, photos,
+  location, microphone, contacts, calendars, Face ID, Bluetooth…) become
+  Info.plist usage descriptions on import, and go back to `capabilities` on
+  export (the original block is reused when the project came from a package).
+- **Update from .swiftpm…** (long-press a project): re-imports a package into
+  the existing project, replacing its Swift files.
+
 ## 1.12.0 — 2026-11-07
 
 - **No TeamWin splash on launch**: normal launches show a plain background
