@@ -1904,7 +1904,9 @@ final class KeyboardShortcutsHUD {
         "Previous File": "Pestaña anterior",
         "Least Recent File": "Pestaña más antigua",
         "Show Console": "Mostrar consola",
-        "Review Changes": "Revisar cambios"
+        "Review Changes": "Revisar cambios",
+        "Jump to Definition": "Ir a definición",
+        "Find References": "Buscar referencias"
     ]
     
     func start() {

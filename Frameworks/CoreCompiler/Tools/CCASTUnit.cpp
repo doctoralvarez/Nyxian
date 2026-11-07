@@ -23,8 +23,12 @@
  */
 
 /*
- * Fork doctoralvarez/Nyxian — version 1.4.0
+ * Fork doctoralvarez/Nyxian — version 1.5.0
  * Changelog:
+ *  - 1.5.0 (2026-11-07): Swift symbol lookup through
+ *    IDEInspectionInstance::cursorInfo (CCASTUnitCopySwiftSymbolAtLocation:
+ *    name, USR, module, declaration file/line/column); Jump to Definition now
+ *    works in Swift files too.
  *  - 1.4.0 (2026-11-07): fix-its kept from Swift (DiagnosticInfo::FixIts)
  *    and read from Clang's stored diagnostics; CCASTUnitCopyFixIts.
  *  - 1.3.0 (2026-11-07): brief documentation in completion results (Clang
@@ -70,6 +74,8 @@
 #include <swift/IDE/CodeCompletionResultPrinter.h>
 #include <swift/IDE/SignatureHelp.h>
 #include <swift/IDE/SignatureHelpFormatter.h>
+#include <swift/IDE/Utils.h>
+#include <swift/AST/USRGeneration.h>
 #include <swift/AST/PluginRegistry.h>
 #include <llvm/Support/VirtualFileSystem.h>
 #include <mutex>
@@ -1025,6 +1031,32 @@ public:
 CCFileSourceLocationRef CCASTUnitCopyDefinitionAtLocation(CCASTUnitRef unit,
                                                           CCSourceLocation location)
 {
+    /* fork: Swift units answer through the IDE inspection engine */
+    if(unit->type == kCCASTUnitTypeSwift && unit->file != nullptr)
+    {
+        CFDictionaryRef symbol = CCASTUnitCopySwiftSymbolAtLocation(unit, nullptr, nullptr, location);
+        if(symbol == nullptr)
+        {
+            return nullptr;
+        }
+        CCFileSourceLocationRef result = nullptr;
+        CFStringRef path = (CFStringRef)CFDictionaryGetValue(symbol, CFSTR("path"));
+        CFNumberRef lineNumber = (CFNumberRef)CFDictionaryGetValue(symbol, CFSTR("line"));
+        CFNumberRef columnNumber = (CFNumberRef)CFDictionaryGetValue(symbol, CFSTR("column"));
+        long line = 0, column = 0;
+        if(path && lineNumber && columnNumber &&
+           CFNumberGetValue(lineNumber, kCFNumberLongType, &line) &&
+           CFNumberGetValue(columnNumber, kCFNumberLongType, &column))
+        {
+            CFAllocatorRef allocator = CFGetAllocator(unit);
+            CFURLRef fileURL = CFURLCreateWithFileSystemPath(allocator, path, kCFURLPOSIXPathStyle, false);
+            result = CCFileSourceLocationCreate(allocator, fileURL, CCSourceLocationMake(line, column));
+            CFRelease(fileURL);
+        }
+        CFRelease(symbol);
+        return result;
+    }
+    
     if(unit->unit == nullptr || unit->file == nullptr || unit->type == kCCASTUnitTypeSwift)
     {
         return nullptr;
@@ -1648,6 +1680,8 @@ struct CCSwiftRequest {
     unsigned offset;
 };
 
+static bool _CCSwiftPrepareRequestWithContent(CCASTUnitRef unit, const std::string &primaryPath, llvm::StringRef content, CCSourceLocation location, CCSwiftRequest &request);
+
 static bool _CCSwiftPrepareRequest(CCASTUnitRef unit, CCSourceLocation location, CCSwiftRequest &request)
 {
     if(unit->file == nullptr || unit->BaseArgs.empty() || !location.isValid || location.line <= 0 || location.column <= 0)
@@ -1660,7 +1694,6 @@ static bool _CCSwiftPrepareRequest(CCASTUnitRef unit, CCSourceLocation location,
     {
         return false;
     }
-    request.primaryPath = primaryPath;
     
     CFDataRef data = CCFileGetUnsavedData(unit->file);
     if(data == nullptr)
@@ -1668,6 +1701,17 @@ static bool _CCSwiftPrepareRequest(CCASTUnitRef unit, CCSourceLocation location,
         return false;
     }
     llvm::StringRef content((const char *)CFDataGetBytePtr(data), CFDataGetLength(data));
+    return _CCSwiftPrepareRequestWithContent(unit, primaryPath, content, location, request);
+}
+
+/* fork: any file of the module can be the primary input (references in other files) */
+static bool _CCSwiftPrepareRequestWithContent(CCASTUnitRef unit, const std::string &primaryPath, llvm::StringRef content, CCSourceLocation location, CCSwiftRequest &request)
+{
+    if(unit->BaseArgs.empty() || !location.isValid || location.line <= 0 || location.column <= 0)
+    {
+        return false;
+    }
+    request.primaryPath = primaryPath;
     
     /* 1-based line and UTF-8 column -> byte offset */
     size_t offset = 0;
@@ -2137,4 +2181,130 @@ CFStringRef CCCopyFormattedSource(CFStringRef source, CFStringRef fileName)
     }
     
     return CFStringCreateWithBytes(kCFAllocatorDefault, (const UInt8 *)formatted->data(), (CFIndex)formatted->size(), kCFStringEncodingUTF8, false);
+}
+
+/* MARK: - fork: Swift symbol at a location (cursor info) */
+
+CFDictionaryRef CCASTUnitCopySwiftSymbolAtLocation(CCASTUnitRef unit,
+                                                   CFURLRef fileURL,
+                                                   CFDataRef content,
+                                                   CCSourceLocation location)
+{
+    if(unit == nullptr || unit->type != kCCASTUnitTypeSwift)
+    {
+        return nullptr;
+    }
+    
+    CCSwiftRequest request;
+    if(fileURL == nullptr)
+    {
+        if(!_CCSwiftPrepareRequest(unit, location, request))
+        {
+            return nullptr;
+        }
+    }
+    else
+    {
+        char path[PATH_MAX];
+        if(content == nullptr || !CFURLGetFileSystemRepresentation(fileURL, true, (UInt8 *)path, sizeof(path)))
+        {
+            return nullptr;
+        }
+        llvm::StringRef text((const char *)CFDataGetBytePtr(content), CFDataGetLength(content));
+        if(!_CCSwiftPrepareRequestWithContent(unit, path, text, location, request))
+        {
+            return nullptr;
+        }
+    }
+    
+    bool found = false;
+    std::string name, usr, module, file;
+    unsigned line = 0, column = 0;
+    
+    {
+        std::lock_guard<std::mutex> guard(gCCSwiftCompletionMutex);
+        
+        CCSharedIDEInspectionInstance().cursorInfo(
+            request.invocation,
+            request.args,
+            llvm::vfs::getRealFileSystem(),
+            request.buffer.get(),
+            request.offset,
+            /*DiagC=*/nullptr,
+            /*CancellationFlag=*/nullptr,
+            [&](swift::ide::CancellableResult<swift::ide::CursorInfoResults> result) {
+                if(result.getKind() != swift::ide::CancellableResultKind::Success)
+                {
+                    return;
+                }
+                for(const swift::ide::ResolvedCursorInfoPtr &info : result.getResult().ResolvedCursorInfos)
+                {
+                    auto *ref = llvm::dyn_cast<swift::ide::ResolvedValueRefCursorInfo>(info.get());
+                    if(ref == nullptr)
+                    {
+                        continue;
+                    }
+                    /* "Foo()" is a reference to the type, not to its initializer */
+                    swift::ValueDecl *decl = ref->typeOrValue();
+                    if(decl == nullptr)
+                    {
+                        continue;
+                    }
+                    found = true;
+                    name = decl->getBaseName().userFacingName().str();
+                    {
+                        llvm::raw_string_ostream os(usr);
+                        swift::ide::printValueDeclUSR(decl, os);
+                    }
+                    if(swift::ModuleDecl *mod = decl->getModuleContext())
+                    {
+                        module = mod->getName().str().str();
+                    }
+                    swift::SourceLoc loc = decl->getLoc();
+                    if(loc.isValid())
+                    {
+                        swift::SourceManager &SM = decl->getASTContext().SourceMgr;
+                        unsigned buffer = SM.findBufferContainingLoc(loc);
+                        file = SM.getIdentifierForBuffer(buffer).str();
+                        std::pair<unsigned, unsigned> lineColumn = SM.getLineAndColumnInBuffer(loc, buffer);
+                        line = lineColumn.first;
+                        column = lineColumn.second;
+                    }
+                    break;
+                }
+            });
+    }
+    
+    if(!found)
+    {
+        return nullptr;
+    }
+    
+    CFAllocatorRef allocator = CFGetAllocator(unit);
+    CFMutableDictionaryRef dict = CFDictionaryCreateMutable(allocator, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    auto setString = [&](CFStringRef key, const std::string &value) {
+        if(value.empty()) return;
+        CFStringRef string = CFStringCreateWithBytes(allocator, (const UInt8 *)value.data(), (CFIndex)value.size(), kCFStringEncodingUTF8, false);
+        if(string)
+        {
+            CFDictionarySetValue(dict, key, string);
+            CFRelease(string);
+        }
+    };
+    auto setNumber = [&](CFStringRef key, long value) {
+        CFNumberRef number = CFNumberCreate(allocator, kCFNumberLongType, &value);
+        CFDictionarySetValue(dict, key, number);
+        CFRelease(number);
+    };
+    setString(CFSTR("name"), name);
+    setString(CFSTR("usr"), usr);
+    setString(CFSTR("module"), module);
+    /* the request buffer may be a temporary copy; only real files are worth opening */
+    if(!file.empty() && line > 0)
+    {
+        setString(CFSTR("path"), file);
+        setNumber(CFSTR("line"), (long)line);
+        setNumber(CFSTR("column"), (long)column);
+    }
+    return dict;
 }

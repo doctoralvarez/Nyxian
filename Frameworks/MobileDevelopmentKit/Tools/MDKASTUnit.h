@@ -23,8 +23,9 @@
  */
 
 /*
- * Fork doctoralvarez/Nyxian — version 1.3.0
+ * Fork doctoralvarez/Nyxian — version 1.4.0
  * Changelog:
+ *  - 1.4.0 (2026-11-07): -swiftSymbolAtLocation:inFile:content:.
  *  - 1.3.0 (2026-11-07): fixIts.
  *  - 1.2.0 (2026-11-07): -signatureHelpAtLocation: (parameter help).
  *  - 1.1.0 (2026-11-07): +formattedSource:fileName: (clang-format).
@@ -60,6 +61,9 @@ typedef NS_ENUM(UInt8, MDKASTUnitType) {
 
 /* fork: the compiler's suggested fixes for this file from the last parse (see CCASTUnitCopyFixIts) */
 @property (nonatomic, readonly) NSArray<NSDictionary<NSString*,id>*> *fixIts;
+
+/* fork: what the Swift symbol at `location` refers to ("name", "usr", "module", "path", "line", "column"); url/data nil = this unit's file */
+- (NSDictionary<NSString*,id>*)swiftSymbolAtLocation:(MDKSourceLocation)location inFile:(NSURL*)url content:(NSData*)data;
 
 /* fork: clang-format for C, Objective-C and C++ text; nil when it cannot be formatted */
 + (NSString*)formattedSource:(NSString*)source fileName:(NSString*)fileName NS_SWIFT_NAME(formattedSource(_:fileName:));

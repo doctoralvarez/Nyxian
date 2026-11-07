@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-07): -swiftSymbolAtLine:utf8Column:content:inFile: for
+    Find References (Swift).
   - 1.3.0 (2026-11-07): -getFixIts.
   - 1.2.0 (2026-11-07): -signatureHelpAtLine:utf8Column:content:.
   - 1.1.0 (2026-11-07): completions for Swift files too (phase 2).
@@ -55,6 +57,9 @@
 
 /* fork: suggested fixes from the last parse (call -reparseFile:withArgs: first for fresh positions) */
 - (NSArray<NSDictionary<NSString*,id>*>*)getFixIts;
+
+/* fork: the Swift symbol at a location of `path` (nil = this file) with that file's text */
+- (NSDictionary<NSString*,id>*)swiftSymbolAtLine:(NSInteger)line utf8Column:(NSInteger)column content:(NSString*)content inFile:(NSString*)path NS_SWIFT_NAME(swiftSymbol(line:utf8Column:content:inFile:));
 
 /* fork: parameter help for the call around the position; nil outside a call or before the first parse */
 - (NSDictionary<NSString*,id>*)signatureHelpAtLine:(NSInteger)line utf8Column:(NSInteger)column content:(NSString*)content NS_SWIFT_NAME(signatureHelp(line:utf8Column:content:));

@@ -23,8 +23,9 @@
  */
 
 /*
- * Fork doctoralvarez/Nyxian — version 1.3.0
+ * Fork doctoralvarez/Nyxian — version 1.4.0
  * Changelog:
+ *  - 1.4.0 (2026-11-07): -swiftSymbolAtLocation:inFile:content:.
  *  - 1.3.0 (2026-11-07): fixIts.
  *  - 1.2.0 (2026-11-07): -signatureHelpAtLocation: (parameter help).
  *  - 1.1.0 (2026-11-07): +formattedSource:fileName: (clang-format).
@@ -66,6 +67,12 @@
 {
     CFArrayRef fixIts = CCASTUnitCopyFixIts((__bridge void*)self);
     return fixIts != NULL ? (__bridge_transfer NSArray*)fixIts : @[];
+}
+
+- (NSDictionary<NSString*,id>*)swiftSymbolAtLocation:(MDKSourceLocation)location inFile:(NSURL*)url content:(NSData*)data
+{
+    CFDictionaryRef symbol = CCASTUnitCopySwiftSymbolAtLocation((__bridge void*)self, (__bridge CFURLRef)url, (__bridge CFDataRef)data, (CCSourceLocation){ location.isValid, location.line, location.column });
+    return symbol != NULL ? (__bridge_transfer NSDictionary*)symbol : nil;
 }
 
 - (NSDictionary<NSString*,id>*)signatureHelpAtLocation:(MDKSourceLocation)location

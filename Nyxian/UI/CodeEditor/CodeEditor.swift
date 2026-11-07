@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.7.0
+ Fork doctoralvarez/Nyxian — version 1.8.0
  Changelog:
+  - 1.8.0 (2026-11-07): Jump to Definition works in Swift files (⌃⌘J; SDK
+    symbols say which module they come from) and Find References (⇧⌃⌘F, also
+    in the edit menu): every whole-word match in the project, checked by the
+    Swift compiler in Swift files (same symbol, not just the same name);
+    ReferencesViewController.
   - 1.7.0 (2026-11-07): Document Symbols — ⌃6 or the list button in the
     editor toolbar shows the functions, types, properties and MARK sections of
     the file (Swift, C, C++, Objective-C) with search; tap one to jump to it
@@ -777,6 +782,11 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             command("Go to Line", #selector(promptGoToLine), "l"),
             command("Document Symbols", #selector(showDocumentSymbols), "6", [.control])
         ]
+        /* fork: navigation by meaning */
+        if self.languageServer != nil {
+            commands.append(command("Jump to Definition", #selector(jumpToDefinition), "j", [.command, .control]))
+            commands.append(command("Find References", #selector(findReferences), "f", [.command, .control, .shift]))
+        }
 
         if !self.isReadOnly {
             /* fork: editing */
@@ -819,6 +829,34 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
     @objc func jumpToDefinition() {
         guard let server = languageServer else { return }
         guard let selectedRange = textView.selectedTextRange else { return }
+        
+        /* fork: Swift asks the compiler directly and can name the module of SDK symbols */
+        if self.file.isSwift {
+            let text = self.textView.text
+            let caret = self.textView.selectedRange.location
+            let (line, column) = ForkTextPosition.lineAndUTF8Column(in: text, utf16Offset: caret)
+            DispatchQueue.global(qos: .userInitiated).async {
+                let symbol = server.swiftSymbol(line: line, utf8Column: column, content: text, inFile: nil)
+                DispatchQueue.main.async {
+                    guard let symbol else {
+                        self.showNoDefinitionFound()
+                        return
+                    }
+                    if let path = symbol["path"] as? String,
+                       let defLine = (symbol["line"] as? NSNumber)?.intValue,
+                       FileManager.default.fileExists(atPath: path) {
+                        self.forkOpenLocation(URL(fileURLWithPath: path), line: defLine, column: (symbol["column"] as? NSNumber)?.intValue ?? 1)
+                    } else {
+                        let name = symbol["name"] as? String ?? "This symbol"
+                        let module = symbol["module"] as? String ?? "the SDK"
+                        let alert = UIAlertController(title: name, message: "\(name) is defined in \(module), which has no source code on this device.", preferredStyle: .alert)
+                        alert.addAction(UIAlertAction(title: "OK", style: .default))
+                        self.present(alert, animated: true)
+                    }
+                }
+            }
+            return
+        }
         
         DispatchQueue.global(qos: .userInitiated).async {
             let flags: [String] = (self.isReadOnly ? NXProjectConfig.sdkCompilerFlags() : self.project?.projectConfig.compilerFlags)!
@@ -921,8 +959,12 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         let myAction = UIAction(title: "Jump To Definition", image: UIImage(systemName: "cursorarrow")) { _ in
             self.jumpToDefinition()
         }
+        /* fork */
+        let referencesAction = UIAction(title: "Find References", image: UIImage(systemName: "magnifyingglass.circle")) { _ in
+            self.findReferences()
+        }
 
-        builder.insertChild(UIMenu(options: .displayInline, children: [myAction]), atEndOfMenu: .standardEdit)
+        builder.insertChild(UIMenu(options: .displayInline, children: [myAction, referencesAction]), atEndOfMenu: .standardEdit)
     }
     
     deinit {
@@ -2702,5 +2744,228 @@ extension CodeEditorViewController {
             navigation.sheetPresentationController?.prefersGrabberVisible = true
         }
         present(navigation, animated: true)
+    }
+}
+
+// MARK: - Fork: Find References
+
+enum ForkTextPosition {
+    /// 1-based line and 1-based UTF-8 column of a UTF-16 offset.
+    static func lineAndUTF8Column(in text: String, utf16Offset: Int) -> (Int, Int) {
+        let ns = text as NSString
+        let offset = max(0, min(utf16Offset, ns.length))
+        let lineRange = ns.lineRange(for: NSRange(location: offset, length: 0))
+        let before = ns.substring(to: lineRange.location)
+        let line = before.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+        let prefix = ns.substring(with: NSRange(location: lineRange.location, length: offset - lineRange.location))
+        return (line, prefix.utf8.count + 1)
+    }
+    
+    /// The identifier around a UTF-16 offset.
+    static func identifier(in text: String, at utf16Offset: Int) -> NSRange? {
+        let ns = text as NSString
+        func isWord(_ c: unichar) -> Bool {
+            guard let scalar = Unicode.Scalar(c) else { return false }
+            return CharacterSet.alphanumerics.contains(scalar) || c == 95 /* _ */
+        }
+        var start = min(utf16Offset, ns.length)
+        var end = start
+        while start > 0, isWord(ns.character(at: start - 1)) { start -= 1 }
+        while end < ns.length, isWord(ns.character(at: end)) { end += 1 }
+        guard end > start else { return nil }
+        return NSRange(location: start, length: end - start)
+    }
+}
+
+struct ForkReference {
+    let url: URL
+    let line: Int
+    let column: Int
+    let lineText: String
+    let matchInLine: NSRange
+    let verified: Bool
+}
+
+final class ReferencesViewController: UITableViewController {
+    private let groups: [(URL, [ForkReference])]
+    private let root: URL?
+    private let summary: String
+    private let onSelect: (ForkReference) -> Void
+    
+    init(name: String, references: [ForkReference], root: URL?, semantic: Bool, onSelect: @escaping (ForkReference) -> Void) {
+        var order: [URL] = []
+        var byFile: [URL: [ForkReference]] = [:]
+        for reference in references {
+            if byFile[reference.url] == nil { order.append(reference.url) }
+            byFile[reference.url, default: []].append(reference)
+        }
+        self.groups = order.map { ($0, byFile[$0] ?? []) }
+        self.root = root
+        self.onSelect = onSelect
+        let fileCount = order.count
+        self.summary = "\(references.count) reference\(references.count == 1 ? "" : "s") in \(fileCount) file\(fileCount == 1 ? "" : "s")" + (semantic ? " · checked by the compiler" : " · text matches")
+        super.init(style: .insetGrouped)
+        self.title = name
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "reference")
+        navigationItem.prompt = summary
+        navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in
+            self?.dismiss(animated: true)
+        })
+    }
+    
+    override func numberOfSections(in tableView: UITableView) -> Int { groups.count }
+    
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        let url = groups[section].0
+        if let root { return ProjectFileIndex.relativePath(url, root: root) }
+        return url.lastPathComponent
+    }
+    
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { groups[section].1.count }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "reference", for: indexPath)
+        let reference = groups[indexPath.section].1[indexPath.row]
+        var content = cell.defaultContentConfiguration()
+        let font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let leading = reference.lineText.prefix { $0 == " " || $0 == "\t" }.utf16.count
+        let trimmed = (reference.lineText as NSString).substring(from: leading)
+        let text = NSMutableAttributedString(string: trimmed, attributes: [.font: font, .foregroundColor: UIColor.label])
+        let highlight = NSRange(location: reference.matchInLine.location - leading, length: reference.matchInLine.length)
+        if highlight.location >= 0, NSMaxRange(highlight) <= text.length {
+            text.addAttributes([.font: UIFont.monospacedSystemFont(ofSize: 13, weight: .bold), .backgroundColor: UIColor.systemYellow.withAlphaComponent(0.35)], range: highlight)
+        }
+        content.attributedText = text
+        content.textProperties.numberOfLines = 1
+        content.secondaryText = "\(reference.line)" + (reference.verified ? "" : " ?")
+        content.secondaryTextProperties.color = .secondaryLabel
+        content.prefersSideBySideTextAndSecondaryText = true
+        cell.contentConfiguration = content
+        return cell
+    }
+    
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        let reference = groups[indexPath.section].1[indexPath.row]
+        dismiss(animated: true) { self.onSelect(reference) }
+    }
+}
+
+extension CodeEditorViewController {
+    /// Opens a project or SDK file at a line, like Jump to Definition does.
+    func forkOpenLocation(_ url: URL, line: Int, column: Int) {
+        if url.resolvingSymlinksInPath().path == self.file.fileURL?.resolvingSymlinksInPath().path {
+            self.goto(location: MDKSourceLocationMake(line, column))
+            return
+        }
+        let isInsideProject = self.project.map { url.path.hasPrefix(($0.url as URL).path) } ?? false
+        if UIDevice.current.userInterfaceIdiom != .pad {
+            guard let editor = CodeEditorViewController(project: isInsideProject ? self.project : nil, url: url, line: line, column: column, isReadOnly: !isInsideProject) else { return }
+            let navigation = UINavigationController(rootViewController: editor)
+            navigation.modalPresentationStyle = .pageSheet
+            self.present(navigation, animated: true)
+        } else {
+            NotificationCenter.default.post(name: Notification.Name("FileListAct"), object: ["open", url.path, "\(line)", "\(column)", isInsideProject ? "0" : "1"])
+        }
+    }
+    
+    @objc func findReferences() {
+        guard presentedViewController == nil else { return }
+        let text = self.textView.text
+        guard let wordRange = ForkTextPosition.identifier(in: text, at: self.textView.selectedRange.location) else { return }
+        let name = (text as NSString).substring(with: wordRange)
+        let server = self.languageServer
+        let isSwift = self.file.isSwift
+        let currentURL: URL? = self.file.fileURL
+        let root: URL? = self.project.map { $0.url as URL }
+        let (caretLine, caretColumn) = ForkTextPosition.lineAndUTF8Column(in: text, utf16Offset: wordRange.location)
+        
+        /* candidate files: the project (same language family), or just this file */
+        var files: [URL] = root.map { ProjectFileIndex.files(in: $0) } ?? []
+        if let currentURL, !files.contains(where: { $0.resolvingSymlinksInPath().path == currentURL.resolvingSymlinksInPath().path }) {
+            files.append(currentURL)
+        }
+        let swiftExtensions: Set<String> = ["swift"]
+        let clangExtensions: Set<String> = ["c", "m", "mm", "cpp", "cc", "cxx", "h", "hpp", "hh"]
+        files = files.filter { (isSwift ? swiftExtensions : clangExtensions).contains($0.pathExtension.lowercased()) }
+        
+        /* open tabs may have unsaved text */
+        var texts: [URL: String] = [:]
+        for url in files {
+            if let live = LiveEditorRegistry.editor(forPath: url.path) {
+                texts[url] = live.textView.text
+            } else if let disk = try? String(contentsOf: url, encoding: .utf8) {
+                texts[url] = disk
+            }
+        }
+        if let currentURL { texts[currentURL] = text }
+        
+        let progress = UIAlertController(title: "Find References", message: "Looking for \"\(name)\"…", preferredStyle: .alert)
+        var cancelled = false
+        progress.addAction(UIAlertAction(title: "Stop", style: .cancel) { _ in cancelled = true })
+        present(progress, animated: true)
+        
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let pattern = "(?<![A-Za-z0-9_])" + NSRegularExpression.escapedPattern(for: name) + "(?![A-Za-z0-9_])"
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
+            
+            /* Swift: what the caret refers to, so other matches can be compared with it */
+            let target = isSwift ? server?.swiftSymbol(line: caretLine, utf8Column: caretColumn, content: text, inFile: nil) : nil
+            let targetUSR = target?["usr"] as? String
+            
+            var references: [ForkReference] = []
+            var checked = 0
+            for url in files {
+                guard !cancelled, let content = texts[url] else { continue }
+                let ns = content as NSString
+                for match in regex.matches(in: content, range: NSRange(location: 0, length: ns.length)) {
+                    if cancelled { break }
+                    let lineRange = ns.lineRange(for: match.range)
+                    var lineText = ns.substring(with: lineRange)
+                    while lineText.hasSuffix("\n") || lineText.hasSuffix("\r") { lineText.removeLast() }
+                    let (line, column) = ForkTextPosition.lineAndUTF8Column(in: content, utf16Offset: match.range.location)
+                    let inLine = NSRange(location: match.range.location - lineRange.location, length: match.range.length)
+                    
+                    var verified = false
+                    if let targetUSR, let server, checked < 400 {
+                        checked += 1
+                        let isCurrent = url.resolvingSymlinksInPath().path == currentURL?.resolvingSymlinksInPath().path
+                        let symbol = server.swiftSymbol(line: line, utf8Column: column, content: content, inFile: isCurrent ? nil : url.path)
+                        guard (symbol?["usr"] as? String) == targetUSR else { continue }
+                        verified = true
+                    }
+                    references.append(ForkReference(url: url, line: line, column: column, lineText: lineText, matchInLine: inLine, verified: verified))
+                }
+                if let targetUSR { _ = targetUSR }
+                DispatchQueue.main.async {
+                    progress.message = "Looking for \"\(name)\"… \(references.count) found"
+                }
+            }
+            
+            let semantic = targetUSR != nil
+            DispatchQueue.main.async {
+                guard let self else { return }
+                progress.dismiss(animated: true) {
+                    guard !cancelled else { return }
+                    guard !references.isEmpty else {
+                        let alert = UIAlertController(title: "Find References", message: "No references to \"\(name)\" were found.", preferredStyle: .alert)
+                        alert.addAction(UIAlertAction(title: "OK", style: .default))
+                        self.present(alert, animated: true)
+                        return
+                    }
+                    let list = ReferencesViewController(name: name, references: references, root: root, semantic: semantic) { [weak self] reference in
+                        self?.forkOpenLocation(reference.url, line: reference.line, column: reference.column)
+                    }
+                    let navigation = UINavigationController(rootViewController: list)
+                    navigation.modalPresentationStyle = .formSheet
+                    self.present(navigation, animated: true)
+                }
+            }
+        }
     }
 }

@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.15.0 — 2026-11-07
+
+- **Jump to Definition** now also in Swift files, with **⌃⌘J** (and the edit
+  menu as before). SDK symbols say which module defines them.
+- **Find References** (**⇧⌃⌘F**, or the edit menu): every whole-word match in
+  the project's files of the same language; in Swift each match is checked by
+  the compiler (same symbol, not only the same name). C/Objective-C results
+  are text matches.
+
 ## 1.14.1 — 2026-11-07
 
 - Build fix for 1.14.0 (console view initializer).

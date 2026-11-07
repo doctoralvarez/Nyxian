@@ -23,8 +23,9 @@
  */
 
 /*
- * Fork doctoralvarez/Nyxian — version 1.4.0
+ * Fork doctoralvarez/Nyxian — version 1.5.0
  * Changelog:
+ *  - 1.5.0 (2026-11-07): CCASTUnitCopySwiftSymbolAtLocation.
  *  - 1.4.0 (2026-11-07): CCASTUnitCopyFixIts.
  *  - 1.3.0 (2026-11-07): CCASTUnitCopySignatureHelpAtLocation; completion
  *    dictionaries carry "doc".
@@ -65,6 +66,15 @@ CC_EXPORT CCFileRef CCASTUnitCopyFile(CCASTUnitRef unit);
 CC_EXPORT Boolean CCASTUnitErrorOccured(CCASTUnitRef unit);
 
 CC_EXPORT CCFileSourceLocationRef CCASTUnitCopyDefinitionAtLocation(CCASTUnitRef unit, CCSourceLocation location);
+
+/*
+ * fork doctoralvarez/Nyxian: what the Swift symbol at `location` refers to.
+ * `fileURL` / `content` select another file of the same module as the primary
+ * input (pass NULL for the unit's own file and unsaved data). Keys: "name",
+ * "usr" (unique id, also for SDK symbols), "module", and when the declaration
+ * has source: "path", "line", "column" (1-based, UTF-8 column).
+ */
+CC_EXPORT CFDictionaryRef CCASTUnitCopySwiftSymbolAtLocation(CCASTUnitRef unit, CFURLRef fileURL, CFDataRef content, CCSourceLocation location);
 
 CC_EXPORT CFArrayRef CCASTUnitCopyDiagnostics(CCASTUnitRef unit);
 

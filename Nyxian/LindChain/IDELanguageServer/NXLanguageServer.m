@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-07): -swiftSymbolAtLine:utf8Column:content:inFile: for
+    Find References (Swift).
   - 1.3.0 (2026-11-07): -getFixIts.
   - 1.2.0 (2026-11-07): -signatureHelpAtLine:utf8Column:content:.
   - 1.1.0 (2026-11-07): completions for Swift files too (phase 2).
@@ -210,6 +212,34 @@
     NSArray<NSDictionary<NSString*,id>*> *fixIts = (_unit != nil) ? [_unit fixIts] : @[];
     os_unfair_lock_unlock(&_lock);
     return fixIts;
+}
+
+- (NSDictionary<NSString*,id>*)swiftSymbolAtLine:(NSInteger)line utf8Column:(NSInteger)column content:(NSString*)content inFile:(NSString*)path
+{
+    NSData *data = [content dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO];
+    if(data == nil)
+    {
+        return nil;
+    }
+    
+    os_unfair_lock_lock(&_lock);
+    if(_unit == nil)
+    {
+        os_unfair_lock_unlock(&_lock);
+        return nil;
+    }
+    NSDictionary<NSString*,id> *symbol = nil;
+    if(path == nil)
+    {
+        [_file setUnsavedData:data];
+        symbol = [_unit swiftSymbolAtLocation:MDKSourceLocationMake(line, column) inFile:nil content:nil];
+    }
+    else
+    {
+        symbol = [_unit swiftSymbolAtLocation:MDKSourceLocationMake(line, column) inFile:[NSURL fileURLWithPath:path] content:data];
+    }
+    os_unfair_lock_unlock(&_lock);
+    return symbol;
 }
 
 - (MDKFileSourceLocation*)getDefinitionAtLocation:(MDKSourceLocation)location
