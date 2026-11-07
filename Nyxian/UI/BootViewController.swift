@@ -20,6 +20,15 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): "Boot bundled IDE" (on by default). A normal boot
+    loads the IDE built into this IPA (SuperSlot.dylib) instead of
+    downloading/booting the official emexLabs ROM, so this fork's changes
+    are what runs. Toggle it in Recovery > Settings.
+*/
+
 import UIKit
 import CommonCrypto
 import UniformTypeIdentifiers
@@ -273,11 +282,19 @@ enum BootFlag: String, CaseIterable {
 
 enum BootConfig {
     fileprivate static let entitlementModeKey = "nyxian.boot.entitlements.mode"
+    /* fork: boot the IDE bundled in this IPA (SuperSlot.dylib) instead of an OTA/flashed ROM */
+    fileprivate static let preferBundledIDEKey = "fork.boot.preferBundledIDE"
+    
+    static var preferBundledIDE: Bool {
+        get { UserDefaults.standard.bool(forKey: preferBundledIDEKey) }
+        set { UserDefaults.standard.set(newValue, forKey: preferBundledIDEKey) }
+    }
     
     static func registerDefaults() {
         var defaults: [String: Any] = Dictionary(uniqueKeysWithValues: BootFlag.allCases.map { ($0.rawValue, $0.defaultValue) })
         defaults[entitlementModeKey] = EnforcementMode.enforcing.rawValue
         defaults["nyxian.recovery.tw_military_time"] = true
+        defaults[preferBundledIDEKey] = true
         
         UserDefaults.standard.register(defaults: defaults)
     }
@@ -1199,6 +1216,18 @@ private func bootConfigItems() -> [NXRecoveryItem] {
     clock.toggle = true
     clock.checked = UserDefaults.standard.bool(forKey: "nyxian.recovery.tw_military_time")
     items.append(clock)
+    /* fork: choose between this IPA's own IDE and an installed/official ROM */
+    let bundledIDE: NXRecoveryItem = NXRecoveryItem(title: "Boot bundled IDE (this fork)") { c in
+        guard let c else { return }
+        BootConfig.preferBundledIDE.toggle()
+        reload(c)
+        c.recoveryLog(BootConfig.preferBundledIDE
+                      ? "Next boot loads the IDE bundled in this IPA."
+                      : "Next boot loads the flashed ROM, or downloads the official one if none is installed.")
+    }
+    bundledIDE.toggle = true
+    bundledIDE.checked = BootConfig.preferBundledIDE
+    items.append(bundledIDE)
     // the boot toggles are boot arguments now (BootHandoff/NXBootArgs.h)
     items.append(NXRecoveryItem(title: bootArgumentsSettingTitle()) { c in
         guard let c else { return }
@@ -1220,6 +1249,7 @@ private func bootConfigItems() -> [NXRecoveryItem] {
         guard let c else { return }
         BootArguments.string = ""
         BootConfig.entitlementMode = .enforcing
+        BootConfig.preferBundledIDE = true
         c.restoreRecoverySettings()
         reload(c)
     })
@@ -2085,7 +2115,8 @@ private func initialROMSlotsAreEmpty() -> Bool {
 }
 
 private func shouldDownloadInitialROM(mode: Int) -> Bool {
-    mode == 0 && initialROMSlotsAreEmpty()
+    /* fork: with the bundled IDE preferred there is nothing to download */
+    mode == 0 && initialROMSlotsAreEmpty() && !BootConfig.preferBundledIDE
 }
 
 private func initialROMRollbackApproval(_ c: NXRecoveryViewController, initialInstall: Bool) -> ((String) -> Bool)? {
@@ -2367,7 +2398,11 @@ class BootViewController: UIViewController, NXBootHandoffHostDelegate {
                 return
             }
             
-            let forceSuperSlot = mode == 1
+            /* fork: Volume Up, or the "Boot bundled IDE" setting, loads SuperSlot.dylib */
+            let forceSuperSlot = mode == 1 || BootConfig.preferBundledIDE
+            if verbose, forceSuperSlot, mode != 1 {
+                bootLog("bootloader: booting the bundled IDE (fork setting)")
+            }
             if !forceSuperSlot,
                let manifest = slotManifest(activeSlotName()),
                !manifest.isHostCompatible {

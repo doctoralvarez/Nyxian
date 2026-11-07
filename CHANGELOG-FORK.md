@@ -4,6 +4,16 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.1.0 — 2026-11-07
+
+### Boot
+- New "Boot bundled IDE (this fork)" setting, on by default (Recovery > Settings).
+  A normal boot now loads the IDE built into this IPA (`SuperSlot.dylib`) instead
+  of downloading and booting the official emexLabs ROM from OTA, so the fork's
+  changes are what actually runs. Turn it off to use a flashed/official ROM.
+- "Restore Defaults" turns it back on.
+- File: `Nyxian/UI/BootViewController.swift`.
+
 ## 1.0.0 — 2026-11-06
 
 ### Editor
