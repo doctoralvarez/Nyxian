@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.3.1
  Changelog:
+  - 1.3.1 (2026-11-07): build fix — NXConsoleView() is failable.
   - 1.3.0 (2026-11-07): "Commit and Push…" first shows the changes since the
     last sync (added / modified / deleted, +/− lines) with a line diff per
     file (GitHubChangesViewController, LineDiff). iPhone: the program's
@@ -1966,7 +1967,8 @@ final class ForkPhoneConsole: NSObject, PEProcessObserver {
     static let shared = ForkPhoneConsole()
     
     private(set) lazy var console: NXConsoleView = {
-        let console = NXConsoleView()
+        /* its initializer is failable in Swift; it only fails when out of memory */
+        guard let console = NXConsoleView() else { fatalError("NXConsoleView could not be created") }
         console.isEditable = true
         console.isSelectable = true
         console.backgroundColor = LDETheme.currentTheme?.backgroundColor
