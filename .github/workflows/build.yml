@@ -40,6 +40,40 @@ jobs:
         run: |
           set -e
 
+      # fork: cache the prebuilt Swift/LLVM/Clang toolchain (the slowest part of the build).
+      # The key changes whenever the LLVM-On-iOS submodule, the Makefile or the Xcode
+      # version changes, so a stale toolchain is never reused.
+      - name: Compute LLVM cache key
+        id: llvm-key
+        run: |
+          set -e
+          LLVM_SHA=$(git rev-parse HEAD:LLVM-On-iOS)
+          XCODE_HASH=$(xcodebuild -version | shasum | cut -c1-12)
+          MAKE_HASH=$(cat Makefile LLVM-On-iOS/Makefile | shasum | cut -c1-12)
+          echo "key=llvm-${RUNNER_OS}-${LLVM_SHA}-${XCODE_HASH}-${MAKE_HASH}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore LLVM toolchain cache
+        id: llvm-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: Frameworks/CoreCompiler/CoreCompilerSupportLibs
+          key: ${{ steps.llvm-key.outputs.key }}
+
+      - name: Build LLVM toolchain (cache miss)
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 1200
+        run: |
+          set -e
+          make Frameworks/CoreCompiler/CoreCompilerSupportLibs
+
+      # saved right away, so it is kept even if the app build below fails
+      - name: Save LLVM toolchain cache
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: Frameworks/CoreCompiler/CoreCompilerSupportLibs
+          key: ${{ steps.llvm-key.outputs.key }}
+
       - name: Build Nyxian
         timeout-minutes: 1200
         run: |
