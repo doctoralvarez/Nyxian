@@ -20,6 +20,14 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-06): Find & Replace (UIFindInteraction) with ⌘F, ⌥⌘F,
+    ⌘G, ⇧⌘G and a toolbar button; editor shortcuts ⌘/ toggle comment,
+    ⌘] / ⌘[ shift lines, ⌘D duplicate line, ⌘L go to line.
+*/
+
 import UIKit
 import Runestone
 import TreeSitter
@@ -199,7 +207,10 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             }
         }
         self.textView.isEditable = !self.isReadOnly
-        
+
+        /* fork: system find navigator (find & replace) provided by Runestone */
+        self.textView.isFindInteractionEnabled = true
+
         func loadLanguage(language: UnsafePointer<TSLanguage>, highlightsURL: [URL]) {
             func combinedQuery(fromFilesAt fileURLs: [URL]) -> TreeSitterLanguage.Query? {
                 let rawQuery = fileURLs.compactMap { try? String(contentsOf: $0) }.joined(separator: "\n")
@@ -489,8 +500,15 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             items.append(spawnSeparator())
         }
         
+        /* fork: find & replace for touch users (no hardware keyboard) */
+        let findBarButton = UIBarButtonItem(customView: SymbolButton(symbolName: "magnifyingglass", width: 35.0) { [weak self] in
+            self?.showFindAndReplace()
+        })
+        items.append(findBarButton)
+        items.append(spawnSeparator())
+
         items.append(hideBarButton)
-        
+
         if #available(iOS 26.0, *) {
             textView.inputAccessoryView = nil
             let toolbar = UIToolbar()
@@ -670,12 +688,41 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
     }
     
     override var keyCommands: [UIKeyCommand]? {
-        return [
+        func command(_ title: String,
+                     _ action: Selector,
+                     _ input: String,
+                     _ flags: UIKeyModifierFlags = .command) -> UIKeyCommand {
+            let keyCommand = UIKeyCommand(title: title, action: action, input: input, modifierFlags: flags)
+            keyCommand.wantsPriorityOverSystemBehavior = true
+            return keyCommand
+        }
+
+        var commands: [UIKeyCommand] = [
             UIKeyCommand(title: "Save File",
                          action: #selector(saveText),
                          input: "S",
-                         modifierFlags: .command)
+                         modifierFlags: .command),
+            /* fork: find / navigation */
+            command("Find", #selector(showFind), "f"),
+            command("Find Next", #selector(findNextMatch), "g"),
+            command("Find Previous", #selector(findPreviousMatch), "g", [.command, .shift]),
+            command("Go to Line", #selector(promptGoToLine), "l")
         ]
+
+        if !self.isReadOnly {
+            /* fork: editing */
+            commands.append(contentsOf: [
+                command("Find and Replace", #selector(showFindAndReplace), "f", [.command, .alternate]),
+                command("Shift Right", #selector(indentLines), "]"),
+                command("Shift Left", #selector(outdentLines), "["),
+                command("Duplicate Line", #selector(duplicateLines), "d")
+            ])
+            if self.lineCommentPrefix != nil {
+                commands.append(command("Toggle Comment", #selector(toggleComment), "/"))
+            }
+        }
+
+        return commands
     }
     
     override func viewDidAppear(_ animated: Bool) {
@@ -798,5 +845,192 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
     
     deinit {
         NXDocumentManager.shared().close(URL(fileURLWithPath: self.file.fileURL.path), completion: nil)
+    }
+}
+
+// MARK: - Fork: find & replace and line editing commands
+extension CodeEditorViewController {
+
+    /// Line comment token for the current file type, or nil when the language has none we support.
+    var lineCommentPrefix: String? {
+        switch self.file.fileURL.pathExtension.lowercased() {
+        case "c", "h", "m", "mm", "cpp", "hpp", "cc", "cxx", "swift":
+            return "//"
+        default:
+            return nil
+        }
+    }
+
+    // MARK: Find
+
+    @objc func showFind() {
+        self.presentFindNavigator(showingReplace: false)
+    }
+
+    @objc func showFindAndReplace() {
+        self.presentFindNavigator(showingReplace: !self.isReadOnly)
+    }
+
+    @objc func findNextMatch() {
+        self.textView.findInteraction?.findNext()
+    }
+
+    @objc func findPreviousMatch() {
+        self.textView.findInteraction?.findPrevious()
+    }
+
+    private func presentFindNavigator(showingReplace: Bool) {
+        if !self.textView.isFirstResponder {
+            self.textView.becomeFirstResponder()
+        }
+        self.textView.findInteraction?.presentFindNavigator(showingReplace: showingReplace)
+    }
+
+    // MARK: Go to line
+
+    @objc func promptGoToLine() {
+        let alert = UIAlertController(title: "Go to Line", message: nil, preferredStyle: .alert)
+        alert.addTextField { textField in
+            textField.keyboardType = .numberPad
+            textField.placeholder = "Line number"
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Go", style: .default) { [weak self, weak alert] _ in
+            guard let self = self,
+                  let text = alert?.textFields?.first?.text,
+                  let line = Int(text.trimmingCharacters(in: .whitespaces)),
+                  line > 0 else { return }
+            self.goto(location: MDKSourceLocationMake(line, 1))
+        })
+        self.present(alert, animated: true)
+    }
+
+    // MARK: Line operations
+
+    /// Programmatic edits must not be rewritten by the autoindent hook (e.g. a line that becomes just "}").
+    private func replaceBypassingAutoindent(_ range: NSRange, with text: String) {
+        let wasAutoIndenting = self.coordinator?.isAutoIndenting ?? false
+        self.coordinator?.isAutoIndenting = true
+        self.textView.replace(range, withText: text)
+        self.coordinator?.isAutoIndenting = wasAutoIndenting
+    }
+
+    /// UTF-16 range covering every complete line touched by the selection (including the trailing newline, if any).
+    private func selectedLinesRange() -> NSRange {
+        let text = self.textView.text as NSString
+        var selection = self.textView.selectedRange
+
+        /* a selection that ends right after a newline should not pull in the following line */
+        if selection.length > 0,
+           selection.location + selection.length <= text.length,
+           text.character(at: selection.location + selection.length - 1) == 0x0A {
+            selection.length -= 1
+        }
+
+        return text.lineRange(for: selection)
+    }
+
+    /// Replaces the selected lines with the result of `transform` as a single undoable edit.
+    private func transformSelectedLines(_ transform: ([String]) -> [String]) {
+        guard !self.isReadOnly else { return }
+
+        let text = self.textView.text as NSString
+        let originalSelection = self.textView.selectedRange
+        let range = self.selectedLinesRange()
+
+        var block = text.substring(with: range)
+        var trailingNewline = ""
+        if block.hasSuffix("\n") {
+            block.removeLast()
+            trailingNewline = "\n"
+        }
+
+        let newBlock = transform(block.components(separatedBy: "\n")).joined(separator: "\n")
+        guard newBlock != block else { return }
+
+        self.replaceBypassingAutoindent(range, with: newBlock + trailingNewline)
+
+        let newBlockLength = (newBlock as NSString).length
+        if originalSelection.length == 0 {
+            /* keep the caret on the same line, shifted by the change in length */
+            let delta = newBlockLength - (block as NSString).length
+            let caret = min(max(range.location, originalSelection.location + delta), range.location + newBlockLength)
+            self.textView.selectedRange = NSRange(location: caret, length: 0)
+        } else {
+            self.textView.selectedRange = NSRange(location: range.location, length: newBlockLength)
+        }
+    }
+
+    @objc func toggleComment() {
+        guard let prefix = self.lineCommentPrefix else { return }
+
+        self.transformSelectedLines { lines in
+            let codeLines = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            guard !codeLines.isEmpty else { return lines }
+
+            let allCommented = codeLines.allSatisfy {
+                $0.trimmingCharacters(in: .whitespaces).hasPrefix(prefix)
+            }
+
+            if allCommented {
+                /* uncomment: remove the first prefix and one following space */
+                return lines.map { line in
+                    guard let prefixRange = line.range(of: prefix) else { return line }
+                    var result = line
+                    var end = prefixRange.upperBound
+                    if end < result.endIndex, result[end] == " " {
+                        end = result.index(after: end)
+                    }
+                    result.removeSubrange(prefixRange.lowerBound..<end)
+                    return result
+                }
+            }
+
+            /* comment: insert the prefix at the block's minimum indentation (Xcode style) */
+            let indent = codeLines
+                .map { $0.prefix(while: { $0 == " " || $0 == "\t" }).count }
+                .min() ?? 0
+
+            return lines.map { line in
+                if line.trimmingCharacters(in: .whitespaces).isEmpty { return line }
+                let index = line.index(line.startIndex, offsetBy: indent)
+                return String(line[..<index]) + prefix + " " + String(line[index...])
+            }
+        }
+    }
+
+    @objc func indentLines() {
+        self.transformSelectedLines { lines in
+            lines.map { $0.isEmpty ? $0 : "\t" + $0 }
+        }
+    }
+
+    @objc func outdentLines() {
+        self.transformSelectedLines { lines in
+            lines.map { line in
+                if line.hasPrefix("\t") {
+                    return String(line.dropFirst())
+                }
+                let leadingSpaces = line.prefix(while: { $0 == " " }).count
+                return String(line.dropFirst(min(leadingSpaces, 4)))
+            }
+        }
+    }
+
+    @objc func duplicateLines() {
+        guard !self.isReadOnly else { return }
+
+        let text = self.textView.text as NSString
+        let selection = self.textView.selectedRange
+        let range = self.selectedLinesRange()
+        let block = text.substring(with: range)
+        let insertionPoint = NSRange(location: range.location + range.length, length: 0)
+
+        /* the last line of a file has no trailing newline, so add one before the copy */
+        let insertion = block.hasSuffix("\n") ? block : "\n" + block
+        self.replaceBypassingAutoindent(insertionPoint, with: insertion)
+
+        let shift = (insertion as NSString).length
+        self.textView.selectedRange = NSRange(location: selection.location + shift, length: selection.length)
     }
 }

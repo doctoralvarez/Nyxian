@@ -20,6 +20,13 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-06): ⌘B builds without running, ⇧⌘I opens the
+    Issue Navigator.
+*/
+
 import UIKit
 
 enum PosixSignal: CustomStringConvertible {
@@ -219,7 +226,37 @@ class MainSplitViewController: UISplitViewController, UISplitViewControllerDeleg
         
         closeCommand.wantsPriorityOverSystemBehavior = true
         
-        return [closeCommand, runCommand]
+        /* fork: build-only and issue navigator shortcuts */
+        let buildCommand = UIKeyCommand(title: "Build", action: #selector(self.invokeBuildOnly), input: "B", modifierFlags: [.command])
+        let issuesCommand = UIKeyCommand(title: "Show Issues", action: #selector(self.showIssueNavigator), input: "I", modifierFlags: [.command, .shift])
+        buildCommand.wantsPriorityOverSystemBehavior = true
+        issuesCommand.wantsPriorityOverSystemBehavior = true
+        
+        return [closeCommand, runCommand, buildCommand, issuesCommand]
+    }
+    
+    /* fork: compile and link without signing, installing or running */
+    @objc func invokeBuildOnly() {
+        guard let detailVC = self.detailVC,
+              !NXBuilder.builds,
+              os_unfair_lock_trylock(&self.lock) else { return }
+        
+        self.masterVC?.navigationItem.leftBarButtonItem?.isEnabled = false
+        
+        buildProjectWithArgumentUI(targetViewController: detailVC, project: detailVC.project, buildType: .build) { [weak self] _, _ in
+            guard let self = self else { return }
+            self.masterVC?.navigationItem.leftBarButtonItem?.isEnabled = true
+            os_unfair_lock_unlock(&self.lock)
+        }
+    }
+    
+    /* fork: open the Issue Navigator from the keyboard */
+    @objc func showIssueNavigator() {
+        guard let detailVC = self.detailVC,
+              detailVC.presentedViewController == nil else { return }
+        let loggerView = UINavigationController(rootViewController: UIDebugViewController(project: self.project))
+        loggerView.modalPresentationStyle = .formSheet
+        detailVC.present(loggerView, animated: true)
     }
     
     @objc func invokeBuild() {

@@ -20,6 +20,13 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-06): New BuildType.build (compile and link only, no
+    signing/install) used by the ⌘B "Build" shortcut.
+*/
+
 import Foundation
 import Combine
 import MobileDevelopmentKit
@@ -272,6 +279,7 @@ final class NXBuilder: NSObject {
     enum BuildType {
         case run
         case export
+        case build /* fork: compile and link only, skip signing/install */
     }
     
     static func buildProject(withProject project: NXProject,
@@ -316,15 +324,19 @@ final class NXBuilder: NSObject {
                 
                 do {
                     // prepare
-                    let flow: [(String?,Double?,() throws -> Void)] = [
+                    var flow: [(String?,Double?,() throws -> Void)] = [
                         (nil,nil,{ try builder.headsup(buildType: buildType) }),
                         (nil,nil,{ try builder.clean() }),
                         (nil,nil,{ try builder.prepare() }),
-                        (nil,nil,{ try builder.build() }),
-                        ("arrow.down.app.fill",nil,{try builder.install(buildType: buildType, executablePathCallback: { path in
-                            execPath = path
-                        }) })
+                        (nil,nil,{ try builder.build() })
                     ];
+                    
+                    /* fork: a plain build stops after compiling and linking */
+                    if buildType != .build {
+                        flow.append(("arrow.down.app.fill",nil,{try builder.install(buildType: buildType, executablePathCallback: { path in
+                            execPath = path
+                        }) }))
+                    }
                     
                     // doit, just do it!
                     try progressFlowBuilder(flow: flow)

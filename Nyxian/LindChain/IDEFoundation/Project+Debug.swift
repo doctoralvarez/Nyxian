@@ -20,6 +20,14 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-06): Issue Navigator shows "Line N, Col M" and a
+    disclosure chevron on navigable rows; "path:line:col" references inside
+    linker/internal messages are now tappable too.
+*/
+
 import Foundation
 import UIKit
 import MobileDevelopmentKit
@@ -239,6 +247,45 @@ class DebugDatabase: Codable {
     }
 }
 
+// MARK: - Fork: source location resolution for issues
+struct DebugNavigationTarget {
+    let path: String
+    let line: CFIndex
+    let column: CFIndex
+}
+
+extension DebugItem {
+    private static let embeddedLocationRegex: NSRegularExpression? = try? NSRegularExpression(
+        pattern: #"(/[^\s:'"]+\.(?:swift|mm|m|c|cc|cpp|cxx|h|hpp)):(\d+)(?::(\d+))?"#
+    )
+    
+    /// Where tapping this item should navigate to, if anywhere.
+    func navigationTarget(in object: DebugObject) -> DebugNavigationTarget? {
+        if object.flavour == .File, self.sourceLocation.isValid.boolValue {
+            return DebugNavigationTarget(path: object.title,
+                                         line: self.sourceLocation.line,
+                                         column: self.sourceLocation.column)
+        }
+        
+        /* message-only items (linker, internal) may still mention "path:line:col" */
+        guard let regex = DebugItem.embeddedLocationRegex else { return nil }
+        let message = self.message as NSString
+        guard let match = regex.firstMatch(in: self.message, range: NSRange(location: 0, length: message.length)) else {
+            return nil
+        }
+        
+        let path = message.substring(with: match.range(at: 1))
+        guard FileManager.default.fileExists(atPath: path),
+              let line = CFIndex(message.substring(with: match.range(at: 2))) else {
+            return nil
+        }
+        let columnRange = match.range(at: 3)
+        let column = columnRange.location != NSNotFound ? (CFIndex(message.substring(with: columnRange)) ?? 1) : 1
+        
+        return DebugNavigationTarget(path: path, line: line, column: column)
+    }
+}
+
 class UIDebugViewController: UITableViewController {
     let file: String
     var project: NXProject
@@ -320,7 +367,28 @@ class UIDebugViewController: UITableViewController {
         let cell = UITableViewCell()
         cell.textLabel?.text = item.message
         cell.textLabel?.numberOfLines = 0;
-        cell.textLabel?.font = UIFont.systemFont(ofSize: 14.0, weight: .regular)
+        
+        /* fork: show where the issue is and whether the row navigates */
+        let target: DebugNavigationTarget? = (items.count > 0) ? item.navigationTarget(in: sortedDebugObjects[indexPath.section]) : nil
+        if let target = target {
+            let isSameFile = sortedDebugObjects[indexPath.section].flavour == .File
+            let location = isSameFile
+                ? "Line \(target.line), Col \(target.column)"
+                : "\((target.path as NSString).lastPathComponent) — Line \(target.line)"
+            let text = NSMutableAttributedString(string: item.message, attributes: [
+                .font: UIFont.systemFont(ofSize: 14.0, weight: .regular),
+                .foregroundColor: UIColor.label
+            ])
+            text.append(NSAttributedString(string: "\n" + location, attributes: [
+                .font: UIFont.monospacedDigitSystemFont(ofSize: 12.0, weight: .medium),
+                .foregroundColor: UIColor.label.withAlphaComponent(0.7)
+            ]))
+            cell.textLabel?.attributedText = text
+            cell.accessoryType = .disclosureIndicator
+        }
+        if target == nil {
+            cell.textLabel?.font = UIFont.systemFont(ofSize: 14.0, weight: .regular)
+        }
         cell.textLabel?.translatesAutoresizingMaskIntoConstraints = false
         
         let tintColor: UIColor = {
@@ -394,28 +462,23 @@ class UIDebugViewController: UITableViewController {
         self.tableView.deselectRow(at: indexPath, animated: true)
         
         let object: DebugObject = sortedDebugObjects[indexPath.section]
-        if object.flavour != .File {
-            // It's not a file
+        guard indexPath.row < object.debugItems.count,
+              let target = object.debugItems[indexPath.row].navigationTarget(in: object) else {
+            // Nothing to navigate to
             return
         }
         
-        let item: DebugItem = object.debugItems[indexPath.row]
-        if !item.sourceLocation.isValid.boolValue {
-            // It's not a file location
-            return
-        }
-        
-        let fileURL = URL(fileURLWithPath: object.title)
+        let fileURL = URL(fileURLWithPath: target.path)
         
         if UIDevice.current.userInterfaceIdiom == .pad {
-            NotificationCenter.default.post(name: Notification.Name("FileListAct"), object: ["open",fileURL.path,"\(item.sourceLocation.line)","\(item.sourceLocation.column)"])
+            NotificationCenter.default.post(name: Notification.Name("FileListAct"), object: ["open",fileURL.path,"\(target.line)","\(target.column)"])
             self.dismiss(animated: true)
         } else {
             guard let codeEditor = CodeEditorViewController(
                 project: project,
                 url: fileURL,
-                line: item.sourceLocation.line,
-                column: item.sourceLocation.column
+                line: target.line,
+                column: target.column
             ) else {
                 return
             }
