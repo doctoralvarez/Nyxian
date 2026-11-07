@@ -4,6 +4,20 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.5.0 — 2026-11-07
+
+### Code completion phase 2: Swift
+- Swift files get completions from the Swift compiler itself
+  (`swift::ide::IDEInspectionInstance`, the engine behind SourceKit), already
+  bundled in Nyxian's toolchain (`libswiftIDE`/`libswiftIDETool`), so no LLVM
+  rebuild was needed.
+- Understands types: members after `.`, argument labels, result types; nearer
+  scopes (locals, members, this module) are listed before the SDK.
+- Functions are inserted as `name()` with the caret inside the parentheses.
+- The engine keeps the last type-checked AST and reuses it while typing inside
+  function bodies. While it is busy, keystrokes use the word suggestions.
+- Files: `CCASTUnit.cpp/.h`, `NXLanguageServer.h/.m`, `CodeEditor.swift`.
+
 ## 1.4.1 — 2026-11-07
 
 - Build fix in `CCASTUnit.cpp`: include `clang/Frontend/FrontendActions.h`.

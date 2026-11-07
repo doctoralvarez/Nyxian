@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-07): phase 2 — Swift files ask the Swift compiler for
+    completions (types, members after ".", argument labels); "font()" is
+    inserted with the caret inside the parentheses. While the compiler is
+    busy, keystrokes fall back to word suggestions.
   - 1.2.0 (2026-11-07): code completion while typing. Phase 0 suggests words
     from this file, the project and the language (all files); phase 1 asks
     Clang for real completions in C, Objective-C and C++ files (also after
@@ -1119,6 +1123,8 @@ extension CodeEditorViewController {
 struct EditorCompletionItem {
     /// What replaces the typed prefix.
     let text: String
+    /// Caret position inside `text` after inserting it (UTF-16); nil puts it at the end.
+    var cursorOffset: Int? = nil
     /// What the list shows (a full signature for Clang results).
     let display: String
     /// Secondary text: a result type or where the word came from.
@@ -1233,6 +1239,8 @@ final class EditorCompletionController {
     private var generation = 0
     private var isInserting = false
     private var replacementRange: NSRange?
+    /// The compiler can take a moment (Swift above all); meanwhile keystrokes use word suggestions.
+    private var engineBusy = false
     
     var isVisible: Bool { popup.superview != nil && !popup.isHidden }
     
@@ -1264,11 +1272,11 @@ final class EditorCompletionController {
         }
         let prefix = ns.substring(with: NSRange(location: start, length: caret - start))
         
-        /* Clang knows the members after "." and "->" even before anything is typed */
+        /* the compilers know the members after "." (and "->" in C) even before anything is typed */
         let isClang = editor.file.isClang
-        let afterMemberAccess = isClang && start > 0 && (
+        let afterMemberAccess = start > 0 && (editor.file.isSwift || isClang) && (
             ns.character(at: start - 1) == 0x2E /* . */ ||
-            (start > 1 && ns.character(at: start - 1) == 0x3E /* > */ && ns.character(at: start - 2) == 0x2D /* - */)
+            (isClang && start > 1 && ns.character(at: start - 1) == 0x3E /* > */ && ns.character(at: start - 2) == 0x2D /* - */)
         )
         
         if let first = prefix.unicodeScalars.first, CharacterSet.decimalDigits.contains(first) {
@@ -1321,18 +1329,22 @@ final class EditorCompletionController {
     
     private func compute(text: String, prefixStart: Int, caret: Int, prefix: String, generation currentGeneration: Int) {
         guard let editor = editor else { return }
-        let server = editor.file.isClang ? editor.languageServer : nil
+        let wantsEngine = (editor.file.isClang || editor.file.isSwift) && !engineBusy
+        let server = wantsEngine ? editor.languageServer : nil
+        if server != nil { engineBusy = true }
         let words = projectWords
         let keywords = editor.file.isSwift ? EditorCompletionController.swiftWords : EditorCompletionController.cWords
         
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var items: [EditorCompletionItem] = []
             
-            /* phase 1: real completion from Clang (C, Objective-C, C++) */
+            /* phase 1 (Clang: C, Objective-C, C++) and phase 2 (Swift): the compiler's own completion */
+            var usedEngine = false
             if let server = server {
+                usedEngine = true
                 let position = EditorCompletionController.lineAndUTF8Column(text, utf16Offset: prefixStart)
                 if let raw = server.completions(line: position.line, utf8Column: position.column, content: text) {
-                    items = EditorCompletionController.rankClang(raw, prefix: prefix)
+                    items = EditorCompletionController.rankEngine(raw, prefix: prefix)
                 }
             }
             
@@ -1342,6 +1354,7 @@ final class EditorCompletionController {
             }
             
             DispatchQueue.main.async {
+                if usedEngine { self?.engineBusy = false }
                 guard let self = self, currentGeneration == self.generation, let editor = self.editor else { return }
                 guard editor.textView.selectedRange.location == caret, editor.textView.selectedRange.length == 0 else { return }
                 guard !items.isEmpty else {
@@ -1400,14 +1413,14 @@ final class EditorCompletionController {
         let range = NSRange(location: start, length: caret - start)
         
         isInserting = true
-        editor.insertCompletion(item.text, replacing: range)
+        editor.insertCompletion(item.text, replacing: range, caretOffset: item.cursorOffset)
         isInserting = false
         hide()
     }
     
     // MARK: ranking
     
-    private static func rankClang(_ raw: [[String: Any]], prefix: String) -> [EditorCompletionItem] {
+    private static func rankEngine(_ raw: [[String: Any]], prefix: String) -> [EditorCompletionItem] {
         let lowerPrefix = prefix.lowercased()
         var seen = Set<String>()
         var scored: [(item: EditorCompletionItem, exactCase: Bool, priority: Int)] = []
@@ -1426,10 +1439,16 @@ final class EditorCompletionController {
                 case 1: return "textformat"
                 case 2: return "number"
                 case 3: return "curlybraces"
+                case 10: return "t.square"
+                case 11: return "f.square"
+                case 12: return "v.square"
                 default: return "cube"
                 }
             }()
-            let item = EditorCompletionItem(text: text, display: display, detail: entry["type"] as? String, symbolName: symbol)
+            /* Swift results bring their own insertion text, e.g. "font()" with the caret inside */
+            let insert = (entry["insert"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? text
+            let cursor = (entry["cursor"] as? NSNumber)?.intValue
+            let item = EditorCompletionItem(text: insert, cursorOffset: cursor, display: display, detail: entry["type"] as? String, symbolName: symbol)
             scored.append((item, text.hasPrefix(prefix), priority))
         }
         
@@ -1586,12 +1605,14 @@ final class EditorCompletionController {
 
 extension CodeEditorViewController {
     /// Replaces the typed prefix with a completion as one undoable edit and puts the caret after it.
-    func insertCompletion(_ text: String, replacing range: NSRange) {
+    func insertCompletion(_ text: String, replacing range: NSRange, caretOffset: Int? = nil) {
         let wasAutoIndenting = self.coordinator?.isAutoIndenting ?? false
         self.coordinator?.isAutoIndenting = true
         self.textView.replace(range, withText: text)
         self.coordinator?.isAutoIndenting = wasAutoIndenting
-        self.textView.selectedRange = NSRange(location: range.location + (text as NSString).length, length: 0)
+        let length = (text as NSString).length
+        let caret = min(max(caretOffset ?? length, 0), length)
+        self.textView.selectedRange = NSRange(location: range.location + caret, length: 0)
     }
     
     @objc func completionMoveUp() {

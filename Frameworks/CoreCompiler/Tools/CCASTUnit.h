@@ -23,8 +23,9 @@
  */
 
 /*
- * Fork doctoralvarez/Nyxian — version 1.0.0
+ * Fork doctoralvarez/Nyxian — version 1.1.0
  * Changelog:
+ *  - 1.1.0 (2026-11-07): Swift units are completed too (phase 2).
  *  - 1.0.0 (2026-11-07): CCASTUnitCopyCompletionsAtLocation, code completion
  *    for Clang units through ASTUnit::CodeComplete.
  */
@@ -64,14 +65,17 @@ CC_EXPORT CCFileSourceLocationRef CCASTUnitCopyDefinitionAtLocation(CCASTUnitRef
 CC_EXPORT CFArrayRef CCASTUnitCopyDiagnostics(CCASTUnitRef unit);
 
 /*
- * fork doctoralvarez/Nyxian: code completion (Clang units only).
+ * fork doctoralvarez/Nyxian: code completion for Clang and Swift units.
  *
- * Returns an array of CFDictionaries, or NULL when the unit is not a parsed
- * Clang unit. Keys: "text" (CFString, what is typed/inserted), "display"
+ * Returns an array of CFDictionaries, or NULL when the unit is not parsed yet.
+ * Keys: "text" (CFString, the name results are filtered by), "display"
  * (CFString, the full signature), "type" (CFString, result type, may be
- * absent), "kind" (CFNumber: 0 declaration, 1 keyword, 2 macro, 3 pattern),
- * "priority" (CFNumber, lower is better). `location` is 1-based; the column
- * counts UTF-8 bytes, like every Clang column.
+ * absent), "kind" (CFNumber: 0 declaration, 1 keyword, 2 macro, 3 pattern,
+ * 10 type, 11 function, 12 value), "priority" (CFNumber, lower is better).
+ * Swift results also carry "insert" (CFString, text to insert with the
+ * argument placeholders removed) and "cursor" (CFNumber, UTF-16 offset inside
+ * "insert" for the caret). `location` is 1-based; the column counts UTF-8
+ * bytes.
  */
 CC_EXPORT CFArrayRef CCASTUnitCopyCompletionsAtLocation(CCASTUnitRef unit, CCSourceLocation location);
 

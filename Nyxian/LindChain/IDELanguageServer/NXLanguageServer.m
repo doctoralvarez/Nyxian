@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-07): completions for Swift files too (phase 2).
   - 1.0.0 (2026-11-07): -completionsAtLine:utf8Column:content: for the
     editor's code completion (Clang files).
 */
@@ -159,7 +160,7 @@
 - (NSArray<NSDictionary<NSString*,id>*>*)completionsAtLine:(NSInteger)line utf8Column:(NSInteger)column content:(NSString*)content
 {
     NSData *data = [content dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO];
-    if(data == nil || _file.isSwift)
+    if(data == nil)
     {
         return nil;
     }

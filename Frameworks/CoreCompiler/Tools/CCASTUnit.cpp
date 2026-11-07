@@ -23,8 +23,11 @@
  */
 
 /*
- * Fork doctoralvarez/Nyxian — version 1.0.1
+ * Fork doctoralvarez/Nyxian — version 1.1.0
  * Changelog:
+ *  - 1.1.0 (2026-11-07): Swift code completion (phase 2) through
+ *    swift::ide::IDEInspectionInstance, the engine SourceKit uses;
+ *    CCASTUnitCopyCompletionsAtLocation now serves Swift units too.
  *  - 1.0.1 (2026-11-07): include FrontendActions.h (complete SyntaxOnlyAction
  *    type for ASTUnit::CodeComplete's unique_ptr argument).
  *  - 1.0.0 (2026-11-07): CCASTUnitCopyCompletionsAtLocation, code completion
@@ -48,6 +51,16 @@
 #include <CoreCompiler/CCUtils.h>
 #include <clang/Sema/CodeCompleteConsumer.h>
 #include <clang/Frontend/FrontendActions.h>
+#include <swift/IDETool/IDEInspectionInstance.h>
+#include <swift/IDE/CancellableResult.h>
+#include <swift/IDE/CodeCompletionCache.h>
+#include <swift/IDE/CodeCompletionContext.h>
+#include <swift/IDE/CodeCompletionResult.h>
+#include <swift/IDE/CodeCompletionResultSink.h>
+#include <swift/IDE/CodeCompletionResultPrinter.h>
+#include <swift/AST/PluginRegistry.h>
+#include <llvm/Support/VirtualFileSystem.h>
+#include <mutex>
 #include <clang/Basic/SourceManager.h>
 #include <clang/Basic/FileManager.h>
 
@@ -1162,9 +1175,16 @@ static CFStringRef CCCreateCFString(const std::string &value)
 
 } /* namespace */
 
+static CFArrayRef _CCASTUnitCopySwiftCompletions(CCASTUnitRef unit, CCSourceLocation location);
+
 CFArrayRef CCASTUnitCopyCompletionsAtLocation(CCASTUnitRef unit,
                                               CCSourceLocation location)
 {
+    if(unit != nullptr && unit->type == kCCASTUnitTypeSwift)
+    {
+        return _CCASTUnitCopySwiftCompletions(unit, location);
+    }
+    
     if(unit == nullptr || unit->type != kCCASTUnitTypeClang || unit->unit == nullptr || unit->file == nullptr)
     {
         return nullptr;
@@ -1265,6 +1285,361 @@ CFArrayRef CCASTUnitCopyCompletionsAtLocation(CCASTUnitRef unit,
         if(type != nullptr) CFRelease(type);
         if(kindNumber != nullptr) CFRelease(kindNumber);
         if(priorityNumber != nullptr) CFRelease(priorityNumber);
+    }
+    
+    return array;
+}
+
+#pragma mark - fork: Swift code completion (phase 2)
+
+namespace {
+
+struct CCSwiftCompletionItem {
+    std::string name;
+    std::string display;
+    std::string resultType;
+    std::string insert;
+    long cursor;
+    int kind;
+    int priority;
+};
+
+/* "font(<#T##font: Font?##Font?#>)" -> "font()" with the caret where the first placeholder was */
+static void CCStripSwiftPlaceholders(const std::string &source, std::string &out, long &cursor)
+{
+    out.clear();
+    cursor = -1;
+    size_t i = 0;
+    while(i < source.size())
+    {
+        if(source.compare(i, 2, "<#") == 0)
+        {
+            size_t end = source.find("#>", i + 2);
+            if(end == std::string::npos)
+            {
+                out.append(source, i, std::string::npos);
+                break;
+            }
+            if(cursor < 0)
+            {
+                cursor = (long)out.size();
+            }
+            i = end + 2;
+            continue;
+        }
+        out.push_back(source[i]);
+        i++;
+    }
+    if(cursor < 0)
+    {
+        cursor = (long)out.size();
+    }
+}
+
+/* the identifier a result is filtered by: "font(_ font: Font?)" -> "font" */
+static std::string CCSwiftCompletionName(const std::string &display)
+{
+    size_t i = 0;
+    while(i < display.size() && (display[i] == '.' || display[i] == '@' || display[i] == '#'))
+    {
+        i++;
+    }
+    size_t start = i;
+    while(i < display.size())
+    {
+        unsigned char c = (unsigned char)display[i];
+        if(isalnum(c) || c == '_' || c >= 0x80)
+        {
+            i++;
+            continue;
+        }
+        break;
+    }
+    return display.substr(start, i - start);
+}
+
+static int CCSwiftCompletionKind(const swift::ide::CodeCompletionResult *result)
+{
+    using swift::ide::CodeCompletionResultKind;
+    using swift::ide::CodeCompletionDeclKind;
+    switch(result->getKind())
+    {
+        case CodeCompletionResultKind::Keyword:
+            return 1;
+        case CodeCompletionResultKind::Pattern:
+        case CodeCompletionResultKind::Literal:
+        case CodeCompletionResultKind::BuiltinOperator:
+            return 3;
+        case CodeCompletionResultKind::Declaration:
+            break;
+    }
+    switch(result->getAssociatedDeclKind())
+    {
+        case CodeCompletionDeclKind::Class:
+        case CodeCompletionDeclKind::Actor:
+        case CodeCompletionDeclKind::Struct:
+        case CodeCompletionDeclKind::Enum:
+        case CodeCompletionDeclKind::Protocol:
+        case CodeCompletionDeclKind::TypeAlias:
+        case CodeCompletionDeclKind::AssociatedType:
+        case CodeCompletionDeclKind::GenericTypeParam:
+            return 10; /* type */
+        case CodeCompletionDeclKind::Constructor:
+        case CodeCompletionDeclKind::StaticMethod:
+        case CodeCompletionDeclKind::InstanceMethod:
+        case CodeCompletionDeclKind::FreeFunction:
+        case CodeCompletionDeclKind::Subscript:
+            return 11; /* function */
+        case CodeCompletionDeclKind::StaticVar:
+        case CodeCompletionDeclKind::InstanceVar:
+        case CodeCompletionDeclKind::LocalVar:
+        case CodeCompletionDeclKind::GlobalVar:
+        case CodeCompletionDeclKind::EnumElement:
+            return 12; /* value */
+        case CodeCompletionDeclKind::Macro:
+            return 2;
+        default:
+            return 0;
+    }
+}
+
+/* one engine for the whole process, like a SourceKit context: it keeps the last
+ * type-checked AST and reuses it while the edits stay inside function bodies */
+static swift::ide::IDEInspectionInstance &CCSharedIDEInspectionInstance(void)
+{
+    static swift::ide::IDEInspectionInstance *instance = new swift::ide::IDEInspectionInstance(std::make_shared<swift::PluginRegistry>());
+    return *instance;
+}
+
+static swift::ide::CodeCompletionCache &CCSharedCompletionCache(void)
+{
+    static swift::ide::CodeCompletionCache *cache = new swift::ide::CodeCompletionCache();
+    return *cache;
+}
+
+/* the cache above is not documented as thread safe */
+static std::mutex gCCSwiftCompletionMutex;
+
+static CFStringRef CCCreateSwiftCFString(const std::string &value)
+{
+    return CFStringCreateWithBytes(kCFAllocatorDefault, (const UInt8 *)value.data(), (CFIndex)value.size(), kCFStringEncodingUTF8, false);
+}
+
+} /* namespace */
+
+static CFArrayRef _CCASTUnitCopySwiftCompletions(CCASTUnitRef unit, CCSourceLocation location)
+{
+    if(unit->file == nullptr || unit->BaseArgs.empty() || !location.isValid || location.line <= 0 || location.column <= 0)
+    {
+        return nullptr;
+    }
+    
+    char primaryPath[PATH_MAX];
+    if(!CFURLGetFileSystemRepresentation(CCFileGetFileURL(unit->file), true, (UInt8 *)primaryPath, sizeof(primaryPath)))
+    {
+        return nullptr;
+    }
+    
+    CFDataRef data = CCFileGetUnsavedData(unit->file);
+    if(data == nullptr)
+    {
+        return nullptr;
+    }
+    llvm::StringRef content((const char *)CFDataGetBytePtr(data), CFDataGetLength(data));
+    
+    /* 1-based line and UTF-8 column -> byte offset */
+    size_t offset = 0;
+    for(CFIndex line = 1; line < location.line; line++)
+    {
+        size_t newline = content.find('\n', offset);
+        if(newline == llvm::StringRef::npos)
+        {
+            return nullptr;
+        }
+        offset = newline + 1;
+    }
+    offset += (size_t)(location.column - 1);
+    if(offset > content.size())
+    {
+        return nullptr;
+    }
+    
+    /* same frontend arguments as the live type checking in _CCASTUnitReparseSwift */
+    llvm::SmallVector<const char *, 64> args;
+    for(size_t i = 0; i < unit->BaseArgs.size(); i++)
+    {
+        const std::string &arg = unit->BaseArgs[i];
+        if(arg == "-Xfrontend")
+        {
+            if(i + 1 < unit->BaseArgs.size())
+            {
+                args.push_back(unit->BaseArgs[++i].c_str());
+            }
+            continue;
+        }
+        args.push_back(arg.c_str());
+    }
+    
+    CCInitializeSwiftModulesOnce();
+    
+    swift::SourceManager parseSM;
+    swift::DiagnosticEngine parseDiags(parseSM);
+    swift::CompilerInvocation invocation;
+    if(invocation.parseArgs(args, parseDiags, nullptr, "", ""))
+    {
+        return nullptr;
+    }
+    invocation.getFrontendOptions().RequestedAction = swift::FrontendOptions::ActionType::Typecheck;
+    
+    /* the edited file is the primary input; its text comes from the completion buffer */
+    {
+        auto &io = invocation.getFrontendOptions().InputsAndOutputs;
+        swift::FrontendInputsAndOutputs rebuilt;
+        bool foundPrimary = false;
+        for(const auto &in : io.getAllInputs())
+        {
+            bool isPrimary = (in.getFileName() == primaryPath);
+            foundPrimary = foundPrimary || isPrimary;
+            rebuilt.addInput(swift::InputFile(in.getFileName(), isPrimary));
+        }
+        if(!foundPrimary)
+        {
+            rebuilt.addInput(swift::InputFile(primaryPath, true));
+        }
+        io = std::move(rebuilt);
+    }
+    
+    std::unique_ptr<llvm::MemoryBuffer> original = llvm::MemoryBuffer::getMemBufferCopy(content, primaryPath);
+    unsigned completionOffset = (unsigned)offset;
+    std::unique_ptr<llvm::MemoryBuffer> completionBuffer = swift::ide::makeCodeCompletionMemoryBuffer(original.get(), completionOffset, primaryPath);
+    if(completionBuffer == nullptr)
+    {
+        return nullptr;
+    }
+    
+    std::vector<CCSwiftCompletionItem> items;
+    
+    {
+        std::lock_guard<std::mutex> guard(gCCSwiftCompletionMutex);
+        
+        swift::ide::CodeCompletionContext completionContext(CCSharedCompletionCache());
+        completionContext.setAnnotateResult(false);
+        
+        CCSharedIDEInspectionInstance().codeComplete(
+            invocation,
+            args,
+            llvm::vfs::getRealFileSystem(),
+            completionBuffer.get(),
+            completionOffset,
+            /*DiagC=*/nullptr,
+            completionContext,
+            /*CancellationFlag=*/nullptr,
+            [&](swift::ide::CancellableResult<swift::ide::CodeCompleteResult> result) {
+                if(result.getKind() != swift::ide::CancellableResultKind::Success)
+                {
+                    return;
+                }
+                
+                const swift::ide::CodeCompleteResult &success = result.getResult();
+                for(swift::ide::CodeCompletionResult *completion : success.ResultSink.Results)
+                {
+                    if(completion == nullptr || items.size() >= 5000)
+                    {
+                        continue;
+                    }
+                    
+                    CCSwiftCompletionItem item;
+                    {
+                        llvm::raw_string_ostream os(item.display);
+                        swift::ide::printCodeCompletionResultDescription(*completion, os, /*leadingPunctuation=*/false);
+                    }
+                    {
+                        llvm::raw_string_ostream os(item.resultType);
+                        swift::ide::printCodeCompletionResultTypeName(*completion, os);
+                    }
+                    std::string source;
+                    {
+                        llvm::raw_string_ostream os(source);
+                        swift::ide::printCodeCompletionResultSourceText(*completion, os);
+                    }
+                    
+                    item.name = CCSwiftCompletionName(item.display);
+                    if(item.name.empty())
+                    {
+                        continue;
+                    }
+                    CCStripSwiftPlaceholders(source, item.insert, item.cursor);
+                    if(item.insert.empty())
+                    {
+                        item.insert = item.name;
+                        item.cursor = (long)item.insert.size();
+                    }
+                    item.kind = CCSwiftCompletionKind(completion);
+                    /* nearer contexts first (locals, members, module, then the SDK); not recommended last */
+                    item.priority = (int)completion->getSemanticContext() * 10 + (completion->isNotRecommended() ? 1000 : 0);
+                    items.push_back(std::move(item));
+                }
+            });
+    }
+    
+    CFMutableArrayRef array = CFArrayCreateMutable(kCFAllocatorDefault, (CFIndex)items.size(), &kCFTypeArrayCallBacks);
+    if(array == nullptr)
+    {
+        return nullptr;
+    }
+    
+    for(const CCSwiftCompletionItem &item : items)
+    {
+        CFStringRef text = CCCreateSwiftCFString(item.name);
+        CFStringRef display = CCCreateSwiftCFString(item.display.empty() ? item.name : item.display);
+        CFStringRef insert = CCCreateSwiftCFString(item.insert);
+        CFStringRef type = item.resultType.empty() ? nullptr : CCCreateSwiftCFString(item.resultType);
+        if(text == nullptr || display == nullptr || insert == nullptr)
+        {
+            if(text) CFRelease(text);
+            if(display) CFRelease(display);
+            if(insert) CFRelease(insert);
+            if(type) CFRelease(type);
+            continue;
+        }
+        
+        /* the caret offset inside "insert" is in UTF-16 units, as the editor counts */
+        CFIndex cursorUTF16 = CFStringGetLength(insert);
+        if(item.cursor >= 0 && (size_t)item.cursor <= item.insert.size())
+        {
+            CFStringRef head = CCCreateSwiftCFString(item.insert.substr(0, (size_t)item.cursor));
+            if(head != nullptr)
+            {
+                cursorUTF16 = CFStringGetLength(head);
+                CFRelease(head);
+            }
+        }
+        
+        int kind = item.kind;
+        int priority = item.priority;
+        long cursor = (long)cursorUTF16;
+        CFNumberRef kindNumber = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &kind);
+        CFNumberRef priorityNumber = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &priority);
+        CFNumberRef cursorNumber = CFNumberCreate(kCFAllocatorDefault, kCFNumberLongType, &cursor);
+        
+        CFMutableDictionaryRef dict = CFDictionaryCreateMutable(kCFAllocatorDefault, 7, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        CFDictionarySetValue(dict, CFSTR("text"), text);
+        CFDictionarySetValue(dict, CFSTR("display"), display);
+        CFDictionarySetValue(dict, CFSTR("insert"), insert);
+        if(type != nullptr) CFDictionarySetValue(dict, CFSTR("type"), type);
+        if(kindNumber != nullptr) CFDictionarySetValue(dict, CFSTR("kind"), kindNumber);
+        if(priorityNumber != nullptr) CFDictionarySetValue(dict, CFSTR("priority"), priorityNumber);
+        if(cursorNumber != nullptr) CFDictionarySetValue(dict, CFSTR("cursor"), cursorNumber);
+        CFArrayAppendValue(array, dict);
+        
+        CFRelease(dict);
+        CFRelease(text);
+        CFRelease(display);
+        CFRelease(insert);
+        if(type != nullptr) CFRelease(type);
+        if(kindNumber != nullptr) CFRelease(kindNumber);
+        if(priorityNumber != nullptr) CFRelease(priorityNumber);
+        if(cursorNumber != nullptr) CFRelease(cursorNumber);
     }
     
     return array;

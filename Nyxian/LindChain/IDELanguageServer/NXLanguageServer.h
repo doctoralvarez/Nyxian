@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-07): completions for Swift files too (phase 2).
   - 1.0.0 (2026-11-07): -completionsAtLine:utf8Column:content: for the
     editor's code completion (Clang files).
 */
@@ -47,7 +48,7 @@
 - (NSArray<MDKDiagnostic *> *)getDiagnostics;
 - (MDKFileSourceLocation*)getDefinitionAtLocation:(MDKSourceLocation)location;
 
-/* fork: code completion at a 1-based line and UTF-8 byte column of `content`; nil when unavailable (not parsed yet, Swift file) */
+/* fork: code completion at a 1-based line and UTF-8 byte column of `content` (Clang and Swift files); nil when the file has not been parsed yet */
 - (NSArray<NSDictionary<NSString*,id>*>*)completionsAtLine:(NSInteger)line utf8Column:(NSInteger)column content:(NSString*)content NS_SWIFT_NAME(completions(line:utf8Column:content:));
 
 - (void)releaseMemory;
