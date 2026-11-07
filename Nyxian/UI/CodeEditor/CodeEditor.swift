@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.6.0
+ Fork doctoralvarez/Nyxian — version 1.6.1
  Changelog:
+  - 1.6.1 (2026-11-07): build fix — MDKFile.fileURL is optional; unwrap it in
+    LiveEditorRegistry and SymbolRenamer.
   - 1.6.0 (2026-11-07): Fix-its — ⌥⌘↩ (or the wrench button) applies the
     compiler's fix for the caret's line, ⌃⌥⌘F applies every fix in the file;
     the file is re-checked first so positions match the current text.
@@ -1711,8 +1713,9 @@ enum LiveEditorRegistry {
     /// The open, writable editor showing `path`, if any.
     static func editor(forPath path: String) -> CodeEditorViewController? {
         let wanted = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
-        return editors.allObjects.first {
-            !$0.isReadOnly && $0.file.fileURL.resolvingSymlinksInPath().standardizedFileURL.path == wanted
+        return editors.allObjects.first { editor in
+            guard !editor.isReadOnly, let url: URL = editor.file.fileURL else { return false }
+            return url.resolvingSymlinksInPath().standardizedFileURL.path == wanted
         }
     }
 }
@@ -1944,8 +1947,8 @@ enum SymbolRenamer {
             let root: URL = project.url
             urls = ProjectFileIndex.files(in: root)
         }
-        let currentURL = currentEditor.file.fileURL
-        if !urls.contains(where: { $0.resolvingSymlinksInPath().path == currentURL.resolvingSymlinksInPath().path }) {
+        if let currentURL: URL = currentEditor.file.fileURL,
+           !urls.contains(where: { $0.resolvingSymlinksInPath().path == currentURL.resolvingSymlinksInPath().path }) {
             urls.append(currentURL)
         }
         

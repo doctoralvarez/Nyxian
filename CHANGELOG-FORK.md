@@ -4,6 +4,11 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.9.1 — 2026-11-07
+
+- Build fix for 1.7.0: `MDKFile.fileURL` is optional in Swift; the open-tabs
+  registry and Rename Symbol now unwrap it.
+
 ## 1.9.0 — 2026-11-07
 
 - **Fix-its**: **⌥⌘↩** (or the new wrench button in the editor toolbar) applies
