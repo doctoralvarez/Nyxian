@@ -4,6 +4,16 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.11.1 — 2026-11-07
+
+- **Link fix** for apps whose display name differs from the executable name
+  (typical of imported `.swiftpm` apps, e.g. "ZCS Explorer" / `ZCSExplorer`):
+  the linker wrote into `Payload/<display name>.app`, but the builder only
+  creates `Payload/<executable>.app` ("failed to open … No such file or
+  directory"). `-[NXProject machoURL]` now redirects into the real bundle, so
+  already-imported projects work without re-importing; new projects and the
+  importer use `$(NXExecutable).app`.
+
 ## 1.11.0 — 2026-11-07
 
 - **Export as Swift Playgrounds App (.swiftpm)**: long-press a project, or

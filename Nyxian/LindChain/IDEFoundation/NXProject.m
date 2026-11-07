@@ -20,6 +20,17 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): link fix for apps whose display name differs from the
+    executable name (e.g. "ZCS Explorer" vs "ZCSExplorer", common in imported
+    .swiftpm apps). The bundle folder is always <executable>.app, but the
+    template's NXOutputPath used $(NXDisplayName).app, so the linker wrote into
+    a folder that did not exist. -machoURL now redirects such paths into the
+    real bundle, and new projects use $(NXExecutable).app.
+*/
+
 #import <LindChain/IDEFoundation/NXProject.h>
 #import <LindChain/IDEFoundation/NXCodeTemplate.h>
 #import <LindChain/IDEFoundation/NXUser.h>
@@ -269,7 +280,7 @@
                 @"NXBundleInfo": appBundleInfo,
                 @"NXBundleVersion": @"1.0",
                 @"NXBundleShortVersion": @"1.0",
-                @"NXOutputPath": @"$(CACHEROOT)/Payload/$(NXDisplayName).app/$(NXExecutable)"
+                @"NXOutputPath": @"$(CACHEROOT)/Payload/$(NXExecutable).app/$(NXExecutable)"
             }];
             break;
         case NXProjectSchemeKindUtility:
@@ -507,7 +518,23 @@
         {
             goto kate_handling;
         }
-        return [NSURL fileURLWithPath:outputPath];
+        NSURL *outputURL = [NSURL fileURLWithPath:outputPath];
+        
+        /* fork: an app's binary must land in the bundle folder the builder creates (<executable>.app) */
+        if(self.projectConfig.schemeKind == NXProjectSchemeKindApp)
+        {
+            NSURL *appFolder = [outputURL URLByDeletingLastPathComponent];
+            NSString *outputParent = [[[appFolder URLByDeletingLastPathComponent] path] stringByStandardizingPath];
+            NSString *payload = [[self.payloadURL path] stringByStandardizingPath];
+            if([[appFolder pathExtension] isEqualToString:@"app"] &&
+               [outputParent isEqualToString:payload] &&
+               ![[appFolder lastPathComponent] isEqualToString:[self.bundleURL lastPathComponent]])
+            {
+                return [self.bundleURL URLByAppendingPathComponent:[outputURL lastPathComponent]];
+            }
+        }
+        
+        return outputURL;
     }
 }
 - (NSURL*)packageURL {

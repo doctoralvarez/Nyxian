@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.0
+ Fork doctoralvarez/Nyxian — version 1.4.1
  Changelog:
+  - 1.4.1 (2026-11-07): imported .swiftpm apps whose name has spaces failed to
+    link ("failed to open …/Payload/ZCS Explorer.app/ZCSExplorer"); the
+    importer now writes NXOutputPath with $(NXExecutable).app (see NXProject.m).
   - 1.4.0 (2026-11-07): export a project as a Swift Playgrounds app (.swiftpm,
     SwiftPlaygroundsExporter at the end of this file); swipe a project left to
     delete it and right to export it (.zip or .swiftpm); the long-press menu
@@ -1007,6 +1010,8 @@ enum SwiftPlaygroundsImporter {
         guard let data = try? Data(contentsOf: plistURL),
               var plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else { return }
         plist["NXDisplayName"] = displayName
+        /* the builder makes <executable>.app, so the binary must go there even when the display name differs */
+        plist["NXOutputPath"] = "$(CACHEROOT)/Payload/$(NXExecutable).app/$(NXExecutable)"
         if let displayVersion { plist["NXBundleShortVersion"] = displayVersion }
         if let bundleVersion { plist["NXBundleVersion"] = bundleVersion }
         if let output = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) {
