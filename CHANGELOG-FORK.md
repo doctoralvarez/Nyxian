@@ -4,6 +4,20 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.21.8 — 2026-11-08
+
+- **Pasting code into the Python console**: the console asks the terminal to
+  mark pastes (bracketed paste), so a pasted block arrives whole. It is
+  cleaned — line ends of any kind (CR LF included), non-breaking and other
+  look-alike spaces from web pages and chats, zero-width characters, curly
+  quotes, tabs in the indentation, indentation common to all lines — shown
+  with `... `, and run statement by statement, like Python 3.13's REPL: blank
+  lines inside a `def` and code right after a block work, and the values of
+  expressions are shown. A one-line paste is inserted for editing. The key
+  bar's paste key works the same way.
+- **Python font**: 24 pt on iPad, 18 on iPhone by default (sizes saved
+  earlier are not kept).
+
 ## 1.21.7 — 2026-11-08
 
 - pip no longer warns "The script … is installed in …/opt/python/bin which is

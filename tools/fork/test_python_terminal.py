@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-# Fork doctoralvarez/Nyxian — version 1.1.0
+# Fork doctoralvarez/Nyxian — version 1.2.0
 # Changelog:
+#  - 1.2.0 (2026-11-08): pasted blocks (bracketed paste, look-alike spaces,
+#    CR LF, common indentation, tabs).
 #  - 1.1.0 (2026-11-08): checks automatic indentation, pasted blocks and
 #    curly quotes.
 #  - 1.0.0 (2026-11-07): CI test of Nyxian's Python REPL in a pseudo terminal
@@ -93,6 +95,16 @@ def main():
         (b"x = input('n? ')\r", b"n? "),
         (b"42\r", b">>> "),
         (b"x\r", b"'42'"),
+        # pasted (bracketed paste, as SwiftTerm sends it): runs whole, no Enter needed
+        (b"\x1b[200~for i in range(2):\n    print(i + 100)\nprint('fin')\n\x1b[201~", b"101\r\nfin"),
+        ("\x1b[200~if True:\n\u00a0\u00a0\u00a0\u00a0y = 5\n\n\u00a0\u00a0\u00a0\u00a0print(y * 2)\nprint(\u201cok\u201d, y + 1)\x1b[201~".encode(), b"10\r\nok 6"),
+        (b"\x1b[200~    def h(a):\r\n        b = a + 1\r\n\r\n        return b * 3\r\n    h(4)\x1b[201~", b"15"),
+        (b"\x1b[200~a = 2\r\nb = 3\r\n\r\nprint(a * b)\x1b[201~", b"... print(a * b)\r\n6"),
+        (b"\x1b[200~\tif 1:\n\t\tprint('tab')\x1b[201~", b"tab"),
+        (b"\x1b[200~print(3 + 4)\x1b[201~\r", b"\r\n7\r\n"),
+        (b"\x1b[200~print(1\nprint(2\x1b[201~", b"SyntaxError"),
+        (b"z = 9\r", b">>> "),
+        (b"z\r", b"9"),
     ]
     failed = False
     for keys, expected in checks:

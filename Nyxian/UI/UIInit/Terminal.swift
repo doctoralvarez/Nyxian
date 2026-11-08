@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.3.1
  Changelog:
+  - 1.3.1 (2026-11-08): the key bar's paste key marks the text as pasted
+    (bracketed paste) when the program asked for it, like the system Paste.
   - 1.3.0 (2026-11-08): key bar scrolls sideways and has many more keys
     (Home/End, paste, clear, page up/down, A−/A+ font size, ^A ^E ^K ^W ^Z
     ^\\, programming symbols); hide-keyboard and a red ✕ that closes the
@@ -194,8 +196,16 @@ import UIKit
     
     func forkPasteFromClipboard() {
         guard let text = UIPasteboard.general.string, !text.isEmpty else { return }
-        let normalized = text.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
-        forkSendKeys(Data(normalized.utf8))
+        if getTerminal().bracketedPasteMode {
+            /* the program asked for pastes marked (Python's console, bash): send the text whole */
+            var data = Data([0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e])
+            data.append(Data(text.utf8))
+            data.append(Data([0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e]))
+            forkSendKeys(data)
+        } else {
+            let normalized = text.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
+            forkSendKeys(Data(normalized.utf8))
+        }
     }
     
     func forkScrollPage(up: Bool) {

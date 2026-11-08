@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.10.2
+ Fork doctoralvarez/Nyxian — version 1.11.0
  Changelog:
+  - 1.11.0 (2026-11-08): pasting code into the Python console works:
+    bracketed paste (the block arrives whole), cleaned (line ends of any
+    kind, non-breaking / look-alike spaces, zero-width characters, curly
+    quotes, tabs, common indentation) and run statement by statement
+    (blank lines inside a def and code after a block are fine). Python
+    font: 24 pt on iPad, 18 on iPhone by default.
   - 1.10.2 (2026-11-08): opt/python/bin is on PATH in Python windows, so pip
     no longer warns that the scripts it installs are "not on PATH".
   - 1.10.1 (2026-11-08): pip installs again: python3 may write all of
@@ -2269,7 +2275,14 @@ def _flush():
             pass
 
 
+_pending = bytearray()  # bytes already read from the terminal, not used yet
+
+
 def _read_byte():
+    if _pending:
+        byte = bytes(_pending[:1])
+        del _pending[:1]
+        return byte
     while True:
         try:
             return os.read(0, 1)
@@ -2277,21 +2290,97 @@ def _read_byte():
             continue
 
 
+def _read_chunk():
+    if _pending:
+        chunk = bytes(_pending)
+        _pending.clear()
+        return chunk
+    while True:
+        try:
+            return os.read(0, 4096)
+        except InterruptedError:
+            continue
+
+
 def _swallow_lf():
     # CR LF from the terminal is one Enter, not two
+    if _pending:
+        if _pending[0] == 10:
+            del _pending[:1]
+        return
     try:
         ready, _, _ = select.select([0], [], [], 0.02)
     except Exception:
-        return None
+        return
     if not ready:
-        return None
+        return
     data = _read_byte()
-    if data and data[0] == 10:
-        return None
-    return data
+    if data and data[0] != 10:
+        _pending.extend(data)
 
 
-_pending = []
+# Bracketed paste: the terminal marks pasted text with ESC[200~ … ESC[201~,
+# so a pasted block arrives whole instead of as typed lines.
+_PASTE_END = b"\x1b[201~"
+_paste_mode = False
+
+
+def _enable_paste_mode():
+    global _paste_mode
+    if not _paste_mode:
+        _paste_mode = True
+        _write("\x1b[?2004h")
+        import atexit
+        atexit.register(lambda: _write("\x1b[?2004l"))
+
+
+def _read_paste():
+    data = bytearray()
+    while _PASTE_END not in data:
+        chunk = _read_chunk()
+        if not chunk:
+            break
+        data.extend(chunk)
+    end = data.find(_PASTE_END)
+    if end >= 0:
+        _pending[:0] = data[end + len(_PASTE_END):]
+        del data[end:]
+    return data.decode("utf-8", "replace")
+
+
+_INVISIBLE_SPACES = "\u00a0\u2007\u202f\u2002\u2003\u2004\u2005\u2006\u2008\u2009\u200a\u3000"
+_ZERO_WIDTH = "\u200b\u200c\u200d\u2060\ufeff"
+
+
+def clean_paste(text, code=True):
+    """Pasted code from web pages, chats or notes: line ends of any kind,
+    non-breaking and other look-alike spaces, zero-width characters, curly
+    quotes, tabs in the indentation, and the indentation common to all
+    lines (code copied from inside a block)."""
+    import textwrap
+    # the terminal turns CR into LF, so CR LF line ends arrive as two LF: when
+    # every line end is doubled, they were CR LF
+    parts = text.split("\n\n")
+    if len(parts) > 1 and not any("\n" in part for part in parts):
+        text = "\n".join(parts)
+    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\u2028", "\n").replace("\u2029", "\n")
+    for ch in _INVISIBLE_SPACES:
+        text = text.replace(ch, " ")
+    for ch in _ZERO_WIDTH:
+        text = text.replace(ch, "")
+    if code:
+        text = "".join(_QUOTES.get(ch, ch) for ch in text)
+        lines = []
+        for line in text.split("\n"):
+            stripped = line.lstrip(" \t")
+            lines.append(line[: len(line) - len(stripped)].expandtabs(4) + stripped)
+        text = textwrap.dedent("\n".join(lines))
+        text = "\n".join(line.rstrip() for line in text.split("\n"))
+    return text.strip("\n")
+
+
+class Pasted(str):
+    """A block of several pasted lines, returned whole by read_line."""
 
 
 def _input_waiting():
@@ -2315,6 +2404,7 @@ def read_line(prompt="", indent="", code=False):
     ⌫ / Delete erase, Ctrl-W erases a word, Ctrl-K to the end of the line,
     Ctrl-L clears the screen, Tab indents."""
     _flush()
+    _enable_paste_mode()
     if prompt:
         _write(prompt)
     buffer = []
@@ -2368,7 +2458,7 @@ def read_line(prompt="", indent="", code=False):
         _write("".join(buffer))
 
     while True:
-        data = _pending.pop(0) if _pending else _read_byte()
+        data = _read_byte()
         if not data:
             if not buffer:
                 raise EOFError
@@ -2378,9 +2468,7 @@ def read_line(prompt="", indent="", code=False):
             _write("[%d]" % c)
         if c in (10, 13):
             if c == 13:
-                extra = _swallow_lf()
-                if extra:
-                    _pending.append(extra)
+                _swallow_lf()
             move(len(buffer))
             _write("\n")
             break
@@ -2451,6 +2539,18 @@ def read_line(prompt="", indent="", code=False):
                 move(len(buffer))
             elif final == b"~" and params == b"3":
                 erase_at()
+            elif final == b"~" and params == b"200":
+                text = clean_paste(_read_paste(), code)
+                if code and "\n" in text:
+                    # a block: shown with "... " in front, run whole by the REPL
+                    move(len(buffer))
+                    lines = text.split("\n")
+                    _write(lines[0] + "".join("\n... " + line for line in lines[1:]) + "\n")
+                    source = "".join(buffer) + text
+                    if source.strip():
+                        _history.append(source)
+                    return Pasted(source)
+                insert(text.replace("\n", " ") if text else "")
             continue
         if c < 32:
             continue
@@ -2474,7 +2574,7 @@ import os
 import sys
 import traceback
 
-from nyxian_lineedit import _flush, _write, read_line
+from nyxian_lineedit import Pasted, _flush, _write, read_line
 
 
 class NyxianConsole(code.InteractiveConsole):
@@ -2491,10 +2591,41 @@ class NyxianConsole(code.InteractiveConsole):
             if last.rstrip().endswith(":"):
                 indent += "    "
         line = read_line(prompt, indent, code=True)
+        if isinstance(line, Pasted):
+            source = "\n".join(self.buffer + [str(line)])
+            self.resetbuffer()
+            self._last = ""
+            self.run_block(source)
+            return ""
         if self.buffer and not line.strip():
             line = ""
         self._last = line
         return line
+
+    def run_block(self, source):
+        """Runs pasted code statement by statement, like typed lines, so
+        blank lines inside a def and code after a block are fine, and the
+        value of an expression is shown."""
+        import ast
+        try:
+            tree = ast.parse(source, "<stdin>", "exec")
+        except SyntaxError:
+            self.showsyntaxerror("<stdin>")
+            return
+        for node in tree.body:
+            try:
+                compiled = compile(ast.Interactive([node]), "<stdin>", "single")
+                exec(compiled, self.locals)
+            except SystemExit:
+                raise
+            except SyntaxError:
+                self.showsyntaxerror("<stdin>")
+                return
+            except BaseException:
+                self.showtraceback()
+                return
+            finally:
+                _flush()
 
     def write(self, data):
         _flush()
@@ -2785,9 +2916,9 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     
     /// Opens python3 with `arguments` in a terminal window.
     /// UserDefaults key of the font size of Python windows (Settings → Customization, A−/A+ in the key bar).
-    static let fontSizeKey = "fork.python.fontSize"
-    /// A bit more than twice Nyxian's terminal font (14 on iPad, 10 on iPhone).
-    static var defaultFontSize: Int { UIDevice.current.userInterfaceIdiom == .pad ? 30 : 22 }
+    static let fontSizeKey = "fork.python.fontSize.v2"   /* v2: new defaults, earlier sizes are not kept */
+    /// 24 pt on iPad, 18 on iPhone (Nyxian's terminal: 14 and 10).
+    static var defaultFontSize: Int { UIDevice.current.userInterfaceIdiom == .pad ? 24 : 18 }
     static var fontSize: Int {
         let saved = UserDefaults.standard.integer(forKey: fontSizeKey)
         return saved > 0 ? saved : defaultFontSize
