@@ -4,6 +4,10 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.19.2 — 2026-11-07
+
+- Build fix for 1.19 (terminal session initializer).
+
 ## 1.19.1 — 2026-11-07
 
 - Python files get **syntax colors** (tree-sitter-python 0.23.6).

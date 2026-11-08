@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.7.0
+ Fork doctoralvarez/Nyxian — version 1.7.1
  Changelog:
+  - 1.7.1 (2026-11-07): build fix — the terminal session initializer is
+    failable.
   - 1.7.0 (2026-11-07): Python 3 (ForkPython) — the CPython runtime that
     ships in the app (Shared/python-ios.zip) is unpacked into Nyxian's rootfs
     and signed on first use, with pip from ensurepip's wheel. Projects screen:
@@ -2283,7 +2285,7 @@ enum ForkPython {
                 }
                 DispatchQueue.main.async {
                     progress.dismiss(animated: true) {
-                        let session = NXWindowSessionTerminal(utilityPath: launcher)
+                        guard let session = NXWindowSessionTerminal(utilityPath: launcher) else { return }
                         session.arguments = [launcher] + arguments
                         var environment = [
                             "PYTHONHOME": home.path,
