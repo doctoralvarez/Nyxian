@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.7.1
+ Fork doctoralvarez/Nyxian — version 1.8.0
  Changelog:
+  - 1.8.0 (2026-11-07): packages with native code — pip also looks in
+    BeeWare's index of iOS builds (numpy, Pillow, …) and every new binary
+    module in site-packages is signed before the next Python run.
   - 1.7.1 (2026-11-07): build fix — the terminal session initializer is
     failable.
   - 1.7.0 (2026-11-07): Python 3 (ForkPython) — the CPython runtime that
@@ -1941,7 +1944,8 @@ final class KeyboardShortcutsHUD {
         "Run Preview": "Ejecutar preview",
         "Toggle Breakpoint": "Poner/quitar breakpoint",
         "Pause or Continue": "Pausar o continuar",
-        "Run Python File": "Ejecutar archivo Python"
+        "Run Python File": "Ejecutar archivo Python",
+        "Copy Python Output to Project": "Traer resultados de Python al proyecto"
     ]
     
     func start() {
@@ -2190,6 +2194,34 @@ enum ForkPython {
     private static var bundledZip: URL { Bundle.main.bundleURL.appendingPathComponent("Shared/python-ios.zip") }
     private static let stampKey = "fork.python.stamp"
     private static let launcherKey = "fork.python.launcher"
+    private static let signedKey = "fork.python.signedPackageBinaries"
+    
+    /// Binary modules pip put in site-packages since the last run (numpy, Pillow…) get signed, or iOS refuses to load them.
+    private static func signNewPackageBinaries(progress: (String) -> Void) throws {
+        let fm = FileManager.default
+        var signed = UserDefaults.standard.dictionary(forKey: signedKey) as? [String: Double] ?? [:]
+        var pending: [(URL, Double)] = []
+        if let enumerator = fm.enumerator(at: sitePackages, includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey]) {
+            for case let url as URL in enumerator {
+                guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]), values.isRegularFile == true else { continue }
+                let ext = url.pathExtension.lowercased()
+                guard ext == "so" || ext == "dylib" || url.path.contains(".framework/") else { continue }
+                let stamp = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+                if signed[url.path] == stamp || !isMachO(url) { continue }
+                pending.append((url, stamp))
+            }
+        }
+        guard !pending.isEmpty else { return }
+        for (index, entry) in pending.enumerated() {
+            if index % 5 == 0 { progress("Signing installed packages… \(index)/\(pending.count)") }
+            guard LCUtils.signMachOWithoutPatch(at: entry.0) else { throw Failure.signing(entry.0.lastPathComponent) }
+            _ = trust_nxt2_sign(entry.0.path, [String: Any]() as CFDictionary, true, nil)
+            /* the signature changes the file: remember its new date */
+            let date = (try? entry.0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?.timeIntervalSince1970 ?? entry.1
+            signed[entry.0.path] = date
+        }
+        UserDefaults.standard.set(signed, forKey: signedKey)
+    }
     private static let queue = DispatchQueue(label: "fork.python.install")
     
     private static func isMachO(_ url: URL) -> Bool {
@@ -2211,10 +2243,12 @@ enum ForkPython {
                let launcher = defaults.string(forKey: launcherKey),
                fm.fileExists(atPath: launcher),
                fm.fileExists(atPath: home.appendingPathComponent("libpython\(version).dylib").path) {
+                try signNewPackageBinaries(progress: progress)
                 return launcher
             }
             
             progress("Unpacking Python \(version)…")
+            defaults.removeObject(forKey: signedKey)
             let opt = home.deletingLastPathComponent()
             try? fm.removeItem(at: home)
             try fm.createDirectory(at: opt, withIntermediateDirectories: true)
@@ -2291,6 +2325,12 @@ enum ForkPython {
                             "PYTHONHOME": home.path,
                             "PYTHONUNBUFFERED": "1",
                             "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+                            /* iOS builds of numpy, Pillow, … (the index BeeWare's Briefcase uses) */
+                            "PIP_EXTRA_INDEX_URL": "https://pypi.anaconda.org/beeware/simple",
+                            "PIP_PREFER_BINARY": "1",
+                            /* matplotlib draws to files (savefig) — there is no window system for it */
+                            "MPLBACKEND": "Agg",
+                            "PYTHONPYCACHEPREFIX": rootfs.appendingPathComponent("var/mobile/Python/.pycache").path,
                             "TERM": "xterm-256color"
                         ]
                         if let workingDirectory { environment["PYTHONPATH"] = workingDirectory.path }
@@ -2310,6 +2350,25 @@ enum ForkPython {
         }
     }
     
+    /// Files a script created in its run folder (plots, CSV…) are copied into the project; existing project files are never overwritten.
+    @discardableResult
+    static func copyOutput(project root: URL) -> [String] {
+        let fm = FileManager.default
+        let mirror = rootfs.appendingPathComponent("var/mobile/Python").appendingPathComponent(root.lastPathComponent)
+        var copied: [String] = []
+        guard let enumerator = fm.enumerator(at: mirror, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else { return [] }
+        for case let url as URL in enumerator {
+            if url.lastPathComponent == "__pycache__" { enumerator.skipDescendants(); continue }
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            let relative = ProjectFileIndex.relativePath(url, root: mirror)
+            let target = root.appendingPathComponent(relative)
+            guard !fm.fileExists(atPath: target.path) else { continue }
+            try? fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if (try? fm.copyItem(at: url, to: target)) != nil { copied.append(relative) }
+        }
+        return copied
+    }
+    
     static func openConsole(from presenter: UIViewController) {
         launch(from: presenter, arguments: [], workingDirectory: rootfs.appendingPathComponent("var/mobile/Python"), title: "Python \(version)")
     }
@@ -2327,7 +2386,7 @@ enum ForkPython {
     }
     
     static func promptInstallPackage(from presenter: UIViewController) {
-        let alert = UIAlertController(title: "Install Package", message: "pip install … — packages written only in Python install from PyPI. Packages with native code need an iOS build of their own.", preferredStyle: .alert)
+        let alert = UIAlertController(title: "Install Package", message: "pip install … — pure-Python packages come from PyPI; packages with native code (numpy, Pillow, …) install when an iOS build exists (PyPI or BeeWare's index). Several names can go separated by spaces.", preferredStyle: .alert)
         alert.addTextField { field in
             field.placeholder = "requests"
             field.autocapitalizationType = .none

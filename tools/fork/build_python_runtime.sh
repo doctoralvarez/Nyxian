@@ -1,6 +1,9 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.0.1
+# Fork doctoralvarez/Nyxian — version 1.0.2
 # Changelog:
+#  - 1.0.2 (2026-11-07): the 3.14 stdlib lives in Python.xcframework/lib, shared
+#    by the slices; 1.0.1 missed it and packed the whole checkout (309 MB).
+#    The zip size is now checked.
 #  - 1.0.1 (2026-11-07): finds the stdlib, lib-dynload and libpython in the
 #    support package instead of assuming paths (the 3.14 layout differs).
 #  - 1.0.0 (2026-11-07): packs CPython for iOS (BeeWare Python-Apple-support,
@@ -27,14 +30,18 @@ find "$WORK" -maxdepth 5 -type d -not -path "*/site-packages/*" | sed "s#$WORK/#
 # the device slice (not the simulator one)
 SLICE="$(find "$WORK" -type d -name "ios-arm64" -path "*Python.xcframework*" | head -1)"
 [ -n "$SLICE" ] || { echo "no ios-arm64 slice"; exit 1; }
-# pure-Python standard library: the folder that holds os.py
-STD_SRC="$(dirname "$(find "$SLICE" -name os.py -path "*python${PY_VER}*" | head -1)")"
+# pure-Python standard library: shared by the slices in 3.14 (Python.xcframework/lib),
+# inside the slice in older layouts; never the testbed's copy
+STD_SRC=""
+for candidate in "$WORK/Python.xcframework/lib/python${PY_VER}" "$SLICE/lib/python${PY_VER}"; do
+  if [ -f "$candidate/os.py" ]; then STD_SRC="$candidate"; break; fi
+done
 # binary modules
 DYNLOAD_SRC="$(find "$SLICE" -type d -name lib-dynload | head -1)"
 # libpython
 LIBPY_SRC="$(find "$SLICE" -path "*Python.framework/Python" -type f | head -1)"
 echo "slice=$SLICE"; echo "stdlib=$STD_SRC"; echo "dynload=$DYNLOAD_SRC"; echo "libpython=$LIBPY_SRC"
-[ -d "$STD_SRC" ] && [ -d "$DYNLOAD_SRC" ] && [ -f "$LIBPY_SRC" ] || { echo "support package layout not understood"; exit 1; }
+[ -n "$STD_SRC" ] && [ -f "$STD_SRC/os.py" ] && [ -d "$DYNLOAD_SRC" ] && [ -f "$LIBPY_SRC" ] || { echo "support package layout not understood"; exit 1; }
 
 HOME_DIR="$WORK/python"
 STDLIB="$HOME_DIR/lib/python${PY_VER}"
@@ -72,3 +79,6 @@ mkdir -p "$ROOT/Shared"
 rm -f "$OUT"
 (cd "$WORK" && zip -qry "$OUT" python)
 ls -la "$OUT"
+# a runtime is tens of MB; anything far bigger means the wrong folder was packed
+SIZE=$(stat -f%z "$OUT")
+[ "$SIZE" -lt 150000000 ] || { echo "python-ios.zip is $SIZE bytes: refusing (wrong folder packed?)"; rm -f "$OUT"; exit 1; }

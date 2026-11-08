@@ -4,6 +4,20 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.20.0 — 2026-11-07
+
+- **Python packages with native code**: pip also searches BeeWare's index of
+  iOS builds (`pypi.anaconda.org/beeware/simple`, the one Briefcase uses), so
+  numpy, Pillow and others install when an iOS build exists; every new binary
+  module pip writes to site-packages is signed before the next Python run.
+- **matplotlib**: `MPLBACKEND=Agg`, so `plt.savefig("plot.png")` works.
+  **Copy Python Output to Project** (⇧⌘R, or the edit menu of a `.py`) brings
+  the files a script created (plots, CSV…) into the project — scripts run in a
+  copy of the project inside Nyxian's rootfs.
+- New `.py` files start with a `#` header.
+- CI: the Python runtime is the real one again (1.19.x packed the whole
+  checkout by mistake — 443 MB IPA); the zip size is checked.
+
 ## 1.19.2 — 2026-11-07
 
 - Build fix for 1.19 (terminal session initializer).

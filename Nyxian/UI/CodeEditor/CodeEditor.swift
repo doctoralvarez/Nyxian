@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.11.0
+ Fork doctoralvarez/Nyxian — version 1.12.0
  Changelog:
+  - 1.12.0 (2026-11-07): "Copy Python Output to Project" (⇧⌘R, edit menu):
+    files a script created (plots, CSV) come back into the project.
   - 1.11.0 (2026-11-07): Python files — ⌘R (or the play button in the
     editor toolbar) runs the .py file with Python 3 in a terminal window;
     word completion knows Python's keywords and builtins; syntax colors with
@@ -824,6 +826,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         /* fork: Python files run with Python 3 (takes ⌘R from the project's Run while one is open) */
         if self.file.fileURL?.pathExtension.lowercased() == "py" {
             commands.append(command("Run Python File", #selector(forkRunPythonFile), "r"))
+            commands.append(command("Copy Python Output to Project", #selector(forkCopyPythonOutput), "r", [.command, .shift]))
         }
         /* fork: navigation by meaning */
         if self.languageServer != nil {
@@ -999,6 +1002,13 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         super.buildMenu(with: builder)
         
         guard self.languageServer != nil else {
+            /* fork: Python files have no language server, but get their own commands */
+            if self.file.fileURL?.pathExtension.lowercased() == "py" {
+                builder.insertChild(UIMenu(options: .displayInline, children: [
+                    UIAction(title: "Run Python File", image: UIImage(systemName: "play.fill")) { _ in self.forkRunPythonFile() },
+                    UIAction(title: "Copy Python Output to Project", image: UIImage(systemName: "square.and.arrow.down.on.square")) { _ in self.forkCopyPythonOutput() }
+                ]), atEndOfMenu: .standardEdit)
+            }
             return
         }
         
@@ -1011,6 +1021,11 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         }
 
         var navigationActions: [UIMenuElement] = [myAction, referencesAction]
+        if self.file.fileURL?.pathExtension.lowercased() == "py" {
+            navigationActions.append(UIAction(title: "Copy Python Output to Project", image: UIImage(systemName: "square.and.arrow.down.on.square")) { _ in
+                self.forkCopyPythonOutput()
+            })
+        }
         if self.file.isSwift, self.project != nil {
             navigationActions.append(UIAction(title: "Run Preview", image: UIImage(systemName: "eye")) { _ in
                 self.forkRunPreview()
@@ -3321,5 +3336,17 @@ extension CodeEditorViewController {
     @objc func forkRunPythonFile() {
         guard let url = self.file.fileURL else { return }
         ForkPython.run(script: url, project: self.project, from: self)
+    }
+    
+    /// Plots and files the script wrote next to it come back into the project.
+    @objc func forkCopyPythonOutput() {
+        let root: URL? = self.project.map { $0.url as URL } ?? self.file.fileURL?.deletingLastPathComponent()
+        guard let root else { return }
+        let copied = ForkPython.copyOutput(project: root)
+        NotificationCenter.default.post(name: Notification.Name("FileListRefresh"), object: nil)
+        let message = copied.isEmpty ? "No new files." : copied.prefix(20).joined(separator: "\n")
+        let alert = UIAlertController(title: "Python Output", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
     }
 }

@@ -20,6 +20,13 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): new .py files start with a header in Python
+    comments (#).
+*/
+
 #import <LindChain/IDEFoundation/NXUser.h>
 
 @implementation NXUser {
@@ -97,6 +104,11 @@
     if(authgen)
     {
         [content appendFormat:@"//\n// %@\n// %@\n//\n// Created by %@ on %@.\n//\n\n", fileName, self.projectName, self.username, self.datestring];
+    }
+    else if([pathExtension isEqualToString:@"py"])
+    {
+        /* fork: Python comments */
+        [content appendFormat:@"#\n# %@\n# %@\n#\n# Created by %@ on %@.\n#\n\n", fileName, self.projectName, self.username, self.datestring];
     }
     
     if(headergen)
