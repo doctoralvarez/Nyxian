@@ -1,5 +1,6 @@
-# Fork doctoralvarez/Nyxian — version 1.0.0
+# Fork doctoralvarez/Nyxian — version 1.0.1
 # Changelog:
+#  - 1.0.1 (2026-11-08): the Mac's ninja runs the build (xbuild-tools).
 #  - 1.0.0 (2026-11-08): builds iOS wheels (CPython 3.14, arm64 iphoneos)
 #    of packages that have none on PyPI or BeeWare's index (matplotlib) and
 #    publishes them on the "ios-wheels" release, where Nyxian's pip looks.
@@ -41,6 +42,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip cibuildwheel
           python -m pip show cibuildwheel | head -2
+          brew list ninja >/dev/null 2>&1 || brew install ninja
+          ninja --version
           xcrun --sdk iphoneos --show-sdk-version
 
       - name: Build
@@ -50,6 +53,8 @@ jobs:
           CIBW_BUILD: cp314-*
           CIBW_TEST_SKIP: "*"
           CIBW_BUILD_VERBOSITY: 1
+          # build tools of the Mac that may run during the iOS build (else pip tries to build them for iOS)
+          CIBW_XBUILD_TOOLS_IOS: "ninja"
           CIBW_ENVIRONMENT_IOS: PIP_EXTRA_INDEX_URL=https://pypi.anaconda.org/beeware/simple PIP_PREFER_BINARY=1
           PIP_EXTRA_INDEX_URL: https://pypi.anaconda.org/beeware/simple
         run: |
