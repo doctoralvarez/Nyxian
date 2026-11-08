@@ -4,6 +4,19 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.21.0 — 2026-11-07
+
+- **Python Console that answers**: Nyxian's terminal passes keys raw (no echo,
+  no line editing), so the built-in Python REPL showed nothing. The console now
+  runs Nyxian's REPL (`nyxian_repl`): what you type is shown, ⌫ deletes, ↑↓
+  history, Tab indents, Ctrl-C interrupts, Ctrl-D / `exit()` quits. `input()` in
+  scripts echoes too (`sitecustomize`).
+- **Python installs on the first try**: installing the launcher is retried up
+  to 5 times (the first request after launch could miss the 2-second answer).
+- **New key bar above the keyboard** in every Nyxian terminal: esc, tab,
+  Ctrl-C, Ctrl-D, arrows and a button that **closes the keyboard** (SwiftTerm's
+  button switched to its own key panel instead).
+
 ## 1.20.1 — 2026-11-07
 
 - **Python: "cannot load libpython … blocked by sandbox" fixed.** With

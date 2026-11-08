@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.8.1
+ Fork doctoralvarez/Nyxian — version 1.9.0
  Changelog:
+  - 1.9.0 (2026-11-07): Python Console uses Nyxian's REPL (nyxian_repl /
+    nyxian_lineedit in site-packages): echo, backspace, history (↑↓), Tab
+    indents, Ctrl-C / Ctrl-D; input() echoes in scripts (sitecustomize). The
+    launcher install is retried up to 5 times (the first call after launch
+    could miss the service's 2 s answer window).
   - 1.8.1 (2026-11-07): the python3 launcher is signed with NXT2
     entitlements for its files (read: <rootfs>/opt/python; read-write:
     site-packages and <rootfs>/var/mobile) — without them dyld could not read
@@ -2200,6 +2205,149 @@ enum ForkPython {
     private static let launcherKey = "fork.python.launcher"
     private static let signedKey = "fork.python.signedPackageBinaries"
     private static let signingRevision = 2
+
+    /// Python files Nyxian adds to site-packages: the line editor, the REPL, input() with echo.
+    private static let helperFiles: [String: String] = [
+        "nyxian_lineedit.py": #"""
+# Nyxian line editor: Nyxian's terminal hands keys over raw (no echo, no line
+# editing), so Python does both here. Used by input() and the Nyxian REPL.
+import codecs
+import os
+import sys
+
+_history = []
+
+
+def _write(text):
+    try:
+        os.write(1, text.encode("utf-8", "replace"))
+    except OSError:
+        pass
+
+
+def read_line(prompt=""):
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    if prompt:
+        _write(prompt)
+    buffer = []
+    index = len(_history)
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    while True:
+        data = os.read(0, 1)
+        if not data:
+            if not buffer:
+                raise EOFError
+            break
+        c = data[0]
+        if c in (10, 13):
+            _write("\n")
+            break
+        if c in (8, 127):
+            if buffer:
+                buffer.pop()
+                _write("\b \b")
+            continue
+        if c == 3:
+            _write("^C\n")
+            raise KeyboardInterrupt
+        if c == 4:
+            if not buffer:
+                _write("\n")
+                raise EOFError
+            continue
+        if c == 21:
+            _write("\b \b" * len(buffer))
+            buffer = []
+            continue
+        if c == 9:
+            buffer.extend("    ")
+            _write("    ")
+            continue
+        if c == 27:
+            if os.read(0, 1) == b"[":
+                code = os.read(0, 1)
+                while code and code in b"0123456789;":
+                    code = os.read(0, 1)
+                if code in (b"A", b"B") and _history:
+                    index = max(0, index - 1) if code == b"A" else min(len(_history), index + 1)
+                    _write("\b \b" * len(buffer))
+                    buffer = list(_history[index]) if index < len(_history) else []
+                    _write("".join(buffer))
+            continue
+        text = decoder.decode(data)
+        if text:
+            buffer.extend(text)
+            _write(text)
+    line = "".join(buffer)
+    if line.strip():
+        _history.append(line)
+    return line"""#,
+        "nyxian_repl.py": #"""
+# The REPL of Python in Nyxian: the standard interactive console with
+# Nyxian's line editor (echo, backspace, history, Tab indents).
+import code
+import sys
+
+from nyxian_lineedit import read_line
+
+
+class NyxianConsole(code.InteractiveConsole):
+    def raw_input(self, prompt=""):
+        return read_line(prompt)
+
+
+def main():
+    banner = (
+        "Python %s on Nyxian (%s)\n"
+        "Type help(), copyright(), credits() or license(). Ctrl-D or exit() quits."
+        % (sys.version.split()[0], sys.platform)
+    )
+    NyxianConsole(locals={"__name__": "__main__", "__doc__": None}).interact(banner=banner, exitmsg="")
+
+
+if __name__ == "__main__":
+    main()"""#,
+        "sitecustomize.py": #"""
+# Nyxian: input() echoes what you type (the terminal does not), only when
+# Python runs in a Nyxian terminal window.
+import os
+
+if os.environ.get("NYXIAN_TERMINAL") == "1":
+    try:
+        import builtins
+        from nyxian_lineedit import read_line
+
+        def _nyxian_input(prompt=""):
+            return read_line(str(prompt))
+
+        builtins.input = _nyxian_input
+    except Exception:
+        pass"""#
+    ]
+    
+    private static func writeHelperFiles() {
+        try? FileManager.default.createDirectory(at: sitePackages, withIntermediateDirectories: true)
+        for (name, text) in helperFiles {
+            let url = sitePackages.appendingPathComponent(name)
+            if (try? String(contentsOf: url, encoding: .utf8)) != text {
+                try? text.write(to: url, atomically: true, encoding: .utf8)
+            }
+        }
+    }
+    
+    /// The service that installs utilities answers within 2 s; the first call after launch can miss that.
+    private static func fastpath(_ launcher: URL, progress: (String) -> Void) -> String? {
+        for attempt in 1...5 {
+            if let path = LDEApplicationWorkspace.shared().fastpathUtility(launcher.path) { return path }
+            progress("Installing python3… (try \(attempt + 1))")
+            Thread.sleep(forTimeInterval: 1.0)
+        }
+        return nil
+    }
     
     /*
      * What the python3 process may touch. Nyxian gives a utility file access only to
@@ -2267,6 +2415,7 @@ enum ForkPython {
                let launcher = defaults.string(forKey: launcherKey),
                fm.fileExists(atPath: launcher),
                fm.fileExists(atPath: home.appendingPathComponent("libpython\(version).dylib").path) {
+                writeHelperFiles()
                 try signNewPackageBinaries(progress: progress)
                 return launcher
             }
@@ -2305,7 +2454,8 @@ enum ForkPython {
                 }
             }
             
-            guard let launcher = LDEApplicationWorkspace.shared().fastpathUtility(launcherURL.path) else { throw Failure.fastpath }
+            writeHelperFiles()
+            guard let launcher = fastpath(launcherURL, progress: progress) else { throw Failure.fastpath }
             defaults.set(stamp, forKey: stampKey)
             defaults.set(launcher, forKey: launcherKey)
             return launcher
@@ -2355,7 +2505,8 @@ enum ForkPython {
                             /* matplotlib draws to files (savefig) — there is no window system for it */
                             "MPLBACKEND": "Agg",
                             "PYTHONPYCACHEPREFIX": rootfs.appendingPathComponent("var/mobile/Python/.pycache").path,
-                            "TERM": "xterm-256color"
+                            "TERM": "xterm-256color",
+                            "NYXIAN_TERMINAL": "1"
                         ]
                         if let workingDirectory { environment["PYTHONPATH"] = workingDirectory.path }
                         session.extraEnvironment = environment
@@ -2394,7 +2545,10 @@ enum ForkPython {
     }
     
     static func openConsole(from presenter: UIViewController) {
-        launch(from: presenter, arguments: [], workingDirectory: rootfs.appendingPathComponent("var/mobile/Python"), title: "Python \(version)")
+        let folder = rootfs.appendingPathComponent("var/mobile/Python")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        /* Nyxian's REPL: the built-in one expects a terminal that echoes and edits lines */
+        launch(from: presenter, arguments: ["-q", "-m", "nyxian_repl"], workingDirectory: folder, title: "Python \(version)")
     }
     
     /// Runs a .py file from a copy of its project (or of its folder).

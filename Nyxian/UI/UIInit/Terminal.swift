@@ -20,6 +20,15 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): Nyxian's own key bar above the keyboard (esc, tab,
+    Ctrl-C, Ctrl-D, arrows and a button that hides the keyboard). SwiftTerm's
+    keyboard button switched to its own key panel instead of closing the
+    keyboard (ForkTerminalKeyBar).
+*/
+
 import SwiftTerm
 import UIKit
 
@@ -114,6 +123,9 @@ import UIKit
             }
         }
         
+        /* fork: a key bar whose keyboard button closes the keyboard */
+        self.inputAccessoryView = ForkTerminalKeyBar(terminal: self)
+        
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: Self, previousTraitCollection: UITraitCollection) in
             guard self.traitCollection.hasDifferentColorAppearance(comparedTo: previousTraitCollection) else { return }
             
@@ -142,5 +154,73 @@ import UIKit
         self.backgroundColor = LDETheme.currentTheme?.backgroundColor ?? .secondarySystemBackground
         self.nativeForegroundColor = LDETheme.currentTheme?.textColor ?? gibDynamicColor(light: .label, dark: self.nativeForegroundColor)
         self.caretTextColor = LDETheme.currentTheme?.textColor ?? gibDynamicColor(light: .label, dark: self.nativeForegroundColor)
+    }
+}
+
+// MARK: - Fork: key bar above the keyboard
+
+final class ForkTerminalKeyBar: UIInputView {
+    private weak var terminal: TerminalViewObjC?
+    
+    init(terminal: TerminalViewObjC) {
+        self.terminal = terminal
+        let height: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? 40 : 48
+        super.init(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: height), inputViewStyle: .keyboard)
+        allowsSelfSizing = true
+        
+        let keys: [(String?, String?, [UInt8])] = [
+            ("esc", nil, [0x1b]),
+            (nil, "arrow.right.to.line.compact", [0x09]),
+            ("^C", nil, [0x03]),
+            ("^D", nil, [0x04]),
+            (nil, "arrow.left", [0x1b, 0x5b, 0x44]),
+            (nil, "arrow.down", [0x1b, 0x5b, 0x42]),
+            (nil, "arrow.up", [0x1b, 0x5b, 0x41]),
+            (nil, "arrow.right", [0x1b, 0x5b, 0x43])
+        ]
+        let stack = UIStackView()
+        stack.axis = .horizontal
+        stack.spacing = 6
+        stack.distribution = .fillEqually
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        for (title, symbol, bytes) in keys {
+            stack.addArrangedSubview(makeKey(title: title, symbol: symbol) { [weak self] in self?.send(bytes) })
+        }
+        stack.addArrangedSubview(makeKey(title: nil, symbol: "keyboard.chevron.compact.down") { [weak self] in
+            _ = self?.terminal?.resignFirstResponder()
+        })
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 6),
+            stack.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -6),
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 5),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5)
+        ])
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: UIDevice.current.userInterfaceIdiom == .phone ? 40 : 48)
+    }
+    
+    private func send(_ bytes: [UInt8]) {
+        UIDevice.current.playInputClick()
+        terminal?.ttyHandle?.write(Data(bytes))
+    }
+    
+    private func makeKey(title: String?, symbol: String?, action: @escaping () -> Void) -> UIButton {
+        var configuration = UIButton.Configuration.gray()
+        configuration.cornerStyle = .medium
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 2, leading: 2, bottom: 2, trailing: 2)
+        if let title {
+            configuration.attributedTitle = AttributedString(title, attributes: AttributeContainer([.font: UIFont.monospacedSystemFont(ofSize: 13, weight: .semibold)]))
+        }
+        if let symbol {
+            configuration.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
+        }
+        configuration.baseForegroundColor = .label
+        let button = UIButton(configuration: configuration, primaryAction: UIAction { _ in action() })
+        return button
     }
 }
