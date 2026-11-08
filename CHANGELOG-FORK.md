@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.21.2 — 2026-11-07
+
+- **Python installs again (and on the first try)**: the installing service
+  can refuse the launcher's first signature — a second full install used to
+  work because it signed everything again. 1.21.0 retried with the same
+  signature, so every retry failed. Now the launcher is signed last, from a
+  pristine copy, and signed again from that copy before each retry.
+
 ## 1.21.1 — 2026-11-07
 
 - Build fix for 1.21.0 (string literal delimiters).

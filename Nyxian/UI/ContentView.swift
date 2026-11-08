@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.9.0
+ Fork doctoralvarez/Nyxian — version 1.9.1
  Changelog:
+  - 1.9.1 (2026-11-07): the launcher is signed last, from a pristine copy,
+    and signed again from that copy before every install retry (1.9.0 only
+    asked again with the same refused signature, so all retries failed).
   - 1.9.0 (2026-11-07): Python Console uses Nyxian's REPL (nyxian_repl /
     nyxian_lineedit in site-packages): echo, backspace, history (↑↓), Tab
     indents, Ctrl-C / Ctrl-D; input() echoes in scripts (sitecustomize). The
@@ -2342,12 +2345,33 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         }
     }
     
-    /// The service that installs utilities answers within 2 s; the first call after launch can miss that.
+    /// The pristine launcher, kept before signing so every attempt signs a fresh copy.
+    private static var launcherOriginal: URL { home.appendingPathComponent("bin/.python3.original") }
+    
+    private static func signLauncher(_ launcher: URL) -> Bool {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: launcherOriginal.path) {
+            try? fm.removeItem(at: launcher)
+            guard (try? fm.copyItem(at: launcherOriginal, to: launcher)) != nil else { return false }
+        }
+        guard LCUtils.signMachO(at: launcher) else { return false }
+        _ = trust_nxt2_sign(launcher.path, launcherEntitlements as CFDictionary, true, nil)
+        return true
+    }
+    
+    /*
+     * The installing service checks the launcher's signature; the first signature made
+     * right after unpacking can be refused, which is why a second full install used to
+     * work. Each retry signs a fresh copy again (what that second install did), then
+     * asks again. The service also only waits 2 s for the answer.
+     */
     private static func fastpath(_ launcher: URL, progress: (String) -> Void) -> String? {
-        for attempt in 1...5 {
+        for attempt in 1...6 {
             if let path = LDEApplicationWorkspace.shared().fastpathUtility(launcher.path) { return path }
-            progress("Installing python3… (try \(attempt + 1))")
-            Thread.sleep(forTimeInterval: 1.0)
+            progress("Installing python3… (attempt \(attempt + 1))")
+            Thread.sleep(forTimeInterval: 0.5)
+            _ = signLauncher(launcher)
+            Thread.sleep(forTimeInterval: 0.5)
         }
         return nil
     }
@@ -2439,13 +2463,17 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                 }
             }
             let launcherURL = home.appendingPathComponent("bin/python3")
+            /* libraries first, the launcher last */
+            binaries.removeAll { $0.path == launcherURL.path }
             for (index, url) in binaries.enumerated() {
                 if index % 10 == 0 { progress("Signing Python… \(index)/\(binaries.count)") }
-                let isLauncher = url.path == launcherURL.path
-                let signed = isLauncher ? LCUtils.signMachO(at: url) : LCUtils.signMachOWithoutPatch(at: url)
-                guard signed else { throw Failure.signing(url.lastPathComponent) }
-                _ = trust_nxt2_sign(url.path, (isLauncher ? launcherEntitlements : [String: Any]()) as CFDictionary, true, nil)
+                guard LCUtils.signMachOWithoutPatch(at: url) else { throw Failure.signing(url.lastPathComponent) }
+                _ = trust_nxt2_sign(url.path, [String: Any]() as CFDictionary, true, nil)
             }
+            progress("Signing python3…")
+            try? fm.removeItem(at: launcherOriginal)
+            try? fm.copyItem(at: launcherURL, to: launcherOriginal)
+            guard signLauncher(launcherURL) else { throw Failure.signing("python3") }
             
             /* pip, straight from ensurepip's bundled wheel (ensurepip itself needs subprocesses) */
             progress("Installing pip…")
