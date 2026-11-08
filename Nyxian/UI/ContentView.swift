@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.10.0
+ Fork doctoralvarez/Nyxian — version 1.10.1
  Changelog:
+  - 1.10.1 (2026-11-08): pip installs again: python3 may write all of
+    opt/python (pip also writes bin/ — "Operation not permitted" on
+    bin/idna); signing revision 3 signs Python again once.
   - 1.10.0 (2026-11-08): Python windows use a larger font (30 pt on iPad,
     22 on iPhone; Settings → Customization → Python Font Size, or A−/A+ in
     the key bar); the Python Console window closes with Ctrl-D / exit().
@@ -2225,7 +2228,7 @@ enum ForkPython {
     private static let stampKey = "fork.python.stamp"
     private static let launcherKey = "fork.python.launcher"
     private static let signedKey = "fork.python.signedPackageBinaries"
-    private static let signingRevision = 2
+    private static let signingRevision = 3  /* 3: pip may write all of opt/python */
 
     /// Python files Nyxian adds to site-packages: the line editor, the REPL, input() with echo.
     private static let helperFiles: [String: String] = [
@@ -2652,8 +2655,9 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                 "$(NXROOT)/opt/python"
             ],
             "org.emexlabs.nyxian.sandbox.file.read-write": [
-                "$(NXROOT)/opt/python/lib/python\(version)/site-packages",  /* pip */
-                "$(NXROOT)/var/mobile"                                       /* home, run folders, caches */
+                /* pip writes site-packages and also bin/ (command scripts), share/, include/ */
+                "$(NXROOT)/opt/python",
+                "$(NXROOT)/var/mobile"   /* home, run folders, caches */
             ]
         ]
     }

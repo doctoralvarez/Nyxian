@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.21.6 — 2026-11-08
+
+- **pip install works**: pip also writes command scripts to `opt/python/bin`
+  (and data to `share/`, `include/`), where python3 was not allowed to write
+  ("Operation not permitted: …/opt/python/bin/idna"). python3 may now write
+  all of `opt/python`. Python is unpacked and signed once more on the first
+  launch after updating.
+
 ## 1.21.5 — 2026-11-08
 
 - **Python Console closes with Ctrl-D / `exit()`** (the window used to stay
