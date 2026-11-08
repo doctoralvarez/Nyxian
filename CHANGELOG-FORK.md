@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.20.1 — 2026-11-07
+
+- **Python: "cannot load libpython … blocked by sandbox" fixed.** With
+  Nyxian's Filesystem Sandbox (on by default) a utility only reaches the paths
+  its NXT2 entitlements list, and the python3 launcher was signed without any.
+  It now gets read access to `<rootfs>/opt/python` and read-write to
+  site-packages (pip) and `<rootfs>/var/mobile` (home, run folders). The
+  runtime is signed again automatically on the next Python start.
+
 ## 1.20.0 — 2026-11-07
 
 - **Python packages with native code**: pip also searches BeeWare's index of

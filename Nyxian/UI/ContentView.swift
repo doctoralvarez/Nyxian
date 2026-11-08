@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.8.0
+ Fork doctoralvarez/Nyxian — version 1.8.1
  Changelog:
+  - 1.8.1 (2026-11-07): the python3 launcher is signed with NXT2
+    entitlements for its files (read: <rootfs>/opt/python; read-write:
+    site-packages and <rootfs>/var/mobile) — without them dyld could not read
+    libpython ("blocked by sandbox"). Existing installs are signed again.
   - 1.8.0 (2026-11-07): packages with native code — pip also looks in
     BeeWare's index of iOS builds (numpy, Pillow, …) and every new binary
     module in site-packages is signed before the next Python run.
@@ -2195,6 +2199,25 @@ enum ForkPython {
     private static let stampKey = "fork.python.stamp"
     private static let launcherKey = "fork.python.launcher"
     private static let signedKey = "fork.python.signedPackageBinaries"
+    private static let signingRevision = 2
+    
+    /*
+     * What the python3 process may touch. Nyxian gives a utility file access only to
+     * the paths its NXT2 entitlements list (with the file-system sandbox on), so
+     * without these dyld cannot even read libpython ("blocked by sandbox").
+     */
+    private static var launcherEntitlements: [String: Any] {
+        [
+            "org.emexlabs.nyxian.get-task-allow": true,   /* debugger and profiler */
+            "org.emexlabs.nyxian.sandbox.file.read": [
+                "$(NXROOT)/opt/python"
+            ],
+            "org.emexlabs.nyxian.sandbox.file.read-write": [
+                "$(NXROOT)/opt/python/lib/python\(version)/site-packages",  /* pip */
+                "$(NXROOT)/var/mobile"                                       /* home, run folders, caches */
+            ]
+        ]
+    }
     
     /// Binary modules pip put in site-packages since the last run (numpy, Pillow…) get signed, or iOS refuses to load them.
     private static func signNewPackageBinaries(progress: (String) -> Void) throws {
@@ -2237,7 +2260,8 @@ enum ForkPython {
         try queue.sync {
             let fm = FileManager.default
             guard let attributes = try? fm.attributesOfItem(atPath: bundledZip.path) else { throw Failure.notBundled }
-            let stamp = "\((attributes[.size] as? NSNumber)?.intValue ?? 0)-\((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)"
+            /* the suffix changes whenever the way Python is signed changes, so devices sign again */
+            let stamp = "\((attributes[.size] as? NSNumber)?.intValue ?? 0)-\((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)-\(signingRevision)"
             let defaults = UserDefaults.standard
             if defaults.string(forKey: stampKey) == stamp,
                let launcher = defaults.string(forKey: launcherKey),
@@ -2268,7 +2292,7 @@ enum ForkPython {
                 let isLauncher = url.path == launcherURL.path
                 let signed = isLauncher ? LCUtils.signMachO(at: url) : LCUtils.signMachOWithoutPatch(at: url)
                 guard signed else { throw Failure.signing(url.lastPathComponent) }
-                _ = trust_nxt2_sign(url.path, [String: Any]() as CFDictionary, true, nil)
+                _ = trust_nxt2_sign(url.path, (isLauncher ? launcherEntitlements : [String: Any]()) as CFDictionary, true, nil)
             }
             
             /* pip, straight from ensurepip's bundled wheel (ensurepip itself needs subprocesses) */
