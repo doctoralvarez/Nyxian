@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.1
+ Fork doctoralvarez/Nyxian — version 1.3.2
  Changelog:
+  - 1.3.2 (2026-11-08): key bar: symbol keys have one fixed width (the paste
+    key was very wide on iPhone), the fixed keys never stretch, and the bar
+    has a fixed height (with self-sizing it sometimes came back with no
+    height and did not show).
   - 1.3.1 (2026-11-08): the key bar's paste key marks the text as pasted
     (bracketed paste) when the program asked for it, like the system Paste.
   - 1.3.0 (2026-11-08): key bar scrolls sideways and has many more keys
@@ -283,7 +287,9 @@ final class ForkTerminalKeyBar: UIInputView {
         self.terminal = terminal
         let height: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? 40 : 48
         super.init(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: height), inputViewStyle: .keyboard)
-        allowsSelfSizing = true
+        /* fixed height from the frame: with self-sizing the bar could come back with no height */
+        allowsSelfSizing = false
+        autoresizingMask = [.flexibleWidth]
         
         let esc: UInt8 = 0x1b
         let groups: [[(String?, String?, Key)]] = [
@@ -366,9 +372,15 @@ final class ForkTerminalKeyBar: UIInputView {
         fixed.axis = .horizontal
         fixed.spacing = 6
         fixed.translatesAutoresizingMaskIntoConstraints = false
+        /* never wider than its two keys: the scrolling part takes the rest */
+        fixed.setContentHuggingPriority(.required, for: .horizontal)
+        fixed.setContentCompressionResistancePriority(.required, for: .horizontal)
+        stack.distribution = .fill
         
         addSubview(scroll)
         addSubview(fixed)
+        let stackHeight = stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor, constant: -10)
+        stackHeight.priority = .defaultHigh   /* no conflict while the bar is being laid out with height 0 */
         NSLayoutConstraint.activate([
             scroll.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor),
             scroll.topAnchor.constraint(equalTo: topAnchor),
@@ -381,7 +393,7 @@ final class ForkTerminalKeyBar: UIInputView {
             stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -6),
             stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 5),
             stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -5),
-            stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor, constant: -10)
+            stackHeight
         ])
     }
     
@@ -397,19 +409,33 @@ final class ForkTerminalKeyBar: UIInputView {
     }
     
     private func makeKey(title: String?, symbol: String?, tint: UIColor = .label, action: @escaping () -> Void) -> UIButton {
+        let phone = UIDevice.current.userInterfaceIdiom == .phone
         var configuration = UIButton.Configuration.gray()
         configuration.cornerStyle = .medium
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8)
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 2, leading: phone ? 6 : 8, bottom: 2, trailing: phone ? 6 : 8)
+        configuration.imagePlacement = .leading
+        configuration.titleLineBreakMode = .byClipping
         if let title {
             configuration.attributedTitle = AttributedString(title, attributes: AttributeContainer([.font: UIFont.monospacedSystemFont(ofSize: 15, weight: .semibold)]))
         }
         if let symbol {
-            configuration.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold))
+            /* scaled to fit: some symbols (doc.on.clipboard) are wide at their natural size */
+            let image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: phone ? 13 : 14, weight: .semibold))
+            configuration.image = image
+            configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(scale: .small)
         }
         configuration.baseForegroundColor = tint
         let button = UIButton(configuration: configuration, primaryAction: UIAction { _ in action() })
         button.translatesAutoresizingMaskIntoConstraints = false
-        button.widthAnchor.constraint(greaterThanOrEqualToConstant: UIDevice.current.userInterfaceIdiom == .phone ? 36 : 44).isActive = true
+        let minimum: CGFloat = phone ? 34 : 44
+        button.widthAnchor.constraint(greaterThanOrEqualToConstant: minimum).isActive = true
+        if title == nil {
+            /* symbol keys all the same width */
+            let width = button.widthAnchor.constraint(equalToConstant: minimum + (phone ? 4 : 0))
+            width.priority = .required
+            width.isActive = true
+        }
+        button.setContentHuggingPriority(.required, for: .horizontal)
         return button
     }
 }
