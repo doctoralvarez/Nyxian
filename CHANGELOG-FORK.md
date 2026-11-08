@@ -4,6 +4,10 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.21.1 — 2026-11-07
+
+- Build fix for 1.21.0 (string literal delimiters).
+
 ## 1.21.0 — 2026-11-07
 
 - **Python Console that answers**: Nyxian's terminal passes keys raw (no echo,

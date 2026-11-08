@@ -2285,7 +2285,8 @@ def read_line(prompt=""):
     line = "".join(buffer)
     if line.strip():
         _history.append(line)
-    return line"""#,
+    return line
+"""#,
         "nyxian_repl.py": #"""
 # The REPL of Python in Nyxian: the standard interactive console with
 # Nyxian's line editor (echo, backspace, history, Tab indents).
@@ -2310,7 +2311,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()"""#,
+    main()
+"""#,
         "sitecustomize.py": #"""
 # Nyxian: input() echoes what you type (the terminal does not), only when
 # Python runs in a Nyxian terminal window.
@@ -2326,7 +2328,8 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
 
         builtins.input = _nyxian_input
     except Exception:
-        pass"""#
+        pass
+"""#
     ]
     
     private static func writeHelperFiles() {
