@@ -4,6 +4,27 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.23.0 — 2026-11-08
+
+- **Projects in Apple's Files app**: `UIFileSharingEnabled` and
+  `LSSupportsOpeningDocumentsInPlace` on. Files › On My iPhone/iPad › Nyxian ›
+  Projects. Project folders are named by UUID: **Project Names.txt** (next to
+  Projects) says which is which, and **Show in Files** in a project's menu
+  opens Files right at its folder.
+- **Running a .py file** from the editor: the project is copied to its run
+  folder in the background (files compared by size/date and copied without
+  reading them into memory; build folders and files over 100 MB left out),
+  the editor's keyboard is closed first and the progress alert is shown from
+  the top screen.
+- **pip at the first try**: pip runs through `nyxian_pip`, which says at once
+  that it started, shows "still working (N s)" when pip prints nothing for a
+  while, and after 3 silent minutes prints where pip is waiting. The Python
+  console compiles pip once in the background, so the first install does not
+  spend minutes on it.
+- **Editor bar on iPhone**: tab, undo/redo, ▶ (Python) and hide keyboard stay;
+  fix, breakpoint, symbols and find go into a ⋯ menu (hide keyboard was cut
+  off).
+
 ## 1.22.0 — 2026-11-08
 
 - **matplotlib for Python on iOS**: there is no matplotlib wheel for

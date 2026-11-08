@@ -21,8 +21,16 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.12.0
+ Fork doctoralvarez/Nyxian — version 1.13.0
  Changelog:
+  - 1.13.0 (2026-11-08): projects in Apple's Files app ("Show in Files" in a
+    project's menu, "Project Names.txt" says which UUID folder is which);
+    running a .py file copies the project in the background (without reading
+    big files into memory, skipping build folders), closes the editor's
+    keyboard first and presents from the top screen; pip runs through
+    nyxian_pip (says it started, shows it is still working, prints where it
+    waits after a long silence); the console compiles pip in the background
+    once, so the first pip install does not spend minutes doing it.
   - 1.12.0 (2026-11-08): binary packages load (numpy, matplotlib…): they
     link @rpath/Python.framework/Python, now a link to libpython found
     through libpython's rpath; pip also looks for iOS wheels on this fork's
@@ -142,6 +150,7 @@ import UniformTypeIdentifiers
         
         self.projectsList = buckets
         self.tableView.reloadData()
+        ForkFilesApp.writeProjectIndex(rawProjectsList.values.flatMap { $0 })
     }
     
     override func viewDidLoad() {
@@ -559,7 +568,12 @@ import UniformTypeIdentifiers
                 self.forkPresentPicker(.appIcon(project))
             }
             
-            return UIMenu(children: [export, exportSwiftPM, updateSwiftPM, setIcon, item])
+            let showInFiles: UIAction = UIAction(title: "Show in Files", image: UIImage(systemName: "folder")) { _ in
+                guard let project = self.forkProject(at: indexPath) else { return }
+                ForkFilesApp.open(project.url, from: self)
+            }
+            
+            return UIMenu(children: [export, exportSwiftPM, updateSwiftPM, setIcon, showInFiles, item])
         }
     }
     
@@ -1749,6 +1763,41 @@ enum ForkCapabilities {
     }
 }
 
+// MARK: - Fork: projects in Apple's Files app
+
+/// Nyxian's Documents folder is shared with the Files app (UIFileSharingEnabled):
+/// On My iPhone/iPad › Nyxian › Projects. Project folders are named by UUID, so
+/// a list of names next to them says which is which.
+enum ForkFilesApp {
+    static let indexName = "Project Names.txt"
+    
+    static func writeProjectIndex(_ projects: [NXProject]) {
+        let folder = NXBootstrap.shared().rootURL.appendingPathComponent("Projects")
+        var lines = ["Nyxian projects — the folder of each project in Projects/", ""]
+        let named = projects.map { (($0.projectConfig.displayName ?? "") as String, ($0.url as URL).lastPathComponent) }
+        for (name, folderName) in named.sorted(by: { $0.0.localizedCaseInsensitiveCompare($1.0) == .orderedAscending }) {
+            lines.append("\(name.isEmpty ? "(no name)" : name)  →  Projects/\(folderName)")
+        }
+        let text = lines.joined(separator: "\n") + "\n"
+        let target = folder.deletingLastPathComponent().appendingPathComponent(indexName)
+        if (try? String(contentsOf: target, encoding: .utf8)) == text { return }
+        try? text.write(to: target, atomically: true, encoding: .utf8)
+    }
+    
+    /// Opens the Files app at a folder of Nyxian's Documents.
+    static func open(_ folder: URL, from presenter: UIViewController) {
+        var path = folder.resolvingSymlinksInPath().standardizedFileURL.path
+        if path.hasPrefix("/var/") { path = "/private" + path }
+        let allowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "#?"))
+        guard let encoded = path.addingPercentEncoding(withAllowedCharacters: allowed),
+              let url = URL(string: "shareddocuments://" + encoded) else { return }
+        UIApplication.shared.open(url) { opened in
+            guard !opened else { return }
+            presenter.forkGitHubAlert("Files", "Open the Files app › On My \(UIDevice.current.model) › Nyxian › Projects › \(folder.lastPathComponent).")
+        }
+    }
+}
+
 // MARK: - Fork: pickers for "Update from .swiftpm…" and "Set App Icon…"
 
 enum ForkProjectPicker {
@@ -2648,7 +2697,29 @@ class NyxianConsole(code.InteractiveConsole):
             _flush()
 
 
+def _warm_pip():
+    # compiles pip once in the background, so the first pip install does not
+    # spend its first minutes doing it
+    try:
+        import compileall
+        import importlib.util
+        spec = importlib.util.find_spec("pip")
+        if not spec or not spec.submodule_search_locations:
+            return
+        folder = list(spec.submodule_search_locations)[0]
+        marker = os.path.join(sys.pycache_prefix or folder, ".nyxian-pip-compiled-%s" % sys.version.split()[0])
+        if os.path.exists(marker):
+            return
+        compileall.compile_dir(folder, quiet=2, workers=1)
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+        open(marker, "w").close()
+    except Exception:
+        pass
+
+
 def main():
+    import threading
+    threading.Thread(target=_warm_pip, daemon=True).start()
     banner = (
         "Python %s on Nyxian (%s)\n"
         "Type help(), copyright(), credits() or license(). Ctrl-D or exit() quits."
@@ -2694,6 +2765,72 @@ def main():
             if c == 4 and last == 4:
                 return
             last = c
+
+
+if __name__ == "__main__":
+    main()
+"""#,
+        "nyxian_pip.py": #"""
+# pip in Nyxian: says at once that it started, shows that it is still working
+# when pip prints nothing for a while, and after a long silence prints where
+# it is waiting (to report it). Run as: python3 -m nyxian_pip install NAME…
+import faulthandler
+import os
+import sys
+import threading
+import time
+
+from nyxian_lineedit import _write
+
+QUIET_NOTE = 20     # seconds without output before "still working"
+STUCK_DUMP = 180    # seconds without output before printing where pip waits
+
+
+class _Tracking:
+    def __init__(self, stream, state):
+        self._stream = stream
+        self._state = state
+
+    def write(self, text):
+        self._state["last"] = time.monotonic()
+        return self._stream.write(text)
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+def _watch(state):
+    dumped = False
+    while not state["done"]:
+        time.sleep(2)
+        quiet = time.monotonic() - state["last"]
+        total = int(time.monotonic() - state["start"])
+        if quiet >= QUIET_NOTE and int(quiet) % QUIET_NOTE < 2:
+            _write("  … still working (%d s)\n" % total, 2)
+        if quiet >= STUCK_DUMP and not dumped:
+            dumped = True
+            _write("\n[pip has printed nothing for %d s. Where it is waiting:]\n" % int(quiet), 2)
+            faulthandler.dump_traceback(file=sys.__stderr__, all_threads=True)
+            _write("[You can wait, or close with ✕ and try again]\n\n", 2)
+
+
+def main():
+    args = sys.argv[1:] or ["--help"]
+    _write("pip %s\n" % " ".join(args))
+    _write("Starting pip… (the first time after an update it takes a little longer)\n")
+    state = {"start": time.monotonic(), "last": time.monotonic(), "done": False}
+    sys.stdout = _Tracking(sys.stdout, state)
+    sys.stderr = _Tracking(sys.stderr, state)
+    threading.Thread(target=_watch, args=(state,), daemon=True).start()
+    try:
+        from pip._internal.cli.main import main as pip_main
+        code = pip_main(args)
+    finally:
+        state["done"] = True
+    _write("\n%s in %d s.\n" % ("Done" if not code else "pip ended with errors", time.monotonic() - state["start"]))
+    if not code and args and args[0] == "install":
+        _write("New binary modules are signed the next time Python opens.\n")
+    sys.exit(code)
 
 
 if __name__ == "__main__":
@@ -2913,21 +3050,44 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     }
     
     /// Same files in a folder Python can read, keeping unchanged files untouched.
-    static func mirror(project root: URL) throws -> URL {
+    /// Folder a project (or a loose script's folder) runs in: a copy under the rootfs.
+    static func mirrorFolder(project root: URL) -> URL {
+        rootfs.appendingPathComponent("var/mobile/Python").appendingPathComponent(root.lastPathComponent)
+    }
+    
+    /// Copies the project into its run folder: files in open editors as they
+    /// are now, the others only when changed (size or date), without reading
+    /// them into memory; build folders and very large files are left out.
+    static func mirror(project root: URL, openTexts: [String: Data] = [:]) throws -> URL {
         let fm = FileManager.default
-        let destination = rootfs.appendingPathComponent("var/mobile/Python").appendingPathComponent(root.lastPathComponent)
+        let destination = mirrorFolder(project: root)
         try fm.createDirectory(at: destination, withIntermediateDirectories: true)
-        if let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
-            for case let url as URL in enumerator {
-                guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
-                let relative = ProjectFileIndex.relativePath(url, root: root)
-                if relative.hasPrefix("Config/") { continue }
-                let target = destination.appendingPathComponent(relative)
-                let data = LiveEditorRegistry.editor(forPath: url.path).map { Data($0.textView.text.utf8) } ?? (try? Data(contentsOf: url)) ?? Data()
-                if let existing = try? Data(contentsOf: target), existing == data { continue }
-                try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try data.write(to: target, options: .atomic)
+        let skippedFolders: Set<String> = ["Config", ".build", "build", "Previews", "__pycache__", ".git", "DerivedData", "node_modules"]
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
+        guard let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else { return destination }
+        for case let url as URL in enumerator {
+            guard let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
+            if values.isDirectory == true {
+                if skippedFolders.contains(url.lastPathComponent) || url.pathExtension == "app" { enumerator.skipDescendants() }
+                continue
             }
+            guard values.isRegularFile == true else { continue }
+            let relative = ProjectFileIndex.relativePath(url, root: root)
+            let target = destination.appendingPathComponent(relative)
+            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if let text = openTexts[url.resolvingSymlinksInPath().standardizedFileURL.path] {
+                if let existing = try? Data(contentsOf: target), existing == text { continue }
+                try text.write(to: target, options: .atomic)
+                continue
+            }
+            if (values.fileSize ?? 0) > 100 * 1024 * 1024 { continue }
+            if let existing = try? target.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+               existing.fileSize == values.fileSize,
+               let a = existing.contentModificationDate, let b = values.contentModificationDate, a >= b {
+                continue
+            }
+            try? fm.removeItem(at: target)
+            try fm.copyItem(at: url, to: target)
         }
         return destination
     }
@@ -2954,13 +3114,25 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         return entries.joined(separator: ":")
     }
     
-    static func launch(from presenter: UIViewController, arguments: [String], workingDirectory: URL?, title: String, closeOnExit: Bool = false) {
+    /// The controller to present from: the top one shown over `presenter`.
+    private static func host(for presenter: UIViewController) -> UIViewController {
+        var top: UIViewController = presenter.view.window?.rootViewController ?? presenter
+        while let shown = top.presentedViewController, !shown.isBeingDismissed { top = shown }
+        return top.view.window != nil ? top : presenter
+    }
+    
+    static func launch(from presenter: UIViewController, arguments: [String], workingDirectory: URL?, title: String, closeOnExit: Bool = false, beforeLaunch: (() throws -> Void)? = nil) {
         let progress = UIAlertController(title: "Python \(version)", message: "Preparing…", preferredStyle: .alert)
-        presenter.present(progress, animated: true)
+        let host = host(for: presenter)
+        host.present(progress, animated: true)
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let launcher = try prepare { message in
                     DispatchQueue.main.async { progress.message = message }
+                }
+                if let beforeLaunch {
+                    DispatchQueue.main.async { progress.message = "Copying the project…" }
+                    try beforeLaunch()
                 }
                 DispatchQueue.main.async {
                     progress.dismiss(animated: true) {
@@ -2998,7 +3170,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             } catch {
                 DispatchQueue.main.async {
                     progress.dismiss(animated: true) {
-                        presenter.forkGitHubAlert("Python", error.localizedDescription)
+                        host.forkGitHubAlert("Python", error.localizedDescription)
                     }
                 }
             }
@@ -3040,13 +3212,13 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     
     /// Runs a .py file from a copy of its project (or of its folder).
     static func run(script: URL, project: NXProject?, from presenter: UIViewController) {
+        /* the editor's keyboard goes away before the terminal takes over */
+        presenter.view.window?.endEditing(true)
         let root: URL = project.map { $0.url as URL } ?? script.deletingLastPathComponent()
-        do {
-            let mirror = try mirror(project: root)
-            let relative = ProjectFileIndex.relativePath(script, root: root)
-            launch(from: presenter, arguments: [relative], workingDirectory: mirror, title: "python3 \(script.lastPathComponent)")
-        } catch {
-            presenter.forkGitHubAlert("Python", error.localizedDescription)
+        let relative = ProjectFileIndex.relativePath(script, root: root)
+        let openTexts = LiveEditorRegistry.openTexts()
+        launch(from: presenter, arguments: [relative], workingDirectory: mirrorFolder(project: root), title: "python3 \(script.lastPathComponent)") {
+            _ = try mirror(project: root, openTexts: openTexts)
         }
     }
     
@@ -3061,7 +3233,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         alert.addAction(UIAlertAction(title: "Install", style: .default) { [weak alert] _ in
             let names = (alert?.textFields?.first?.text ?? "").split(separator: " ").map(String.init).filter { !$0.isEmpty }
             guard !names.isEmpty else { return }
-            launch(from: presenter, arguments: ["-m", "pip", "install"] + names, workingDirectory: nil, title: "pip install")
+            launch(from: presenter, arguments: ["-m", "nyxian_pip", "install"] + names, workingDirectory: nil, title: "pip install")
         })
         presenter.present(alert, animated: true)
     }

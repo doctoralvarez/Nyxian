@@ -19,7 +19,7 @@ import termios
 import time
 
 SOURCE = os.path.join(os.path.dirname(__file__), "..", "..", "Nyxian", "UI", "ContentView.swift")
-NAMES = ["nyxian_lineedit.py", "nyxian_repl.py", "nyxian_keytest.py", "sitecustomize.py"]
+NAMES = ["nyxian_lineedit.py", "nyxian_repl.py", "nyxian_keytest.py", "nyxian_pip.py", "sitecustomize.py"]
 
 
 def extract(folder):

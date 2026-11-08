@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.12.0
+ Fork doctoralvarez/Nyxian — version 1.12.1
  Changelog:
+  - 1.12.1 (2026-11-08): on iPhone the keyboard bar keeps tab, undo/redo,
+    ▶ (Python) and hide keyboard, and moves fix / breakpoint / symbols /
+    find into a ⋯ menu — the hide-keyboard key was cut off.
   - 1.12.0 (2026-11-07): "Copy Python Output to Project" (⇧⌘R, edit menu):
     files a script created (plots, CSV) come back into the project.
   - 1.11.0 (2026-11-07): Python files — ⌘R (or the play button in the
@@ -562,44 +565,47 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             items.append(spawnSeparator())
         }
         
-        /* fork: apply the compiler's fix on the caret's line */
-        let fixBarButton = UIBarButtonItem(customView: SymbolButton(symbolName: "wrench.adjustable", width: 35.0) { [weak self] in
-            self?.fixIssueOnCurrentLine()
-        })
-        items.append(fixBarButton)
-        items.append(spawnSeparator())
+        /* fork: on iPhone the bar has no room for every key (the last one, hide
+           keyboard, ended up cut off): the less used ones go into a ⋯ menu */
+        let compactBar = UIDevice.current.userInterfaceIdiom == .phone
+        var moreActions: [UIAction] = []
+        func addKey(_ symbol: String, _ title: String, _ action: @escaping () -> Void) {
+            if compactBar {
+                moreActions.append(UIAction(title: title, image: UIImage(systemName: symbol)) { _ in action() })
+            } else {
+                items.append(UIBarButtonItem(customView: SymbolButton(symbolName: symbol, width: 35.0) { action() }))
+                items.append(spawnSeparator())
+            }
+        }
         
-        /* fork: run a Python file */
+        /* fork: run a Python file (always on the bar) */
         if self.file.fileURL?.pathExtension.lowercased() == "py" {
-            let runPython = UIBarButtonItem(customView: SymbolButton(symbolName: "play.fill", width: 35.0) { [weak self] in
+            let runPython = UIBarButtonItem(customView: SymbolButton(symbolName: "play.fill", width: compactBar ? 32.0 : 35.0) { [weak self] in
                 self?.forkRunPythonFile()
             })
             items.append(runPython)
             items.append(spawnSeparator())
         }
         
+        /* fork: apply the compiler's fix on the caret's line */
+        addKey("wrench.adjustable", "Fix Issue on This Line") { [weak self] in self?.fixIssueOnCurrentLine() }
+        
         /* fork: breakpoint on the caret's line */
         if self.project != nil {
-            let breakpointBarButton = UIBarButtonItem(customView: SymbolButton(symbolName: "smallcircle.filled.circle", width: 35.0) { [weak self] in
-                self?.forkToggleBreakpoint()
-            })
-            items.append(breakpointBarButton)
-            items.append(spawnSeparator())
+            addKey("smallcircle.filled.circle", "Toggle Breakpoint") { [weak self] in self?.forkToggleBreakpoint() }
         }
         
         /* fork: functions and types of this file */
-        let symbolsBarButton = UIBarButtonItem(customView: SymbolButton(symbolName: "list.bullet.indent", width: 35.0) { [weak self] in
-            self?.showDocumentSymbols()
-        })
-        items.append(symbolsBarButton)
-        items.append(spawnSeparator())
+        addKey("list.bullet.indent", "Symbols in This File") { [weak self] in self?.showDocumentSymbols() }
         
         /* fork: find & replace for touch users (no hardware keyboard) */
-        let findBarButton = UIBarButtonItem(customView: SymbolButton(symbolName: "magnifyingglass", width: 35.0) { [weak self] in
-            self?.showFindAndReplace()
-        })
-        items.append(findBarButton)
-        items.append(spawnSeparator())
+        addKey("magnifyingglass", "Find and Replace") { [weak self] in self?.showFindAndReplace() }
+        
+        if compactBar {
+            let more = UIBarButtonItem(image: UIImage(systemName: "ellipsis.circle"), menu: UIMenu(children: moreActions))
+            items.append(more)
+            items.append(spawnSeparator())
+        }
 
         items.append(hideBarButton)
 
@@ -1846,6 +1852,16 @@ enum LiveEditorRegistry {
     
     static func register(_ editor: CodeEditorViewController) {
         editors.add(editor)
+    }
+    
+    /// Text of every open, writable editor by file path (read on the main thread).
+    static func openTexts() -> [String: Data] {
+        var texts: [String: Data] = [:]
+        for editor in editors.allObjects where !editor.isReadOnly {
+            guard let url: URL = editor.file.fileURL else { continue }
+            texts[url.resolvingSymlinksInPath().standardizedFileURL.path] = Data(editor.textView.text.utf8)
+        }
+        return texts
     }
     
     /// The open, writable editor showing `path`, if any.
