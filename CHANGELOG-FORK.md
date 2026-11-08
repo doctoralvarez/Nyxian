@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.18.1 — 2026-11-07
+
+- Framework + SwiftUI overlays back on now that `@State` is fixed:
+  `SceneView` (`_SceneKit_SwiftUI`), `SpriteView` (`_SpriteKit_SwiftUI`), `Map`,
+  `VideoPlayer`, StoreKit views, `SignInWithAppleButton`, `PhotosPicker`… —
+  `-enable-cross-import-overlays` as in Xcode, plus an explicit import of the
+  overlays the code uses when the SDK has them.
+
 ## 1.18.0 — 2026-11-07
 
 - **@State works with the iOS 27 SDK**: that SDK declares `@State` as a macro
