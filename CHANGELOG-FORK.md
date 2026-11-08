@@ -4,6 +4,12 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.21.7 — 2026-11-08
+
+- pip no longer warns "The script … is installed in …/opt/python/bin which is
+  not on PATH": that folder is now on `PATH` in Python windows (with and
+  without `/private` in front, since pip compares the paths as text).
+
 ## 1.21.6 — 2026-11-08
 
 - **pip install works**: pip also writes command scripts to `opt/python/bin`

@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.10.1
+ Fork doctoralvarez/Nyxian — version 1.10.2
  Changelog:
+  - 1.10.2 (2026-11-08): opt/python/bin is on PATH in Python windows, so pip
+    no longer warns that the scripts it installs are "not on PATH".
   - 1.10.1 (2026-11-08): pip installs again: python3 may write all of
     opt/python (pip also writes bin/ — "Operation not permitted" on
     bin/idna); signing revision 3 signs Python again once.
@@ -2791,6 +2793,18 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         return saved > 0 ? saved : defaultFontSize
     }
     
+    private static var pathWithPythonBin: String {
+        let bin = home.appendingPathComponent("bin").path
+        var entries = [bin]
+        if bin.hasPrefix("/private/") {
+            entries.append(String(bin.dropFirst("/private".count)))
+        } else if bin.hasPrefix("/var/") {
+            entries.append("/private" + bin)
+        }
+        entries.append(contentsOf: ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
+        return entries.joined(separator: ":")
+    }
+    
     static func launch(from presenter: UIViewController, arguments: [String], workingDirectory: URL?, title: String, closeOnExit: Bool = false) {
         let progress = UIAlertController(title: "Python \(version)", message: "Preparing…", preferredStyle: .alert)
         presenter.present(progress, animated: true)
@@ -2814,7 +2828,11 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                             "MPLBACKEND": "Agg",
                             "PYTHONPYCACHEPREFIX": rootfs.appendingPathComponent("var/mobile/Python/.pycache").path,
                             "TERM": "xterm-256color",
-                            "NYXIAN_TERMINAL": "1"
+                            "NYXIAN_TERMINAL": "1",
+                            /* scripts pip installs (idna, normalizer, …) live in bin/; on PATH pip
+                               does not warn. Both spellings: pip compares paths as text and
+                               reports them with /private in front. */
+                            "PATH": pathWithPythonBin
                         ]
                         if let workingDirectory { environment["PYTHONPATH"] = workingDirectory.path }
                         session.extraEnvironment = environment
