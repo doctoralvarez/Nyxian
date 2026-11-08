@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-# Fork doctoralvarez/Nyxian — version 1.0.0
+# Fork doctoralvarez/Nyxian — version 1.1.0
 # Changelog:
+#  - 1.1.0 (2026-11-08): checks automatic indentation, pasted blocks and
+#    curly quotes.
 #  - 1.0.0 (2026-11-07): CI test of Nyxian's Python REPL in a pseudo terminal
 #    set up like Nyxian's (no echo / no line editing, CR -> LF), with the
 #    Python version the app ships.
@@ -31,7 +33,7 @@ def spawn(folder, module):
     pid, fd = pty.fork()
     if pid == 0:
         attrs = termios.tcgetattr(0)
-        attrs[0] = termios.ICRNL | termios.ISTRIP | termios.INPCK
+        attrs[0] = termios.ICRNL | termios.INPCK
         attrs[1] = termios.OPOST | termios.ONLCR
         attrs[3] = termios.ISIG
         attrs[6][termios.VMIN] = 1
@@ -70,9 +72,19 @@ def main():
     checks = [
         (b"print(2+2)\r", b"4"),
         (b"import json; json.dumps({'a': 1})\r", b'{"a": 1}'),
-        (b"for i in range(2):\r", b"... "),
-        (b"    print(i * 10)\r", b"... "),
+        (b"for i in range(2):\r", b"...     "),
+        (b"print(i * 10)\r", b"...     "),
         (b"\r", b"10"),
+        (b"def f(x):\r", b"...     "),
+        (b"if x > 1:\r", b"...         "),
+        (b"return x * 2\r", b"...         "),
+        (b"\x7freturn 0\r", b"...     "),
+        (b"\r", b">>> "),
+        (b"f(21), f(0)\r", b"(42, 0)"),
+        (b"def g():\r    a = 1\r    return a + 1\r\r", b">>> "),
+        (b"g()\r", b"2"),
+        (b"print(\xe2\x80\x9chola\xe2\x80\x9d)\r", b"hola"),
+        ("print('ni\u00f1o \u00bfa\u00f1o? \u00e1\u00e9')\r".encode(), "ni\u00f1o \u00bfa\u00f1o? \u00e1\u00e9".encode()),
         (b"1/0\r", b"ZeroDivisionError"),
         (b"x = input('n? ')\r", b"n? "),
         (b"42\r", b">>> "),
@@ -82,7 +94,8 @@ def main():
     for keys, expected in checks:
         for byte in keys:
             os.write(fd, bytes([byte]))
-        out = drain(fd, 5, b"n? " if expected == b"n? " else b">>> ")
+        until = b"n? " if expected == b"n? " else (b"... " if expected.startswith(b"...") else b">>> ")
+        out = drain(fd, 5, until if not expected.startswith(b"...") else None)
         ok = expected in out
         failed |= not ok
         print("OK  " if ok else "FAIL", keys, "->", out)

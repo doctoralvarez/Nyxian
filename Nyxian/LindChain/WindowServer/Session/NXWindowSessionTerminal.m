@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-08): the terminal ends above the keyboard (it used to
+    run behind it, so what you typed was hidden and nothing scrolled), and
+    8-bit input is kept (ISTRIP off: ñ, accents, ¿ ¡ were mangled).
   - 1.0.0 (2026-11-07): optional arguments, extra environment, working
     directory and window title (used to run python3 with PYTHONHOME and a
     script).
@@ -79,7 +82,7 @@
     
     /* setting tty properties */
     kvo_wrlock(tty);
-    tty->t.c_iflag = ICRNL | ISTRIP | INPCK /*| IXON | BRKINT*/;
+    tty->t.c_iflag = ICRNL | INPCK /*| IXON | BRKINT*/; /* fork: no ISTRIP, UTF-8 needs the 8th bit */
     tty->t.c_oflag = OPOST | ONLCR;
     /*tty->t.c_cflag = CS8 | CREAD | CLOCAL;*/
     tty->t.c_lflag = /*ICANON | ECHO | ECHOE | ECHOK |*/ ISIG /*| IEXTEN*/;
@@ -166,10 +169,15 @@
     _terminal.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:_terminal];
     
+    /* fork: the bottom follows the keyboard (TerminalViewObjC sets its constant) */
+    NSLayoutConstraint *bottom = [self.terminal.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor];
     [NSLayoutConstraint activateConstraints:@[
-        [self.terminal.heightAnchor constraintEqualToAnchor:self.view.heightAnchor],
+        [self.terminal.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [self.terminal.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.terminal.widthAnchor constraintEqualToAnchor:self.view.widthAnchor],
+        bottom,
     ]];
+    self.terminal.forkKeyboardConstraint = bottom;
     
     return YES;
 }

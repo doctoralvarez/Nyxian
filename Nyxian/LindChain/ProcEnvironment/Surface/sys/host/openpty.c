@@ -20,6 +20,13 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-08): ISTRIP off, so UTF-8 input (ñ, accents) arrives
+    intact.
+*/
+
 #include <LindChain/ProcEnvironment/Surface/sys/host/openpty.h>
 #include <LindChain/ProcEnvironment/Surface/tty/tty.h>
 #include <LindChain/Private/mach/fileport.h>
@@ -42,7 +49,7 @@ DEFINE_SYSCALL_HANDLER(openpty)
     tty->sid = 0;
     tty->pgrp = 0;
     
-    tty->t.c_iflag = ICRNL | ISTRIP | INPCK;
+    tty->t.c_iflag = ICRNL | INPCK; /* fork: no ISTRIP */
     tty->t.c_oflag = OPOST | ONLCR;
     tty->t.c_lflag = ISIG;
     

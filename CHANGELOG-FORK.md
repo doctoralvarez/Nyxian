@@ -4,6 +4,18 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.21.4 — 2026-11-08
+
+- **Python Console: blocks of several lines** — after a line ending in `:`
+  (`for`, `if`, `def`…) the next line starts already indented; an empty Enter
+  ends the block; ⌫ on the indentation removes a whole level. Pasted blocks
+  keep their own indentation. Curly quotes from the keyboard become straight.
+- **Terminal above the keyboard**: every Nyxian terminal now ends where the
+  keyboard (and its key bar) starts, so the line being typed is visible and
+  older output can be scrolled. Before, the terminal ran behind the keyboard.
+- **ñ, accents, ¿ ¡ in terminals**: the terminal stripped the 8th bit of each
+  byte (ISTRIP), which mangled every non-ASCII character. Now off.
+
 ## 1.21.3 — 2026-11-07
 
 - **Python Console: Enter runs the line** — robust terminal I/O:

@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.9.2
+ Fork doctoralvarez/Nyxian — version 1.9.3
  Changelog:
+  - 1.9.3 (2026-11-08): Python REPL indents by itself inside blocks (one
+    level more after ":", an empty Enter ends the block, ⌫ removes a whole
+    level), pasted blocks keep their own indentation, and curly quotes
+    typed on the keyboard become straight ones.
   - 1.9.2 (2026-11-07): Python terminal I/O made robust: sys.stdout and
     sys.stderr write straight to the terminal, the REPL writes results and
     errors itself and flushes after every line, Enter accepts CR, LF and
@@ -2280,11 +2284,30 @@ def _swallow_lf():
 _pending = []
 
 
-def read_line(prompt=""):
+def _input_waiting():
+    if _pending:
+        return True
+    try:
+        ready, _, _ = select.select([0], [], [], 0)
+    except Exception:
+        return False
+    return bool(ready)
+
+
+_QUOTES = {"\u201c": '"', "\u201d": '"', "\u201e": '"', "\u2018": "'", "\u2019": "'"}
+
+
+def read_line(prompt="", indent="", code=False):
+    """Reads one line. indent is shown and kept in front of the line (not
+    when text was pasted or typed ahead); code=True turns curly quotes from
+    the keyboard into straight ones."""
     _flush()
     if prompt:
         _write(prompt)
     buffer = []
+    if indent and not _input_waiting():
+        buffer = list(indent)
+        _write(indent)
     index = len(_history)
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
     while True:
@@ -2305,8 +2328,11 @@ def read_line(prompt=""):
             break
         if c in (8, 127):
             if buffer:
-                buffer.pop()
-                _write("\b \b")
+                count = 1
+                if buffer[-1] == " " and all(ch == " " for ch in buffer):
+                    count = (len(buffer) - 1) % 4 + 1
+                del buffer[-count:]
+                _write("\b \b" * count)
             continue
         if c == 3:
             _write("^C\n")
@@ -2337,6 +2363,8 @@ def read_line(prompt=""):
             continue
         text = decoder.decode(data)
         if text:
+            if code:
+                text = "".join(_QUOTES.get(ch, ch) for ch in text)
             buffer.extend(text)
             _write(text)
     line = "".join(buffer)
@@ -2346,7 +2374,8 @@ def read_line(prompt=""):
 """#,
         "nyxian_repl.py": #"""
 # The REPL of Python in Nyxian: the standard interactive console with
-# Nyxian's line editor (echo, backspace, history, Tab indents). Results and
+# Nyxian's line editor (echo, backspace, history, Tab indents, automatic
+# indentation inside blocks: an empty Enter ends the block). Results and
 # errors are written straight to the terminal and flushed after every line.
 import code
 import os
@@ -2357,8 +2386,23 @@ from nyxian_lineedit import _flush, _write, read_line
 
 
 class NyxianConsole(code.InteractiveConsole):
+    _last = ""
+
     def raw_input(self, prompt=""):
-        return read_line(prompt)
+        # inside a block (prompt "... "), keep the indentation of the line
+        # above, one level more after a line ending in ":"; a line with only
+        # spaces ends the block
+        indent = ""
+        if self.buffer:
+            last = self._last
+            indent = last[: len(last) - len(last.lstrip(" \t"))]
+            if last.rstrip().endswith(":"):
+                indent += "    "
+        line = read_line(prompt, indent, code=True)
+        if self.buffer and not line.strip():
+            line = ""
+        self._last = line
+        return line
 
     def write(self, data):
         _flush()

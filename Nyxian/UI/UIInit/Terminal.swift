@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-08): the terminal shrinks to the part of its window above
+    the keyboard (and its key bar), so the line being typed stays visible and
+    older output can be scrolled (forkKeyboardConstraint).
   - 1.1.0 (2026-11-07): Return key in the key bar (sends CR, like the
     keyboard's Return) as a second way to enter a line.
   - 1.0.0 (2026-11-07): Nyxian's own key bar above the keyboard (esc, tab,
@@ -148,8 +151,53 @@ import UIKit
             NotificationCenter.default.removeObserver(self)
         } else {
             NotificationCenter.default.addObserver(self, selector: #selector(handleThemeChange(_:)), name: Notification.Name("uiColorChangeNotif"), object: nil)
+            /* fork: keep the terminal above the keyboard */
+            NotificationCenter.default.addObserver(self, selector: #selector(forkKeyboardChanged(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(forkKeyboardChanged(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
         }
         handleThemeChange(nil)
+    }
+    
+    // MARK: fork — keyboard avoidance
+    
+    /// Bottom constraint of the terminal in its window (set by NXWindowSessionTerminal).
+    @objc var forkKeyboardConstraint: NSLayoutConstraint?
+    private var forkKeyboardFrame: CGRect = .null
+    
+    @objc private func forkKeyboardChanged(_ notification: Notification) {
+        if notification.name == UIResponder.keyboardWillHideNotification {
+            forkKeyboardFrame = .null
+        } else if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
+            forkKeyboardFrame = frame
+        }
+        forkUpdateKeyboardInset()
+    }
+    
+    /// How much of the terminal's window the keyboard covers, from the bottom.
+    private func forkKeyboardOverlap() -> CGFloat {
+        guard let container = superview, let window = container.window, !forkKeyboardFrame.isNull else { return 0 }
+        let keyboard = container.convert(forkKeyboardFrame, from: window.screen.coordinateSpace)
+        let visible = container.bounds
+        guard keyboard.intersects(visible), keyboard.maxY >= visible.maxY - 1 else { return 0 }  // floating keyboard: leave as is
+        return max(0, min(visible.height - 60, visible.maxY - keyboard.minY))
+    }
+    
+    private func forkUpdateKeyboardInset() {
+        guard let constraint = forkKeyboardConstraint else { return }
+        let target = -forkKeyboardOverlap()
+        guard abs(constraint.constant - target) > 0.5 else { return }
+        constraint.constant = target
+        UIView.performWithoutAnimation {
+            superview?.layoutIfNeeded()
+        }
+    }
+    
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        /* the window can be moved or resized while the keyboard is up */
+        if forkKeyboardConstraint != nil {
+            DispatchQueue.main.async { [weak self] in self?.forkUpdateKeyboardInset() }
+        }
     }
     
     @objc func handleThemeChange(_ notification: Notification?) {
