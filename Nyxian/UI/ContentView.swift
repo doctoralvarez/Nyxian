@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.13.0
+ Fork doctoralvarez/Nyxian — version 1.14.0
  Changelog:
+  - 1.14.0 (2026-11-08): "Python" project template (a command line tool
+    project without sources, with main.py and a marker), its own "Python"
+    section in the project list, ▶ / ⌘R run the .py on screen.
   - 1.13.0 (2026-11-08): projects in Apple's Files app ("Show in Files" in a
     project's menu, "Project Names.txt" says which UUID folder is which);
     running a .py file copies the project in the background (without reading
@@ -379,6 +382,11 @@ import UniformTypeIdentifiers
             return false
         }
         
+        /* fork: Python template */
+        if optionsModel.isPython {
+            ForkPython.makePythonProject(project, name: name)
+        }
+        
         addProject(project)
         return true
     }
@@ -395,6 +403,7 @@ import UniformTypeIdentifiers
     }
     
     private static func sectionKey(for project: NXProject) -> String {
+        if ForkPython.isPythonProject(project) { return "python" }
         switch project.projectConfig.schemeKind {
         case .app: return "applications"
         case .utility: return "utilities"
@@ -408,6 +417,7 @@ import UniformTypeIdentifiers
         case "applications": return "Applications"
         case "utilities": return "Utilities"
         case "kernel extension": return "Kernel Extensions"
+        case "python": return "Python"
         default: return key.capitalized
         }
     }
@@ -662,6 +672,8 @@ final class ProjectTemplateOptionsModel: ObservableObject {
 
     @Published var step: ProjectCreationStep = .template
     @Published private(set) var schemeKind: NXProjectSchemeKind
+    /* fork: the "Python" template (made as a command line tool without sources) */
+    @Published private(set) var isPython = false
     private let appLanguages: [ProjectTemplatePickerOption] = [
         ProjectTemplatePickerOption(id: "Swift", title: "Swift"),
         ProjectTemplatePickerOption(id: "ObjC", title: "Objective-C")
@@ -691,11 +703,18 @@ final class ProjectTemplateOptionsModel: ObservableObject {
     }
 
     var showsAppOptions: Bool {
-        return schemeKind == .app
+        return schemeKind == .app && !isPython
     }
     
     var showLanguageOptions: Bool {
-        return schemeKind != .kSurfaceKext
+        return schemeKind != .kSurfaceKext && !isPython
+    }
+    
+    func selectPython() {
+        isPython = true
+        schemeKind = .utility
+        selectedLanguageID = "C"
+        if productName.trimmingCharacters(in: .whitespaces).isEmpty { productName = "Pythons" }
     }
 
     var normalizedOrganizationIdentifier: String {
@@ -751,6 +770,8 @@ final class ProjectTemplateOptionsModel: ObservableObject {
     }
 
     func selectProjectType(_ schemeKind: NXProjectSchemeKind) {
+        if isPython, productName == "Pythons" { productName = "" }
+        isPython = false
         self.schemeKind = schemeKind
         if schemeKind == .app {
             switch selectedLanguageID {
@@ -3050,6 +3071,58 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     }
     
     /// Same files in a folder Python can read, keeping unchanged files untouched.
+    // MARK: Python projects (template "Python")
+    
+    private static let projectMarker = "Config/.nyxian-python"
+    
+    static func isPythonProject(_ project: NXProject) -> Bool {
+        FileManager.default.fileExists(atPath: (project.url as URL).appendingPathComponent(projectMarker).path)
+    }
+    
+    /// Turns a new command line tool project into a Python one: its template
+    /// sources go, main.py comes, and a marker says what it is.
+    static func makePythonProject(_ project: NXProject, name: String) {
+        let fm = FileManager.default
+        let root = project.url as URL
+        let sources: Set<String> = ["c", "h", "m", "mm", "cpp", "cc", "cxx", "hpp", "swift"]
+        if let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]) {
+            for case let url as URL in enumerator {
+                if url.lastPathComponent == "Config" { enumerator.skipDescendants(); continue }
+                if sources.contains(url.pathExtension.lowercased()) { try? fm.removeItem(at: url) }
+            }
+        }
+        let main = """
+        # \(name) — main.py
+        #
+        # Python \(version) en Nyxian.
+        #   ▶ (o ⌘R) corre el archivo .py abierto.
+        #   Crea más archivos con New › File (nombre.py) en este proyecto.
+        #   Paquetes: menú </> › Install Package (pip)…
+        #   Archivos que el script cree: "Copy Python Output to Project" (⇧⌘R).
+
+        import sys
+
+        nombre = input("¿Cómo te llamas? ")
+        print(f"Hola {nombre}, esto es Python {sys.version.split()[0]}")
+
+        """
+        try? main.write(to: root.appendingPathComponent("main.py"), atomically: true, encoding: .utf8)
+        fm.createFile(atPath: root.appendingPathComponent(projectMarker).path, contents: Data("python\n".utf8))
+    }
+    
+    /// ▶ / ⌘R in a Python project: the .py on screen, else main.py, else the first .py.
+    static func runProject(_ project: NXProject, from presenter: UIViewController) {
+        let root = project.url as URL
+        let script = LiveEditorRegistry.visiblePythonFile(under: root)
+            ?? [root.appendingPathComponent("main.py")].first { FileManager.default.fileExists(atPath: $0.path) }
+            ?? ProjectFileIndex.files(in: root).first { $0.pathExtension.lowercased() == "py" }
+        guard let script else {
+            presenter.forkGitHubAlert("Python", "This project has no .py file yet. Make one with New › File (name.py).")
+            return
+        }
+        run(script: script, project: project, from: presenter)
+    }
+    
     /// Folder a project (or a loose script's folder) runs in: a copy under the rootfs.
     static func mirrorFolder(project root: URL) -> URL {
         rootfs.appendingPathComponent("var/mobile/Python").appendingPathComponent(root.lastPathComponent)

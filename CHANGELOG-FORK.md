@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.24.0 — 2026-11-08
+
+- **"Python" project template** (New Project › Python, suggested name
+  "Pythons"): a project of Python scripts — no app to build. It starts with
+  `main.py`; add more with New › File (`name.py`). It has its own **Python**
+  section in the project list. ▶ / ⌘R (iPad) and Run (iPhone) run the `.py`
+  on screen (else `main.py`) instead of building. Made as a command line tool
+  project without sources plus a marker (`Config/.nyxian-python`).
+
 ## 1.23.0 — 2026-11-08
 
 - **Projects in Apple's Files app**: `UIFileSharingEnabled` and

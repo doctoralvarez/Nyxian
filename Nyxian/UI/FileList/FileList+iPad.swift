@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.0
+ Fork doctoralvarez/Nyxian — version 1.4.1
  Changelog:
+  - 1.4.1 (2026-11-08): ▶ / ⌘R in a Python project runs the .py on screen (no build).
   - 1.4.0 (2026-11-07): the debugger attaches to every run (Pause /
     Continue next to the profiler, ⌃⌘Y); ⌘\\ toggles a breakpoint (editor).
   - 1.3.0 (2026-11-07): the export button opens the export assistant;
@@ -312,6 +313,11 @@ class MainSplitViewController: UISplitViewController, UISplitViewControllerDeleg
     
     @objc func invokeBuild() {
         NXDocumentManager.shared().saveAll { [weak self] in
+            /* fork: a Python project runs its script, there is nothing to build */
+            if let self, let detailVC = self.detailVC, ForkPython.isPythonProject(detailVC.project) {
+                ForkPython.runProject(detailVC.project, from: detailVC)
+                return
+            }
             if let self = self,
                let masterVC = masterVC,
                let detailVC = detailVC,

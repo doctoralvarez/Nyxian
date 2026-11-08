@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.12.1
+ Fork doctoralvarez/Nyxian — version 1.12.2
  Changelog:
+  - 1.12.2 (2026-11-08): LiveEditorRegistry.visiblePythonFile (▶ in Python
+    projects) and openTexts (copy of the project for a Python run).
   - 1.12.1 (2026-11-08): on iPhone the keyboard bar keeps tab, undo/redo,
     ▶ (Python) and hide keyboard, and moves fix / breakpoint / symbols /
     find into a ⋯ menu — the hide-keyboard key was cut off.
@@ -1862,6 +1864,18 @@ enum LiveEditorRegistry {
             texts[url.resolvingSymlinksInPath().standardizedFileURL.path] = Data(editor.textView.text.utf8)
         }
         return texts
+    }
+    
+    /// The .py file of an editor on screen under `root` (the one with the keyboard first).
+    static func visiblePythonFile(under root: URL) -> URL? {
+        let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+        let candidates = editors.allObjects.compactMap { editor -> (URL, Bool)? in
+            guard editor.viewIfLoaded?.window != nil, let url: URL = editor.file.fileURL,
+                  url.pathExtension.lowercased() == "py",
+                  url.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(rootPath) else { return nil }
+            return (url, editor.textView.isFirstResponder)
+        }
+        return (candidates.first { $0.1 } ?? candidates.first)?.0
     }
     
     /// The open, writable editor showing `path`, if any.

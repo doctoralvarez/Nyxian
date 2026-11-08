@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.5.0
+ Fork doctoralvarez/Nyxian — version 1.5.1
  Changelog:
+  - 1.5.1 (2026-11-08): "Run" in a Python project runs its script (no build).
   - 1.5.0 (2026-11-07): debugger UI — breakpoints per project
     (ForkBreakpoints), the session that attaches NXForkDebugger to every run
     (ForkDebugSession), Pause / Continue next to the profiler and the stop
@@ -370,6 +371,11 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             if !NXApplicationState.extensionLessMode {
                 projectMenuElements.append(UIAction(title: "Run", image: UIImage(systemName: "play.fill"), handler: { [weak self] _ in
                     guard let self = self else { return }
+                    /* fork: a Python project runs its script, there is nothing to build */
+                    if ForkPython.isPythonProject(project) {
+                        ForkPython.runProject(project, from: self)
+                        return
+                    }
                     buildProjectWithArgumentUI(targetViewController: self, project: project, buildType: .run) { result, execPath in
                         if result {
                             if project.projectConfig.schemeKind == .app {

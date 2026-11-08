@@ -21,6 +21,12 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-08): "Python" template (a project of Python scripts).
+*/
+
 import SwiftUI
 
 struct ProjectTemplateSelectionView: View {
@@ -40,6 +46,8 @@ struct ProjectTemplateSelectionView: View {
         VStack(spacing: 0) {
             templateRow(title: "App", subtitle: "UI app for iPhone & iPad", systemImage: "appstore.app.fill", schemeKind: .app, scale: .large, flavour: .first)
             templateRow(title: "Command Line Tool", subtitle: "Headless iOS app", systemImage: "terminal.fill", schemeKind: .utility)
+            /* fork: a folder of Python scripts, run with ▶ — no app to build */
+            templateRow(title: "Python", subtitle: "Python 3 scripts, run with ▶ (main.py to start)", systemImage: "chevron.left.forwardslash.chevron.right", schemeKind: .utility, python: true)
             templateRow(title: "Library", subtitle: "Library project", systemImage: "building.columns.fill", schemeKind: .library, isEnabled: false)
             templateRow(title: "Ksurface Kernel Extension", subtitle: "Extend the ksurface microkernel your self", systemImage: "puzzlepiece.extension.fill", schemeKind: .kSurfaceKext, isEnabled: true, flavour: .last)
         }
@@ -55,8 +63,9 @@ struct ProjectTemplateSelectionView: View {
                              schemeKind: NXProjectSchemeKind,
                              scale: UIImage.SymbolScale = .default,
                              isEnabled: Bool = true,
+                             python: Bool = false,
                              flavour: templateRowFlavour = .generic) -> some View {
-        let isSelected = model.schemeKind == schemeKind
+        let isSelected = python ? model.isPython : (model.schemeKind == schemeKind && !model.isPython)
         
         let clipTop: CGFloat = flavour == .first ? 16 : 0
         let clipBottom: CGFloat = flavour == .last ? 16 : 0
@@ -64,7 +73,11 @@ struct ProjectTemplateSelectionView: View {
         let strokeBottom: CGFloat = flavour == .last ? 16 : 4
         
         return Button {
-            model.selectProjectType(schemeKind)
+            if python {
+                model.selectPython()
+            } else {
+                model.selectProjectType(schemeKind)
+            }
         } label: {
             HStack(spacing: 12) {
                 ZStack {
