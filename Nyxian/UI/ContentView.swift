@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.15.0
+ Fork doctoralvarez/Nyxian — version 1.16.0
  Changelog:
+  - 1.16.0 (2026-11-08): when a .py run ends, the files the script made are
+    copied into the project by themselves (and listed in the terminal); a
+    file the script wrote again (a new plot) replaces the project's copy.
   - 1.15.0 (2026-11-08): packages installed with pip survive Nyxian updates
     (site-packages is kept when the runtime is unpacked again); signing of new
     package binaries is saved file by file and a file that was being signed
@@ -3271,7 +3274,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         return top
     }
     
-    static func launch(from presenter: UIViewController, arguments: [String], workingDirectory: URL?, title: String, closeOnExit: Bool = false, beforeLaunch: (() throws -> Void)? = nil) {
+    static func launch(from presenter: UIViewController, arguments: [String], workingDirectory: URL?, title: String, closeOnExit: Bool = false, beforeLaunch: (() throws -> Void)? = nil, onExit: ((Int32) -> String?)? = nil) {
         let progress = UIAlertController(title: "Python \(version)", message: "Preparing…", preferredStyle: .alert)
         let host = host(for: presenter)
         host.present(progress, animated: true)
@@ -3314,6 +3317,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                         session.closeOnExit = closeOnExit
                         session.fontSize = CGFloat(fontSize)
                         session.fontSizeDefaultsKey = fontSizeKey
+                        if let onExit { session.exitHandler = { code in onExit(code) } }
                         NXWindowServer.shared().openWindow(with: session, withCompletion: nil)
                     }
                 }
@@ -3327,7 +3331,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         }
     }
     
-    /// Files a script created in its run folder (plots, CSV…) are copied into the project; existing project files are never overwritten.
+    /// Files a script created or rewrote in its run folder (plots, CSV…) are copied into the project; .py files are never overwritten.
     @discardableResult
     static func copyOutput(project root: URL) -> [String] {
         let fm = FileManager.default
@@ -3336,10 +3340,19 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         guard let enumerator = fm.enumerator(at: mirror, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else { return [] }
         for case let url as URL in enumerator {
             if url.lastPathComponent == "__pycache__" { enumerator.skipDescendants(); continue }
-            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]), values.isRegularFile == true else { continue }
             let relative = ProjectFileIndex.relativePath(url, root: mirror)
+            if relative.hasPrefix("Config/") { continue }
             let target = root.appendingPathComponent(relative)
-            guard !fm.fileExists(atPath: target.path) else { continue }
+            if fm.fileExists(atPath: target.path) {
+                /* a file the script wrote again (a new plot) replaces the project's copy;
+                   source files (.py) are never replaced — the editor owns them */
+                guard url.pathExtension.lowercased() != "py",
+                      let made = values.contentModificationDate,
+                      let current = (try? target.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+                      made.timeIntervalSince(current) > 1 else { continue }
+                try? fm.removeItem(at: target)
+            }
             try? fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             if (try? fm.copyItem(at: url, to: target)) != nil { copied.append(relative) }
         }
@@ -3367,9 +3380,18 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         let root: URL = project.map { $0.url as URL } ?? script.deletingLastPathComponent()
         let relative = ProjectFileIndex.relativePath(script, root: root)
         let openTexts = LiveEditorRegistry.openTexts()
-        launch(from: presenter, arguments: [relative], workingDirectory: mirrorFolder(project: root), title: "python3 \(script.lastPathComponent)") {
+        launch(from: presenter, arguments: [relative], workingDirectory: mirrorFolder(project: root), title: "python3 \(script.lastPathComponent)", beforeLaunch: {
             _ = try mirror(project: root, openTexts: openTexts)
-        }
+        }, onExit: { _ in
+            /* files the script made (plots, CSV…) come into the project by themselves */
+            let copied = copyOutput(project: root)
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: Notification.Name("FileListRefresh"), object: nil)
+            }
+            guard !copied.isEmpty else { return nil }
+            let list = copied.prefix(10).joined(separator: ", ") + (copied.count > 10 ? " … (+\(copied.count - 10))" : "")
+            return "[copied to the project: \(list) — tap it in the file list to see it]"
+        })
     }
     
     static func promptInstallPackage(from presenter: UIViewController) {

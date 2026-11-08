@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.12.2
+ Fork doctoralvarez/Nyxian — version 1.12.3
  Changelog:
+  - 1.12.3 (2026-11-08): "Copy Python Output to Project" also in the ⋯ menu
+    on iPhone.
   - 1.12.2 (2026-11-08): LiveEditorRegistry.visiblePythonFile (▶ in Python
     projects) and openTexts (copy of the project for a Python run).
   - 1.12.1 (2026-11-08): on iPhone the keyboard bar keeps tab, undo/redo,
@@ -587,6 +589,9 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             })
             items.append(runPython)
             items.append(spawnSeparator())
+            if compactBar {
+                moreActions.append(UIAction(title: "Copy Python Output to Project", image: UIImage(systemName: "square.and.arrow.down.on.square")) { [weak self] _ in self?.forkCopyPythonOutput() })
+            }
         }
         
         /* fork: apply the compiler's fix on the caret's line */

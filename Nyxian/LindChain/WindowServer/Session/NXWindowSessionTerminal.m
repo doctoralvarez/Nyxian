@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-08): exitHandler: its text is shown when the process ends.
   - 1.2.0 (2026-11-08): closeOnExit (the window closes when its process
     ends, e.g. Ctrl-D in the Python console), the key bar's ✕ closes the
     window, font size per window; otherwise "[process exited]" now says
@@ -276,6 +277,18 @@
     if(!self)
     {
         return;
+    }
+    
+    /* fork: e.g. a Python run copies the files the script made into its project */
+    if(self.exitHandler != nil)
+    {
+        NSString *note = self.exitHandler(code);
+        if(note.length && !self.closeOnExit)
+        {
+            NSString *text = [NSString stringWithFormat:@"\n%@", note];
+            const char *bytes = text.UTF8String;
+            write(_tty->userspacefd[SLAVEFD], bytes, strlen(bytes));
+        }
     }
     
     if(self.focused && !self.closeOnExit)

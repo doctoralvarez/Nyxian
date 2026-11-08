@@ -4,6 +4,17 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.26.0 — 2026-11-08
+
+- **Plots and other files from Python scripts come into the project by
+  themselves** when a run ends (listed in the terminal: "copied to the
+  project: seno.png …"); a file the script writes again (a new plot) replaces
+  the old copy. `.py` files are never overwritten.
+- **Preview of pictures and documents**: tapping a PNG/JPG/PDF/SVG/video…
+  in the file list opens Quick Look (share, save to Photos, mark up) instead
+  of the text editor.
+- "Copy Python Output to Project" is also in the editor's ⋯ menu on iPhone.
+
 ## 1.25.0 — 2026-11-08
 
 - **Landscape**: iPhone now turns to landscape too (iPad already did).

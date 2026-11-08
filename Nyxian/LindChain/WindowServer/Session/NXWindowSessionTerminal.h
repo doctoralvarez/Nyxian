@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-08): exitHandler (text shown when the process exits).
   - 1.1.0 (2026-11-08): closeOnExit, fontSize and fontSizeDefaultsKey.
   - 1.0.0 (2026-11-07): optional arguments, extra environment, working
     directory and window title (used to run python3 with PYTHONHOME and a
@@ -53,6 +54,8 @@
 /* fork: font size of the terminal (0: Nyxian's default) and the UserDefaults key A−/A+ save it to */
 @property (nonatomic) CGFloat fontSize;
 @property (nonatomic,copy) NSString *fontSizeDefaultsKey;
+/* fork: runs when the process exits (on a background thread); its text, if any, is shown before "[process exited]" */
+@property (nonatomic,copy) NSString * (^exitHandler)(int code);
 
 @end
 

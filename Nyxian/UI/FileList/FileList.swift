@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.5.1
+ Fork doctoralvarez/Nyxian — version 1.6.0
  Changelog:
+  - 1.6.0 (2026-11-08): pictures, PDFs and media open in a Quick Look preview
+    (ForkQuickLook) instead of the text editor.
   - 1.5.1 (2026-11-08): "Run" in a Python project runs its script (no build).
   - 1.5.0 (2026-11-07): debugger UI — breakpoints per project
     (ForkBreakpoints), the session that attaches NXForkDebugger to every run
@@ -686,6 +688,9 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
                         NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Failed to unzip \(fileListEntry.path)", withDelay: 0.0)
                     }
                 }
+            } else if ForkQuickLook.canPreview(URL(fileURLWithPath: fileListEntry.path)) {
+                /* fork: pictures (plots from Python), PDFs… open in a preview, not as text */
+                ForkQuickLook.present(URL(fileURLWithPath: fileListEntry.path), from: self)
             } else {
                 if NXApplicationState.fileListRequiresToSendRequests {
                     NotificationCenter.default.post(name: Notification.Name("FileListAct"), object: ["open",fileListEntry.path,"0","0",self.isReadOnly ? "1" : "0"])
@@ -3285,5 +3290,37 @@ final class ForkStopViewController: UITableViewController {
         } else if let editor = CodeEditorViewController(project: project, url: URL(fileURLWithPath: file), line: line, column: 1, isReadOnly: true) {
             navigationController?.pushViewController(editor, animated: true)
         }
+    }
+}
+
+// MARK: - Fork: preview of pictures and documents
+
+import QuickLook
+
+/// Pictures (a plot saved by a Python script), PDFs and other documents open
+/// in Quick Look — share, save to Photos or mark up from there.
+final class ForkQuickLook: NSObject, QLPreviewControllerDataSource {
+    private static let previewable: Set<String> = ["png", "jpg", "jpeg", "gif", "heic", "heif", "tif", "tiff", "bmp", "webp", "svg", "pdf", "usdz", "mov", "mp4", "m4a", "mp3", "wav"]
+    private static var current: ForkQuickLook?
+    private let url: URL
+    
+    private init(url: URL) { self.url = url }
+    
+    static func canPreview(_ url: URL) -> Bool {
+        previewable.contains(url.pathExtension.lowercased())
+    }
+    
+    static func present(_ url: URL, from presenter: UIViewController) {
+        let source = ForkQuickLook(url: url)
+        current = source
+        let preview = QLPreviewController()
+        preview.dataSource = source
+        presenter.present(preview, animated: true)
+    }
+    
+    func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+    
+    func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
+        url as NSURL
     }
 }
