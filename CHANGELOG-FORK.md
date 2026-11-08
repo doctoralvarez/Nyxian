@@ -4,6 +4,22 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.21.5 — 2026-11-08
+
+- **Python Console closes with Ctrl-D / `exit()`** (the window used to stay
+  open showing "process exited"). Other terminal windows say how to close
+  them: any key, or the new ✕.
+- **Key bar, much fuller and scrollable sideways**: esc, tab, ⏎, ^C, ^D ·
+  ← ↓ ↑ →, home, end · paste, clear, page up/down, A−/A+ (font size) ·
+  ^A ^E ^K ^W ^Z ^\ · `( ) [ ] { } < > = + - * / \ | _ : ; ' " # ~ ` ! ? @ $ % & ^ .`
+  Fixed on the right: hide keyboard and a red **✕ that closes the window**.
+- **Bigger font in Python windows**: 30 pt on iPad, 22 on iPhone (a bit more
+  than twice before). Change it in Settings → Customization → **Python Font
+  Size**, or with A−/A+ in the key bar (saved).
+- Python line editor: ← → move the cursor inside the line, home/end and
+  Ctrl-A/Ctrl-E jump, Ctrl-K erases to the end, Ctrl-W erases a word,
+  Ctrl-L clears the screen.
+
 ## 1.21.4 — 2026-11-08
 
 - **Python Console: blocks of several lines** — after a line ending in `:`

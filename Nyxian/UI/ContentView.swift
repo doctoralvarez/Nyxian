@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.9.3
+ Fork doctoralvarez/Nyxian — version 1.10.0
  Changelog:
+  - 1.10.0 (2026-11-08): Python windows use a larger font (30 pt on iPad,
+    22 on iPhone; Settings → Customization → Python Font Size, or A−/A+ in
+    the key bar); the Python Console window closes with Ctrl-D / exit().
+    Line editor: ← → move the cursor, Home/End, Ctrl-A/E/K/W, Ctrl-L clears
+    the screen, Delete erases forward.
   - 1.9.3 (2026-11-08): Python REPL indents by itself inside blocks (one
     level more after ":", an empty Enter ends the block, ⌫ removes a whole
     level), pasted blocks keep their own indentation, and curly quotes
@@ -2300,16 +2305,63 @@ _QUOTES = {"\u201c": '"', "\u201d": '"', "\u201e": '"', "\u2018": "'", "\u2019":
 def read_line(prompt="", indent="", code=False):
     """Reads one line. indent is shown and kept in front of the line (not
     when text was pasted or typed ahead); code=True turns curly quotes from
-    the keyboard into straight ones."""
+    the keyboard into straight ones.
+    Keys: ← → move, Home/End and Ctrl-A/Ctrl-E jump, ↑ ↓ history,
+    ⌫ / Delete erase, Ctrl-W erases a word, Ctrl-K to the end of the line,
+    Ctrl-L clears the screen, Tab indents."""
     _flush()
     if prompt:
         _write(prompt)
     buffer = []
+    state = {"pos": 0}
     if indent and not _input_waiting():
-        buffer = list(indent)
+        buffer.extend(indent)
+        state["pos"] = len(buffer)
         _write(indent)
     index = len(_history)
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
+
+    def insert(text):
+        pos = state["pos"]
+        tail = buffer[pos:]
+        buffer[pos:pos] = list(text)
+        state["pos"] = pos + len(text)
+        _write(text + "".join(tail) + "\b" * len(tail))
+
+    def erase_before(count):
+        pos = state["pos"]
+        count = min(count, pos)
+        if count <= 0:
+            return
+        tail = buffer[pos:]
+        del buffer[pos - count:pos]
+        state["pos"] = pos - count
+        _write("\b" * count + "".join(tail) + " " * count + "\b" * (len(tail) + count))
+
+    def erase_at():
+        pos = state["pos"]
+        if pos >= len(buffer):
+            return
+        del buffer[pos]
+        tail = buffer[pos:]
+        _write("".join(tail) + " " + "\b" * (len(tail) + 1))
+
+    def move(to):
+        pos = state["pos"]
+        to = max(0, min(len(buffer), to))
+        if to < pos:
+            _write("\b" * (pos - to))
+        elif to > pos:
+            _write("".join(buffer[pos:to]))
+        state["pos"] = to
+
+    def replace_all(chars):
+        move(len(buffer))
+        _write("\b \b" * len(buffer))
+        buffer[:] = list(chars)
+        state["pos"] = len(buffer)
+        _write("".join(buffer))
+
     while True:
         data = _pending.pop(0) if _pending else _read_byte()
         if not data:
@@ -2324,49 +2376,84 @@ def read_line(prompt="", indent="", code=False):
                 extra = _swallow_lf()
                 if extra:
                     _pending.append(extra)
+            move(len(buffer))
             _write("\n")
             break
         if c in (8, 127):
-            if buffer:
-                count = 1
-                if buffer[-1] == " " and all(ch == " " for ch in buffer):
-                    count = (len(buffer) - 1) % 4 + 1
-                del buffer[-count:]
-                _write("\b \b" * count)
+            pos = state["pos"]
+            count = 1
+            if pos and all(ch == " " for ch in buffer[:pos]):
+                count = (pos - 1) % 4 + 1
+            erase_before(count)
             continue
         if c == 3:
+            move(len(buffer))
             _write("^C\n")
             raise KeyboardInterrupt
         if c == 4:
             if not buffer:
                 _write("\n")
                 raise EOFError
+            erase_at()
             continue
-        if c == 21:
-            _write("\b \b" * len(buffer))
-            buffer = []
+        if c == 1:
+            move(0)
+            continue
+        if c == 5:
+            move(len(buffer))
+            continue
+        if c == 11:
+            pos = state["pos"]
+            count = len(buffer) - pos
+            del buffer[pos:]
+            _write(" " * count + "\b" * count)
+            continue
+        if c == 12:
+            _write("\x1b[2J\x1b[H" + prompt + "".join(buffer) + "\b" * (len(buffer) - state["pos"]))
+            continue
+        if c == 23:
+            pos = state["pos"]
+            start = pos
+            while start and buffer[start - 1] == " ":
+                start -= 1
+            while start and buffer[start - 1] != " ":
+                start -= 1
+            erase_before(pos - start)
             continue
         if c == 9:
-            buffer.extend("    ")
-            _write("    ")
+            insert("    ")
             continue
         if c == 27:
-            if _read_byte() == b"[":
-                code = _read_byte()
-                while code and code in b"0123456789;":
-                    code = _read_byte()
-                if code in (b"A", b"B") and _history:
-                    index = max(0, index - 1) if code == b"A" else min(len(_history), index + 1)
-                    _write("\b \b" * len(buffer))
-                    buffer = list(_history[index]) if index < len(_history) else []
-                    _write("".join(buffer))
+            kind = _read_byte()
+            if kind not in (b"[", b"O"):
+                continue
+            params = b""
+            final = _read_byte()
+            while final and final in b"0123456789;":
+                params += final
+                final = _read_byte()
+            if final in (b"A", b"B"):
+                if _history:
+                    index = max(0, index - 1) if final == b"A" else min(len(_history), index + 1)
+                    replace_all(_history[index] if index < len(_history) else "")
+            elif final == b"C":
+                move(state["pos"] + 1)
+            elif final == b"D":
+                move(state["pos"] - 1)
+            elif final == b"H" or (final == b"~" and params in (b"1", b"7")):
+                move(0)
+            elif final == b"F" or (final == b"~" and params in (b"4", b"8")):
+                move(len(buffer))
+            elif final == b"~" and params == b"3":
+                erase_at()
+            continue
+        if c < 32:
             continue
         text = decoder.decode(data)
         if text:
             if code:
                 text = "".join(_QUOTES.get(ch, ch) for ch in text)
-            buffer.extend(text)
-            _write(text)
+            insert(text)
     line = "".join(buffer)
     if line.strip():
         _history.append(line)
@@ -2691,7 +2778,16 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     }
     
     /// Opens python3 with `arguments` in a terminal window.
-    static func launch(from presenter: UIViewController, arguments: [String], workingDirectory: URL?, title: String) {
+    /// UserDefaults key of the font size of Python windows (Settings → Customization, A−/A+ in the key bar).
+    static let fontSizeKey = "fork.python.fontSize"
+    /// A bit more than twice Nyxian's terminal font (14 on iPad, 10 on iPhone).
+    static var defaultFontSize: Int { UIDevice.current.userInterfaceIdiom == .pad ? 30 : 22 }
+    static var fontSize: Int {
+        let saved = UserDefaults.standard.integer(forKey: fontSizeKey)
+        return saved > 0 ? saved : defaultFontSize
+    }
+    
+    static func launch(from presenter: UIViewController, arguments: [String], workingDirectory: URL?, title: String, closeOnExit: Bool = false) {
         let progress = UIAlertController(title: "Python \(version)", message: "Preparing…", preferredStyle: .alert)
         presenter.present(progress, animated: true)
         DispatchQueue.global(qos: .userInitiated).async {
@@ -2720,6 +2816,9 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                         session.extraEnvironment = environment
                         session.workingDirectory = workingDirectory?.path
                         session.title = title
+                        session.closeOnExit = closeOnExit
+                        session.fontSize = CGFloat(fontSize)
+                        session.fontSizeDefaultsKey = fontSizeKey
                         NXWindowServer.shared().openWindow(with: session, withCompletion: nil)
                     }
                 }
@@ -2756,14 +2855,14 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         let folder = rootfs.appendingPathComponent("var/mobile/Python")
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         /* Nyxian's REPL: the built-in one expects a terminal that echoes and edits lines */
-        launch(from: presenter, arguments: ["-q", "-m", "nyxian_repl"], workingDirectory: folder, title: "Python \(version)")
+        launch(from: presenter, arguments: ["-q", "-m", "nyxian_repl"], workingDirectory: folder, title: "Python \(version)", closeOnExit: true)
     }
     
     /// Shows the code of every key Python receives (for keys that seem to do nothing).
     static func openKeyboardTest(from presenter: UIViewController) {
         let folder = rootfs.appendingPathComponent("var/mobile/Python")
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        launch(from: presenter, arguments: ["-q", "-m", "nyxian_keytest"], workingDirectory: folder, title: "Python Keyboard Test")
+        launch(from: presenter, arguments: ["-q", "-m", "nyxian_keytest"], workingDirectory: folder, title: "Python Keyboard Test", closeOnExit: true)
     }
     
     /// Runs a .py file from a copy of its project (or of its folder).

@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-08): closeOnExit (the window closes when its process
+    ends, e.g. Ctrl-D in the Python console), the key bar's ✕ closes the
+    window, font size per window; otherwise "[process exited]" now says
+    how to close it.
   - 1.1.0 (2026-11-08): the terminal ends above the keyboard (it used to
     run behind it, so what you typed was hidden and nothing scrolled), and
     8-bit input is kept (ISTRIP off: ñ, accents, ¿ ¡ were mangled).
@@ -164,6 +168,19 @@
     }
     
     _terminal.objcDelegate = self;
+    
+    /* fork: font size, ✕ in the key bar */
+    if(self.fontSize > 0)
+    {
+        [_terminal forkApplyFontSize:self.fontSize];
+    }
+    _terminal.forkFontSizeDefaultsKey = self.fontSizeDefaultsKey;
+    __weak typeof(self) weakSelf = self;
+    _terminal.forkCloseWindow = ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if(strongSelf == nil) return;
+        [[NXWindowServer shared] closeWindowWithIdentifier:strongSelf.windowIdentifier withCompletion:nil];
+    };
     [_process addObserver:self];
     
     _terminal.translatesAutoresizingMaskIntoConstraints = NO;
@@ -261,9 +278,10 @@
         return;
     }
     
-    if(self.focused)
+    if(self.focused && !self.closeOnExit)
     {
-        write(_tty->userspacefd[SLAVEFD], "\n[process exited]\n", 18);
+        static const char message[] = "\n[process exited — press any key or \xE2\x9C\x95 to close]\n";
+        write(_tty->userspacefd[SLAVEFD], message, sizeof(message) - 1);
         
         self.atExit = YES;
     }

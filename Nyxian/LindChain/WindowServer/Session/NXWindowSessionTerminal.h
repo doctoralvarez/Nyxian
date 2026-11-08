@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-08): closeOnExit, fontSize and fontSizeDefaultsKey.
   - 1.0.0 (2026-11-07): optional arguments, extra environment, working
     directory and window title (used to run python3 with PYTHONHOME and a
     script).
@@ -47,6 +48,11 @@
 @property (nonatomic,copy) NSDictionary<NSString*,NSString*> *extraEnvironment;
 @property (nonatomic,copy) NSString *workingDirectory;
 @property (nonatomic,copy) NSString *title;
+/* fork: close the window as soon as the process exits (default: wait for a key) */
+@property (nonatomic) BOOL closeOnExit;
+/* fork: font size of the terminal (0: Nyxian's default) and the UserDefaults key A−/A+ save it to */
+@property (nonatomic) CGFloat fontSize;
+@property (nonatomic,copy) NSString *fontSizeDefaultsKey;
 
 @end
 

@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-08): "Python Font Size" stepper (Python console and
+    script windows).
   - 1.2.0 (2026-11-07): "Debugger (pause, breakpoints)" toggle.
   - 1.1.0 (2026-11-07): toggles for "Code Completion" and
     "Shortcut List (hold ⌘)".
@@ -91,7 +93,7 @@ class CustomizationViewController: NXUITableViewController {
         case 0:
             return 2
         case 1:
-            return 11
+            return 12
         case 2:
             return self.icons.count
         default:
@@ -170,6 +172,9 @@ int main(void)
                 /* fork: hold ⌘ for the shortcut list */
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
                 (cell as! ToggleTableCell).configure(title: "Shortcut List (hold ⌘)", key: "fork.shortcutHUD", defaultValue: true)
+            } else if indexPath.row == 11 {
+                /* fork: font of Python windows */
+                cell = StepperTableCell(title: "Python Font Size", key: ForkPython.fontSizeKey, defaultValue: ForkPython.defaultFontSize, minValue: 8, maxValue: 60)
             } else {
                 /* fork: attach the debugger to every run */
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell

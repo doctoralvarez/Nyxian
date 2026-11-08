@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-08): key bar scrolls sideways and has many more keys
+    (Home/End, paste, clear, page up/down, A−/A+ font size, ^A ^E ^K ^W ^Z
+    ^\\, programming symbols); hide-keyboard and a red ✕ that closes the
+    window stay fixed on the right. Key bar keys go the same way as typed
+    keys. Font size per window (forkApplyFontSize, forkFontSizeDefaultsKey).
   - 1.2.0 (2026-11-08): the terminal shrinks to the part of its window above
     the keyboard (and its key bar), so the line being typed stays visible and
     older output can be scrolled (forkKeyboardConstraint).
@@ -158,6 +163,53 @@ import UIKit
         handleThemeChange(nil)
     }
     
+    // MARK: fork — key bar actions
+    
+    /// Closes the terminal's window (set by NXWindowSessionTerminal).
+    @objc var forkCloseWindow: (() -> Void)?
+    /// UserDefaults key the font size is saved to when changed with A−/A+ (nil: not saved).
+    @objc var forkFontSizeDefaultsKey: String?
+    
+    @objc func forkApplyFontSize(_ size: CGFloat) {
+        let clamped = min(72, max(6, size))
+        self.font = UIFont.monospacedSystemFont(ofSize: clamped, weight: .regular)
+    }
+    
+    func forkChangeFontSize(by delta: CGFloat) {
+        let size = min(72, max(6, font.pointSize + delta))
+        forkApplyFontSize(size)
+        if let key = forkFontSizeDefaultsKey {
+            UserDefaults.standard.set(Int(size), forKey: key)
+        }
+    }
+    
+    /// Keys from the key bar go the same way as typed ones (so a key closes a finished window).
+    func forkSendKeys(_ data: Data) {
+        if let delegate = objcDelegate {
+            delegate.send?(source: self, data: data)
+        } else {
+            ttyHandle?.write(data)
+        }
+    }
+    
+    func forkPasteFromClipboard() {
+        guard let text = UIPasteboard.general.string, !text.isEmpty else { return }
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
+        forkSendKeys(Data(normalized.utf8))
+    }
+    
+    func forkScrollPage(up: Bool) {
+        let maxOffset = max(0, contentSize.height - bounds.height)
+        let step = max(bounds.height - font.lineHeight * 2, font.lineHeight)
+        let target = up ? max(0, contentOffset.y - step) : min(maxOffset, contentOffset.y + step)
+        setContentOffset(CGPoint(x: contentOffset.x, y: target), animated: true)
+    }
+    
+    func forkCloseWindowAction() {
+        _ = resignFirstResponder()
+        forkCloseWindow?()
+    }
+    
     // MARK: fork — keyboard avoidance
     
     /// Bottom constraint of the terminal in its window (set by NXWindowSessionTerminal).
@@ -212,40 +264,114 @@ import UIKit
 final class ForkTerminalKeyBar: UIInputView {
     private weak var terminal: TerminalViewObjC?
     
+    private enum Key {
+        case bytes([UInt8])
+        case action(() -> Void)
+    }
+    
     init(terminal: TerminalViewObjC) {
         self.terminal = terminal
         let height: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? 40 : 48
         super.init(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: height), inputViewStyle: .keyboard)
         allowsSelfSizing = true
         
-        let keys: [(String?, String?, [UInt8])] = [
-            ("esc", nil, [0x1b]),
-            (nil, "arrow.right.to.line.compact", [0x09]),
-            ("^C", nil, [0x03]),
-            ("^D", nil, [0x04]),
-            (nil, "return", [0x0d]),
-            (nil, "arrow.left", [0x1b, 0x5b, 0x44]),
-            (nil, "arrow.down", [0x1b, 0x5b, 0x42]),
-            (nil, "arrow.up", [0x1b, 0x5b, 0x41]),
-            (nil, "arrow.right", [0x1b, 0x5b, 0x43])
+        let esc: UInt8 = 0x1b
+        let groups: [[(String?, String?, Key)]] = [
+            [
+                ("esc", nil, .bytes([esc])),
+                (nil, "arrow.right.to.line.compact", .bytes([0x09])),
+                (nil, "return", .bytes([0x0d])),
+                ("^C", nil, .bytes([0x03])),
+                ("^D", nil, .bytes([0x04]))
+            ],
+            [
+                (nil, "arrow.left", .bytes([esc, 0x5b, 0x44])),
+                (nil, "arrow.down", .bytes([esc, 0x5b, 0x42])),
+                (nil, "arrow.up", .bytes([esc, 0x5b, 0x41])),
+                (nil, "arrow.right", .bytes([esc, 0x5b, 0x43])),
+                ("home", nil, .bytes([esc, 0x5b, 0x48])),
+                ("end", nil, .bytes([esc, 0x5b, 0x46]))
+            ],
+            [
+                (nil, "doc.on.clipboard", .action { [weak terminal] in terminal?.forkPasteFromClipboard() }),
+                ("clear", nil, .bytes([0x0c])),
+                (nil, "chevron.up.2", .action { [weak terminal] in terminal?.forkScrollPage(up: true) }),
+                (nil, "chevron.down.2", .action { [weak terminal] in terminal?.forkScrollPage(up: false) }),
+                (nil, "textformat.size.smaller", .action { [weak terminal] in terminal?.forkChangeFontSize(by: -2) }),
+                (nil, "textformat.size.larger", .action { [weak terminal] in terminal?.forkChangeFontSize(by: 2) })
+            ],
+            [
+                ("^A", nil, .bytes([0x01])),
+                ("^E", nil, .bytes([0x05])),
+                ("^K", nil, .bytes([0x0b])),
+                ("^W", nil, .bytes([0x17])),
+                ("^Z", nil, .bytes([0x1a])),
+                ("^\\", nil, .bytes([0x1c]))
+            ],
+            "( ) [ ] { } < > = + - * / \\ | _ : ; ' \" # ~ ` ! ? @ $ % & ^ .".split(separator: " ").map { symbol -> (String?, String?, Key) in
+                (String(symbol), nil, .bytes(Array(String(symbol).utf8)))
+            }
         ]
+        
+        /* scrollable keys */
         let stack = UIStackView()
         stack.axis = .horizontal
         stack.spacing = 6
-        stack.distribution = .fillEqually
+        stack.alignment = .fill
         stack.translatesAutoresizingMaskIntoConstraints = false
-        for (title, symbol, bytes) in keys {
-            stack.addArrangedSubview(makeKey(title: title, symbol: symbol) { [weak self] in self?.send(bytes) })
+        for (number, group) in groups.enumerated() {
+            if number > 0 {
+                let gap = UIView()
+                gap.translatesAutoresizingMaskIntoConstraints = false
+                gap.widthAnchor.constraint(equalToConstant: 6).isActive = true
+                stack.addArrangedSubview(gap)
+            }
+            for (title, symbol, key) in group {
+                stack.addArrangedSubview(makeKey(title: title, symbol: symbol) { [weak self] in
+                    switch key {
+                    case .bytes(let bytes): self?.send(bytes)
+                    case .action(let action):
+                        UIDevice.current.playInputClick()
+                        action()
+                    }
+                })
+            }
         }
-        stack.addArrangedSubview(makeKey(title: nil, symbol: "keyboard.chevron.compact.down") { [weak self] in
-            _ = self?.terminal?.resignFirstResponder()
-        })
-        addSubview(stack)
+        let scroll = UIScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.alwaysBounceHorizontal = true
+        scroll.delaysContentTouches = false
+        scroll.addSubview(stack)
+        
+        /* always visible: hide the keyboard, close the window */
+        let fixed = UIStackView(arrangedSubviews: [
+            makeKey(title: nil, symbol: "keyboard.chevron.compact.down") { [weak self] in
+                _ = self?.terminal?.resignFirstResponder()
+            },
+            makeKey(title: nil, symbol: "xmark", tint: .systemRed) { [weak self] in
+                self?.terminal?.forkCloseWindowAction()
+            }
+        ])
+        fixed.axis = .horizontal
+        fixed.spacing = 6
+        fixed.translatesAutoresizingMaskIntoConstraints = false
+        
+        addSubview(scroll)
+        addSubview(fixed)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 6),
-            stack.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -6),
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 5),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5)
+            scroll.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor),
+            scroll.topAnchor.constraint(equalTo: topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            scroll.trailingAnchor.constraint(equalTo: fixed.leadingAnchor, constant: -6),
+            fixed.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -6),
+            fixed.topAnchor.constraint(equalTo: topAnchor, constant: 5),
+            fixed.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
+            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 6),
+            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -6),
+            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 5),
+            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -5),
+            stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor, constant: -10)
         ])
     }
     
@@ -257,21 +383,23 @@ final class ForkTerminalKeyBar: UIInputView {
     
     private func send(_ bytes: [UInt8]) {
         UIDevice.current.playInputClick()
-        terminal?.ttyHandle?.write(Data(bytes))
+        terminal?.forkSendKeys(Data(bytes))
     }
     
-    private func makeKey(title: String?, symbol: String?, action: @escaping () -> Void) -> UIButton {
+    private func makeKey(title: String?, symbol: String?, tint: UIColor = .label, action: @escaping () -> Void) -> UIButton {
         var configuration = UIButton.Configuration.gray()
         configuration.cornerStyle = .medium
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: 2, leading: 2, bottom: 2, trailing: 2)
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8)
         if let title {
-            configuration.attributedTitle = AttributedString(title, attributes: AttributeContainer([.font: UIFont.monospacedSystemFont(ofSize: 13, weight: .semibold)]))
+            configuration.attributedTitle = AttributedString(title, attributes: AttributeContainer([.font: UIFont.monospacedSystemFont(ofSize: 15, weight: .semibold)]))
         }
         if let symbol {
-            configuration.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
+            configuration.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold))
         }
-        configuration.baseForegroundColor = .label
+        configuration.baseForegroundColor = tint
         let button = UIButton(configuration: configuration, primaryAction: UIAction { _ in action() })
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.widthAnchor.constraint(greaterThanOrEqualToConstant: UIDevice.current.userInterfaceIdiom == .phone ? 36 : 44).isActive = true
         return button
     }
 }
