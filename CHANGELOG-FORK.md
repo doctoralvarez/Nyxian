@@ -4,6 +4,20 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.21.3 — 2026-11-07
+
+- **Python Console: Enter runs the line** — robust terminal I/O:
+  `sys.stdout`/`sys.stderr` write straight to Nyxian's terminal, the REPL
+  writes results and errors itself and flushes after every line, Enter
+  accepts CR, LF or CR LF.
+- **⏎ key** in the key bar above the keyboard (sends Return), as a second way
+  to enter a line.
+- **Python Keyboard Test** (menu `</>`): shows the code of every key Python
+  receives — to find a key that seems to do nothing.
+- **Ctrl-\\** in a Python terminal prints where Python is stuck (faulthandler).
+- CI runs the REPL in a pseudo terminal configured like Nyxian's, with
+  Python 3.14 (`tools/fork/test_python_terminal.py`).
+
 ## 1.21.2 — 2026-11-07
 
 - **Python installs again (and on the first try)**: the installing service

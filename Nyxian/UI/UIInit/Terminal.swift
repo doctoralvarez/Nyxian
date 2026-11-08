@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-07): Return key in the key bar (sends CR, like the
+    keyboard's Return) as a second way to enter a line.
   - 1.0.0 (2026-11-07): Nyxian's own key bar above the keyboard (esc, tab,
     Ctrl-C, Ctrl-D, arrows and a button that hides the keyboard). SwiftTerm's
     keyboard button switched to its own key panel instead of closing the
@@ -173,6 +175,7 @@ final class ForkTerminalKeyBar: UIInputView {
             (nil, "arrow.right.to.line.compact", [0x09]),
             ("^C", nil, [0x03]),
             ("^D", nil, [0x04]),
+            (nil, "return", [0x0d]),
             (nil, "arrow.left", [0x1b, 0x5b, 0x44]),
             (nil, "arrow.down", [0x1b, 0x5b, 0x42]),
             (nil, "arrow.up", [0x1b, 0x5b, 0x41]),

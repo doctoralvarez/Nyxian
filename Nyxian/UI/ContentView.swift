@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.9.1
+ Fork doctoralvarez/Nyxian — version 1.9.2
  Changelog:
+  - 1.9.2 (2026-11-07): Python terminal I/O made robust: sys.stdout and
+    sys.stderr write straight to the terminal, the REPL writes results and
+    errors itself and flushes after every line, Enter accepts CR, LF and
+    CR LF, Ctrl-\ prints where Python is stuck, and a "Python Keyboard
+    Test" menu item shows the code of every key Python receives.
   - 1.9.1 (2026-11-07): the launcher is signed last, from a pristine copy,
     and signed again from that copy before every install retry (1.9.0 only
     asked again with the same refused signature, so all retries failed).
@@ -149,6 +154,10 @@ import UniformTypeIdentifiers
                 UIAction(title: "Python Console", image: UIImage(systemName: "terminal")) { [weak self] _ in
                     guard let self else { return }
                     ForkPython.openConsole(from: self)
+                },
+                UIAction(title: "Python Keyboard Test", image: UIImage(systemName: "keyboard")) { [weak self] _ in
+                    guard let self else { return }
+                    ForkPython.openKeyboardTest(from: self)
                 },
                 UIAction(title: "Install Package (pip)…", image: UIImage(systemName: "shippingbox")) { [weak self] _ in
                     guard let self else { return }
@@ -2214,39 +2223,84 @@ enum ForkPython {
         "nyxian_lineedit.py": #"""
 # Nyxian line editor: Nyxian's terminal hands keys over raw (no echo, no line
 # editing), so Python does both here. Used by input() and the Nyxian REPL.
+# NYXIAN_KEYDEBUG=1 shows the code of every byte received.
 import codecs
 import os
+import select
 import sys
 
 _history = []
+_debug = os.environ.get("NYXIAN_KEYDEBUG") == "1"
 
 
-def _write(text):
+def _write(text, fd=1):
+    data = text.encode("utf-8", "replace")
+    while data:
+        try:
+            written = os.write(fd, data)
+        except InterruptedError:
+            continue
+        except OSError:
+            return
+        if written <= 0:
+            return
+        data = data[written:]
+
+
+def _flush():
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:
+            pass
+
+
+def _read_byte():
+    while True:
+        try:
+            return os.read(0, 1)
+        except InterruptedError:
+            continue
+
+
+def _swallow_lf():
+    # CR LF from the terminal is one Enter, not two
     try:
-        os.write(1, text.encode("utf-8", "replace"))
-    except OSError:
-        pass
+        ready, _, _ = select.select([0], [], [], 0.02)
+    except Exception:
+        return None
+    if not ready:
+        return None
+    data = _read_byte()
+    if data and data[0] == 10:
+        return None
+    return data
+
+
+_pending = []
 
 
 def read_line(prompt=""):
-    try:
-        sys.stdout.flush()
-        sys.stderr.flush()
-    except Exception:
-        pass
+    _flush()
     if prompt:
         _write(prompt)
     buffer = []
     index = len(_history)
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
     while True:
-        data = os.read(0, 1)
+        data = _pending.pop(0) if _pending else _read_byte()
         if not data:
             if not buffer:
                 raise EOFError
             break
         c = data[0]
+        if _debug:
+            _write("[%d]" % c)
         if c in (10, 13):
+            if c == 13:
+                extra = _swallow_lf()
+                if extra:
+                    _pending.append(extra)
             _write("\n")
             break
         if c in (8, 127):
@@ -2271,10 +2325,10 @@ def read_line(prompt=""):
             _write("    ")
             continue
         if c == 27:
-            if os.read(0, 1) == b"[":
-                code = os.read(0, 1)
+            if _read_byte() == b"[":
+                code = _read_byte()
                 while code and code in b"0123456789;":
-                    code = os.read(0, 1)
+                    code = _read_byte()
                 if code in (b"A", b"B") and _history:
                     index = max(0, index - 1) if code == b"A" else min(len(_history), index + 1)
                     _write("\b \b" * len(buffer))
@@ -2292,16 +2346,35 @@ def read_line(prompt=""):
 """#,
         "nyxian_repl.py": #"""
 # The REPL of Python in Nyxian: the standard interactive console with
-# Nyxian's line editor (echo, backspace, history, Tab indents).
+# Nyxian's line editor (echo, backspace, history, Tab indents). Results and
+# errors are written straight to the terminal and flushed after every line.
 import code
+import os
 import sys
+import traceback
 
-from nyxian_lineedit import read_line
+from nyxian_lineedit import _flush, _write, read_line
 
 
 class NyxianConsole(code.InteractiveConsole):
     def raw_input(self, prompt=""):
         return read_line(prompt)
+
+    def write(self, data):
+        _flush()
+        _write(data, 2)
+
+    def push(self, line, *args, **kwargs):
+        try:
+            return super().push(line, *args, **kwargs)
+        except SystemExit:
+            raise
+        except BaseException:
+            self.resetbuffer()
+            self.write("".join(traceback.format_exception(*sys.exc_info())))
+            return False
+        finally:
+            _flush()
 
 
 def main():
@@ -2316,12 +2389,72 @@ def main():
 if __name__ == "__main__":
     main()
 """#,
+        "nyxian_keytest.py": #"""
+# Keyboard test of Nyxian's Python terminal: shows the code of every byte
+# Python receives, so a key that does nothing can be told apart.
+import os
+import sys
+
+from nyxian_lineedit import _write
+
+NAMES = {3: "Ctrl-C", 4: "Ctrl-D", 9: "Tab", 10: "LF (Enter)", 13: "CR (Enter)", 27: "Esc", 127: "Backspace"}
+
+
+def main():
+    _write("Python keyboard test: press keys, Enter included. Ctrl-D twice quits.\n")
+    try:
+        _write("stdin isatty=%s stdout isatty=%s\n" % (os.isatty(0), os.isatty(1)))
+        import termios
+        attrs = termios.tcgetattr(0)
+        _write("iflag=%#x oflag=%#x lflag=%#x\n" % (attrs[0], attrs[1], attrs[3]))
+    except Exception as error:
+        _write("termios: %r\n" % (error,))
+    print("print() works", flush=True)
+    sys.stderr.write("sys.stderr works\n")
+    sys.stderr.flush()
+    last = None
+    while True:
+        data = os.read(0, 64)
+        if not data:
+            _write("EOF\n")
+            break
+        for c in data:
+            _write("byte %3d %s\n" % (c, NAMES.get(c, repr(chr(c)) if 32 <= c < 127 else "")))
+            if c == 4 and last == 4:
+                return
+            last = c
+
+
+if __name__ == "__main__":
+    main()
+"""#,
         "sitecustomize.py": #"""
-# Nyxian: input() echoes what you type (the terminal does not), only when
-# Python runs in a Nyxian terminal window.
+# Nyxian: only when Python runs in a Nyxian terminal window, input() echoes
+# what you type (the terminal does not), sys.stdout / sys.stderr write
+# straight to the terminal, and Ctrl-\ prints where Python is stuck.
 import os
 
+import sys
+
 if os.environ.get("NYXIAN_TERMINAL") == "1":
+    try:
+        import io
+
+        def _stream(fd):
+            raw = io.FileIO(fd, "w", closefd=False)
+            return io.TextIOWrapper(raw, encoding="utf-8", errors="backslashreplace", line_buffering=True, write_through=True)
+
+        sys.stdout = sys.__stdout__ = _stream(1)
+        sys.stderr = sys.__stderr__ = _stream(2)
+    except Exception:
+        pass
+    try:
+        import faulthandler
+        import signal
+
+        faulthandler.register(signal.SIGQUIT, file=sys.stderr, all_threads=True, chain=False)
+    except Exception:
+        pass
     try:
         import builtins
         from nyxian_lineedit import read_line
@@ -2580,6 +2713,13 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         /* Nyxian's REPL: the built-in one expects a terminal that echoes and edits lines */
         launch(from: presenter, arguments: ["-q", "-m", "nyxian_repl"], workingDirectory: folder, title: "Python \(version)")
+    }
+    
+    /// Shows the code of every key Python receives (for keys that seem to do nothing).
+    static func openKeyboardTest(from presenter: UIViewController) {
+        let folder = rootfs.appendingPathComponent("var/mobile/Python")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        launch(from: presenter, arguments: ["-q", "-m", "nyxian_keytest"], workingDirectory: folder, title: "Python Keyboard Test")
     }
     
     /// Runs a .py file from a copy of its project (or of its folder).
