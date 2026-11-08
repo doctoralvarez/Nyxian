@@ -74,6 +74,27 @@ jobs:
           path: Frameworks/CoreCompiler/CoreCompilerSupportLibs
           key: ${{ steps.llvm-key.outputs.key }}
 
+      # fork: CPython for iOS, packed as Shared/python-ios.zip (cached per version)
+      - name: Restore Python runtime cache
+        id: python-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: Shared/python-ios.zip
+          key: python-ios-3.14-b14-${{ hashFiles('tools/fork/build_python_runtime.sh', 'tools/fork/python_launcher.c') }}
+
+      - name: Pack Python runtime (cache miss)
+        if: steps.python-cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          ./tools/fork/build_python_runtime.sh
+
+      - name: Save Python runtime cache
+        if: steps.python-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: Shared/python-ios.zip
+          key: python-ios-3.14-b14-${{ hashFiles('tools/fork/build_python_runtime.sh', 'tools/fork/python_launcher.c') }}
+
       - name: Build Nyxian
         timeout-minutes: 1200
         run: |

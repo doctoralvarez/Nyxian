@@ -20,6 +20,14 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): optional arguments, extra environment, working
+    directory and window title (used to run python3 with PYTHONHOME and a
+    script).
+*/
+
 #import <LindChain/WindowServer/Session/NXWindowSessionTerminal.h>
 #import <LindChain/ProcEnvironment/PEProcessManager.h>
 #import <Frameworks/LiveProcessLegacy/LindChain/Services/bootstrapd/LDEApplicationWorkspace.h>
@@ -108,15 +116,19 @@
         return NO;
     }
     
+    /* fork: caller-provided argv, environment and working directory */
+    NSMutableDictionary *environment = [@{
+        @"HOME": homePath,
+        @"CFFIXED_USER_HOME": homePath,
+        @"TMPDIR": [homePath stringByAppendingPathComponent:@"/Tmp"]
+    } mutableCopy];
+    if(self.extraEnvironment) [environment addEntriesFromDictionary:self.extraEnvironment];
+    
     pid_t pid = [[PEProcessManager shared] spawnProcessWithItems:@{
         @"PEExecutablePath": _utilityPath,
-        @"PEArguments": @[self.utilityPath],
-        @"PEEnvironment": @{
-            @"HOME": homePath,
-            @"CFFIXED_USER_HOME": homePath,
-            @"TMPDIR": [homePath stringByAppendingPathComponent:@"/Tmp"]
-        },
-        @"PEWorkingDirectory": homePath,
+        @"PEArguments": self.arguments.count ? self.arguments : @[self.utilityPath],
+        @"PEEnvironment": environment,
+        @"PEWorkingDirectory": self.workingDirectory.length ? self.workingDirectory : homePath,
         @"PEFileTable": fileTable
     } withKernelSurfaceProcess:kernel_proc_];
     PEProcess *process = [[PEProcessManager shared] processForProcessIdentifier:pid];
@@ -204,7 +216,7 @@
 - (NSString*)getWindowName
 {
     NSString *windowName = [super getWindowName];
-    return windowName ?: [self.utilityPath lastPathComponent];
+    return windowName ?: (self.title.length ? self.title : [self.utilityPath lastPathComponent]);
 }
 
 - (void)sendWithSource:(TerminalView * _Nonnull)source data:(NSData * _Nonnull)data

@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.6.0
+ Fork doctoralvarez/Nyxian — version 1.7.0
  Changelog:
+  - 1.7.0 (2026-11-07): Python 3 (ForkPython) — the CPython runtime that
+    ships in the app (Shared/python-ios.zip) is unpacked into Nyxian's rootfs
+    and signed on first use, with pip from ensurepip's wheel. Projects screen:
+    "Python" menu (Python Console, Install Package…, Reinstall Runtime).
   - 1.6.0 (2026-11-07): ForkSDKPatches — the iOS 27 SDK declares @State as a
     macro (SwiftUIMacros.StateMacro) next to the State property wrapper; the
     macro wins and its plugin only ships with Xcode, so every @State failed.
@@ -121,7 +125,25 @@ import UniformTypeIdentifiers
                 }
             ])
         )
-        self.navigationItem.setRightBarButtonItems([createItem, importItem], animated: false)
+        /* fork: Python 3 */
+        let pythonItem = UIBarButtonItem(
+            image: UIImage(systemName: "chevron.left.forwardslash.chevron.right"),
+            menu: UIMenu(title: "Python 3", children: [
+                UIAction(title: "Python Console", image: UIImage(systemName: "terminal")) { [weak self] _ in
+                    guard let self else { return }
+                    ForkPython.openConsole(from: self)
+                },
+                UIAction(title: "Install Package (pip)…", image: UIImage(systemName: "shippingbox")) { [weak self] _ in
+                    guard let self else { return }
+                    ForkPython.promptInstallPackage(from: self)
+                },
+                UIAction(title: "Reinstall Python Runtime", image: UIImage(systemName: "arrow.clockwise"), attributes: .destructive) { [weak self] _ in
+                    guard let self else { return }
+                    ForkPython.reinstall(from: self)
+                }
+            ])
+        )
+        self.navigationItem.setRightBarButtonItems([createItem, importItem, pythonItem], animated: false)
         
         /* fork: hold ⌘ for the shortcut list; editor font size 20 by default */
         KeyboardShortcutsHUD.shared.start()
@@ -1916,7 +1938,8 @@ final class KeyboardShortcutsHUD {
         "Find References": "Buscar referencias",
         "Run Preview": "Ejecutar preview",
         "Toggle Breakpoint": "Poner/quitar breakpoint",
-        "Pause or Continue": "Pausar o continuar"
+        "Pause or Continue": "Pausar o continuar",
+        "Run Python File": "Ejecutar archivo Python"
     ]
     
     func start() {
@@ -2138,6 +2161,190 @@ final class KeyboardShortcutsHUD {
 }
 
 // MARK: - Fork: one-time defaults
+
+// MARK: - Fork: Python 3
+
+/// CPython for iOS run as a Nyxian utility in a terminal window.
+/// Layout: <rootfs>/opt/python (PYTHONHOME: libpython, lib/python3.x, bin/python3).
+/// Utilities can only reach Nyxian's rootfs, so scripts run from a copy of their
+/// project in <rootfs>/var/mobile/Python/<project>.
+enum ForkPython {
+    static let version = "3.14"
+    
+    enum Failure: LocalizedError {
+        case notBundled, signing(String), fastpath
+        var errorDescription: String? {
+            switch self {
+            case .notBundled: return "This build of Nyxian has no Python runtime (Shared/python-ios.zip)."
+            case .signing(let file): return "Could not sign \(file). Check that signing is set up (Settings > Certificate)."
+            case .fastpath: return "Nyxian could not install the python3 launcher."
+            }
+        }
+    }
+    
+    static var rootfs: URL { NXBootstrap.shared().rootfsURL }
+    static var home: URL { rootfs.appendingPathComponent("opt/python") }
+    static var sitePackages: URL { home.appendingPathComponent("lib/python\(version)/site-packages") }
+    private static var bundledZip: URL { Bundle.main.bundleURL.appendingPathComponent("Shared/python-ios.zip") }
+    private static let stampKey = "fork.python.stamp"
+    private static let launcherKey = "fork.python.launcher"
+    private static let queue = DispatchQueue(label: "fork.python.install")
+    
+    private static func isMachO(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 4), data.count == 4 else { return false }
+        let magic = data.withUnsafeBytes { $0.load(as: UInt32.self) }
+        return magic == 0xfeedfacf || magic == 0xcffaedfe || magic == 0xbebafeca || magic == 0xcafebabe
+    }
+    
+    /// Unpacks and signs the runtime when the bundled one changed; returns the launcher to run.
+    static func prepare(progress: @escaping (String) -> Void) throws -> String {
+        try queue.sync {
+            let fm = FileManager.default
+            guard let attributes = try? fm.attributesOfItem(atPath: bundledZip.path) else { throw Failure.notBundled }
+            let stamp = "\((attributes[.size] as? NSNumber)?.intValue ?? 0)-\((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)"
+            let defaults = UserDefaults.standard
+            if defaults.string(forKey: stampKey) == stamp,
+               let launcher = defaults.string(forKey: launcherKey),
+               fm.fileExists(atPath: launcher),
+               fm.fileExists(atPath: home.appendingPathComponent("libpython\(version).dylib").path) {
+                return launcher
+            }
+            
+            progress("Unpacking Python \(version)…")
+            let opt = home.deletingLastPathComponent()
+            try? fm.removeItem(at: home)
+            try fm.createDirectory(at: opt, withIntermediateDirectories: true)
+            guard unzipArchiveAtPath(bundledZip.path, opt.path) else { throw Failure.notBundled }
+            
+            /* every binary has to carry Nyxian's signature to be loaded */
+            progress("Signing Python…")
+            var binaries: [URL] = []
+            if let enumerator = fm.enumerator(at: home, includingPropertiesForKeys: [.isRegularFileKey]) {
+                for case let url as URL in enumerator where (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true && isMachO(url) {
+                    binaries.append(url)
+                }
+            }
+            let launcherURL = home.appendingPathComponent("bin/python3")
+            for (index, url) in binaries.enumerated() {
+                if index % 10 == 0 { progress("Signing Python… \(index)/\(binaries.count)") }
+                let isLauncher = url.path == launcherURL.path
+                let signed = isLauncher ? LCUtils.signMachO(at: url) : LCUtils.signMachOWithoutPatch(at: url)
+                guard signed else { throw Failure.signing(url.lastPathComponent) }
+                _ = trust_nxt2_sign(url.path, [String: Any]() as CFDictionary, true, nil)
+            }
+            
+            /* pip, straight from ensurepip's bundled wheel (ensurepip itself needs subprocesses) */
+            progress("Installing pip…")
+            try? fm.createDirectory(at: sitePackages, withIntermediateDirectories: true)
+            let bundled = home.appendingPathComponent("lib/python\(version)/ensurepip/_bundled")
+            if let wheels = try? fm.contentsOfDirectory(at: bundled, includingPropertiesForKeys: nil) {
+                for wheel in wheels where wheel.pathExtension == "whl" && wheel.lastPathComponent.hasPrefix("pip-") {
+                    _ = unzipArchiveAtPath(wheel.path, sitePackages.path)
+                }
+            }
+            
+            guard let launcher = LDEApplicationWorkspace.shared().fastpathUtility(launcherURL.path) else { throw Failure.fastpath }
+            defaults.set(stamp, forKey: stampKey)
+            defaults.set(launcher, forKey: launcherKey)
+            return launcher
+        }
+    }
+    
+    /// Same files in a folder Python can read, keeping unchanged files untouched.
+    static func mirror(project root: URL) throws -> URL {
+        let fm = FileManager.default
+        let destination = rootfs.appendingPathComponent("var/mobile/Python").appendingPathComponent(root.lastPathComponent)
+        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+        if let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
+            for case let url as URL in enumerator {
+                guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+                let relative = ProjectFileIndex.relativePath(url, root: root)
+                if relative.hasPrefix("Config/") { continue }
+                let target = destination.appendingPathComponent(relative)
+                let data = LiveEditorRegistry.editor(forPath: url.path).map { Data($0.textView.text.utf8) } ?? (try? Data(contentsOf: url)) ?? Data()
+                if let existing = try? Data(contentsOf: target), existing == data { continue }
+                try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try data.write(to: target, options: .atomic)
+            }
+        }
+        return destination
+    }
+    
+    /// Opens python3 with `arguments` in a terminal window.
+    static func launch(from presenter: UIViewController, arguments: [String], workingDirectory: URL?, title: String) {
+        let progress = UIAlertController(title: "Python \(version)", message: "Preparing…", preferredStyle: .alert)
+        presenter.present(progress, animated: true)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let launcher = try prepare { message in
+                    DispatchQueue.main.async { progress.message = message }
+                }
+                DispatchQueue.main.async {
+                    progress.dismiss(animated: true) {
+                        let session = NXWindowSessionTerminal(utilityPath: launcher)
+                        session.arguments = [launcher] + arguments
+                        var environment = [
+                            "PYTHONHOME": home.path,
+                            "PYTHONUNBUFFERED": "1",
+                            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+                            "TERM": "xterm-256color"
+                        ]
+                        if let workingDirectory { environment["PYTHONPATH"] = workingDirectory.path }
+                        session.extraEnvironment = environment
+                        session.workingDirectory = workingDirectory?.path
+                        session.title = title
+                        NXWindowServer.shared().openWindow(with: session, withCompletion: nil)
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    progress.dismiss(animated: true) {
+                        presenter.forkGitHubAlert("Python", error.localizedDescription)
+                    }
+                }
+            }
+        }
+    }
+    
+    static func openConsole(from presenter: UIViewController) {
+        launch(from: presenter, arguments: [], workingDirectory: rootfs.appendingPathComponent("var/mobile/Python"), title: "Python \(version)")
+    }
+    
+    /// Runs a .py file from a copy of its project (or of its folder).
+    static func run(script: URL, project: NXProject?, from presenter: UIViewController) {
+        let root: URL = project.map { $0.url as URL } ?? script.deletingLastPathComponent()
+        do {
+            let mirror = try mirror(project: root)
+            let relative = ProjectFileIndex.relativePath(script, root: root)
+            launch(from: presenter, arguments: [relative], workingDirectory: mirror, title: "python3 \(script.lastPathComponent)")
+        } catch {
+            presenter.forkGitHubAlert("Python", error.localizedDescription)
+        }
+    }
+    
+    static func promptInstallPackage(from presenter: UIViewController) {
+        let alert = UIAlertController(title: "Install Package", message: "pip install … — packages written only in Python install from PyPI. Packages with native code need an iOS build of their own.", preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "requests"
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Install", style: .default) { [weak alert] _ in
+            let names = (alert?.textFields?.first?.text ?? "").split(separator: " ").map(String.init).filter { !$0.isEmpty }
+            guard !names.isEmpty else { return }
+            launch(from: presenter, arguments: ["-m", "pip", "install"] + names, workingDirectory: nil, title: "pip install")
+        })
+        presenter.present(alert, animated: true)
+    }
+    
+    static func reinstall(from presenter: UIViewController) {
+        UserDefaults.standard.removeObject(forKey: stampKey)
+        launch(from: presenter, arguments: ["-c", "import sys; print('Python', sys.version)"], workingDirectory: nil, title: "Python \(version)")
+    }
+}
 
 /// One-time edits of Nyxian's own copy of the iOS SDK so it builds without Xcode-only compiler plugins.
 enum ForkSDKPatches {

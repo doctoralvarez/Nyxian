@@ -4,6 +4,23 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.19.0 — 2026-11-07
+
+- **Python 3.14** (CPython for iOS, the official PEP 730 build packaged by
+  BeeWare; the CI packs it as `Shared/python-ios.zip`, cached):
+  - Projects screen > **</> menu**: *Python Console* (the `>>>` REPL in a
+    terminal window), *Install Package (pip)…*, *Reinstall Python Runtime*.
+  - In the editor, a `.py` file runs with **⌘R** or the play button: its
+    project is copied to Nyxian's rootfs (where utilities may read) and the
+    script runs there in a terminal window.
+  - First use unpacks the runtime into `<rootfs>/opt/python`, signs every
+    binary with your certificate, and installs **pip** from ensurepip's wheel.
+    Pure-Python packages install from PyPI; packages with native code (numpy,
+    pandas…) need iOS builds — next phase.
+  - Word completion knows Python keywords and builtins.
+- Terminal windows accept arguments, environment, working directory and
+  a title (`NXWindowSessionTerminal`).
+
 ## 1.18.1 — 2026-11-07
 
 - Framework + SwiftUI overlays back on now that `@State` is fixed:

@@ -20,6 +20,14 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-07): optional arguments, extra environment, working
+    directory and window title (used to run python3 with PYTHONHOME and a
+    script).
+*/
+
 #ifndef NXWINDOWSESSIONTERMINAL_H
 #define NXWINDOWSESSIONTERMINAL_H
 
@@ -33,6 +41,12 @@
 @property (nonatomic,weak) PEProcess *process;
 
 - (instancetype)initWithUtilityPath:(NSString*)utilityPath;
+
+/* fork: argv (default: the utility path alone), environment added to HOME/TMPDIR, working directory (default: HOME), title */
+@property (nonatomic,copy) NSArray<NSString*> *arguments;
+@property (nonatomic,copy) NSDictionary<NSString*,NSString*> *extraEnvironment;
+@property (nonatomic,copy) NSString *workingDirectory;
+@property (nonatomic,copy) NSString *title;
 
 @end
 

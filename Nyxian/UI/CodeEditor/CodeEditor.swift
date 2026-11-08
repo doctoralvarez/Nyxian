@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.10.0
+ Fork doctoralvarez/Nyxian — version 1.11.0
  Changelog:
+  - 1.11.0 (2026-11-07): Python files — ⌘R (or the play button in the
+    editor toolbar) runs the .py file with Python 3 in a terminal window;
+    word completion knows Python's keywords and builtins.
   - 1.10.0 (2026-11-07): breakpoints — ⌘\\ (or the breakpoint button in the
     editor toolbar) toggles one on the caret's line; lines with a breakpoint
     are tinted blue, the line the debugger stopped at green. Previews are
@@ -557,6 +560,15 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         items.append(fixBarButton)
         items.append(spawnSeparator())
         
+        /* fork: run a Python file */
+        if self.file.fileURL?.pathExtension.lowercased() == "py" {
+            let runPython = UIBarButtonItem(customView: SymbolButton(symbolName: "play.fill", width: 35.0) { [weak self] in
+                self?.forkRunPythonFile()
+            })
+            items.append(runPython)
+            items.append(spawnSeparator())
+        }
+        
         /* fork: breakpoint on the caret's line */
         if self.project != nil {
             let breakpointBarButton = UIBarButtonItem(customView: SymbolButton(symbolName: "smallcircle.filled.circle", width: 35.0) { [weak self] in
@@ -801,6 +813,10 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         ]
         if self.project != nil, !self.isReadOnly {
             commands.append(command("Toggle Breakpoint", #selector(forkToggleBreakpoint), "\\"))
+        }
+        /* fork: Python files run with Python 3 (takes ⌘R from the project's Run while one is open) */
+        if self.file.fileURL?.pathExtension.lowercased() == "py" {
+            commands.append(command("Run Python File", #selector(forkRunPythonFile), "r"))
         }
         /* fork: navigation by meaning */
         if self.languageServer != nil {
@@ -1483,7 +1499,8 @@ final class EditorCompletionController {
         let server = wantsEngine ? editor.languageServer : nil
         if server != nil { engineBusy = true }
         let words = projectWords
-        let keywords = editor.file.isSwift ? EditorCompletionController.swiftWords : EditorCompletionController.cWords
+        let isPython = editor.file.fileURL?.pathExtension.lowercased() == "py"
+        let keywords = isPython ? EditorCompletionController.pythonWords : (editor.file.isSwift ? EditorCompletionController.swiftWords : EditorCompletionController.cWords)
         
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var items: [EditorCompletionItem] = []
@@ -1711,6 +1728,22 @@ final class EditorCompletionController {
     }
     
     // MARK: vocabularies
+    
+    /* fork: Python 3 keywords and builtins */
+    static let pythonWords: [String] = [
+        "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del",
+        "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "match", "case",
+        "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield",
+        "print", "input", "len", "range", "enumerate", "zip", "map", "filter", "sorted", "reversed", "sum", "min", "max",
+        "abs", "round", "pow", "divmod", "int", "float", "str", "bool", "list", "dict", "set", "tuple", "frozenset", "bytes",
+        "bytearray", "type", "isinstance", "issubclass", "hasattr", "getattr", "setattr", "delattr", "open", "repr", "format",
+        "iter", "next", "any", "all", "callable", "super", "property", "staticmethod", "classmethod", "object", "id", "hash",
+        "help", "dir", "vars", "globals", "locals", "chr", "ord", "hex", "oct", "bin", "slice", "Exception", "ValueError",
+        "TypeError", "KeyError", "IndexError", "AttributeError", "RuntimeError", "StopIteration", "ZeroDivisionError",
+        "FileNotFoundError", "ImportError", "NotImplementedError", "__init__", "__name__", "__main__", "self", "cls",
+        "math", "random", "datetime", "json", "re", "os", "sys", "pathlib", "collections", "itertools", "functools",
+        "statistics", "csv", "time", "dataclasses", "typing"
+    ]
     
     static let swiftWords: [String] = [
         "associatedtype", "async", "await", "break", "case", "catch", "class", "continue", "default", "defer",
@@ -3272,5 +3305,14 @@ extension CodeEditorViewController {
             ranges.append(HighlightedRange(id: "fork.stop", range: r, color: UIColor.systemGreen.withAlphaComponent(0.3), cornerRadius: 3))
         }
         self.textView.highlightedRanges = ranges
+    }
+}
+
+// MARK: - Fork: run Python files
+
+extension CodeEditorViewController {
+    @objc func forkRunPythonFile() {
+        guard let url = self.file.fileURL else { return }
+        ForkPython.run(script: url, project: self.project, from: self)
     }
 }
