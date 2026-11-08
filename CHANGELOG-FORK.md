@@ -4,6 +4,22 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.25.0 — 2026-11-08
+
+- **Landscape**: iPhone now turns to landscape too (iPad already did).
+  Settings › Customization › **Orientation**: Automatic, Portrait or
+  Landscape — Landscape keeps Nyxian in landscape on iPhone, whose system
+  lock only locks portrait. On iPad the system rotation lock keeps the
+  current orientation.
+- **pip / Python launch**: new binary modules of installed packages are
+  signed file by file with the progress saved, and a file Nyxian was signing
+  when it closed is skipped from then on — a binary that makes signing fail
+  can no longer make every Python launch fail. pip starts once its prompt has
+  gone, and the progress alert is never presented from another alert.
+- **Packages survive Nyxian updates**: unpacking the runtime again (every
+  update) used to delete `site-packages`; it is now kept and its binaries are
+  signed again.
+
 ## 1.24.0 — 2026-11-08
 
 - **"Python" project template** (New Project › Python, suggested name

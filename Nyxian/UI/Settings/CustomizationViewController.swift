@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-08): "Orientation" picker (Automatic / Portrait /
+    Landscape).
   - 1.3.0 (2026-11-08): "Python Font Size" stepper (Python console and
     script windows).
   - 1.2.0 (2026-11-07): "Debugger (pause, breakpoints)" toggle.
@@ -93,7 +95,7 @@ class CustomizationViewController: NXUITableViewController {
         case 0:
             return 2
         case 1:
-            return 12
+            return 13
         case 2:
             return self.icons.count
         default:
@@ -172,6 +174,11 @@ int main(void)
                 /* fork: hold ⌘ for the shortcut list */
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
                 (cell as! ToggleTableCell).configure(title: "Shortcut List (hold ⌘)", key: "fork.shortcutHUD", defaultValue: true)
+            } else if indexPath.row == 12 {
+                /* fork: landscape on iPhone too, or one orientation kept */
+                let picker = PickerTableCell(options: ForkOrientation.options, title: "Orientation", key: ForkOrientation.key, defaultValue: 0)
+                picker.callback = { _ in ForkOrientation.apply() }
+                cell = picker
             } else if indexPath.row == 11 {
                 /* fork: font of Python windows */
                 cell = StepperTableCell(title: "Python Font Size", key: ForkPython.fontSizeKey, defaultValue: ForkPython.defaultFontSize, minValue: 8, maxValue: 60)

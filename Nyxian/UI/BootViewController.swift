@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-08): the app delegate gives the orientations chosen in
+    Settings (landscape on iPhone too, or one orientation kept).
   - 1.1.0 (2026-11-07): no TeamWin splash image on normal launches (plain
     background; Recovery > Settings > "Show TeamWin boot splash" brings it
     back; verbose boot still shows its console). When booting the bundled IDE
@@ -2866,6 +2868,16 @@ class BootViewController: UIViewController, NXBootHandoffHostDelegate {
 class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         return true
+    }
+    
+    /* fork: Settings → Customization → Orientation ("fork.orientation":
+       0 automatic, 1 portrait, 2 landscape); landscape on iPhone too */
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        switch UserDefaults.standard.integer(forKey: "fork.orientation") {
+        case 1: return .portrait
+        case 2: return .landscape
+        default: return UIDevice.current.userInterfaceIdiom == .pad ? .all : .allButUpsideDown
+        }
     }
 }
 

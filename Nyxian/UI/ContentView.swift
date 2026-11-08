@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.14.0
+ Fork doctoralvarez/Nyxian — version 1.15.0
  Changelog:
+  - 1.15.0 (2026-11-08): packages installed with pip survive Nyxian updates
+    (site-packages is kept when the runtime is unpacked again); signing of new
+    package binaries is saved file by file and a file that was being signed
+    when Nyxian closed is skipped next time (no crash loop); pip starts after
+    its prompt has gone and the progress alert never comes from an alert;
+    ForkOrientation (Automatic / Portrait / Landscape).
   - 1.14.0 (2026-11-08): "Python" project template (a command line tool
     project without sources, with main.py and a marker), its own "Python"
     section in the project list, ▶ / ⌘R run the .py on screen.
@@ -1784,6 +1790,39 @@ enum ForkCapabilities {
     }
 }
 
+// MARK: - Fork: orientation (Settings → Customization → Orientation)
+
+/// 0 automatic (landscape too, also on iPhone), 1 portrait, 2 landscape.
+/// The app delegate (BootViewController.swift) reads the same key.
+enum ForkOrientation {
+    static let key = "fork.orientation"
+    static let options = ["Automatic", "Portrait", "Landscape"]
+    
+    static var mask: UIInterfaceOrientationMask {
+        switch UserDefaults.standard.integer(forKey: key) {
+        case 1: return .portrait
+        case 2: return .landscape
+        default: return UIDevice.current.userInterfaceIdiom == .pad ? .all : .allButUpsideDown
+        }
+    }
+    
+    /// Turns the screen now when the choice no longer allows the current orientation.
+    static func apply() {
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            for window in scene.windows {
+                var controller = window.rootViewController
+                while let current = controller {
+                    current.setNeedsUpdateOfSupportedInterfaceOrientations()
+                    controller = current.presentedViewController
+                }
+            }
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { error in
+                NSLog("[ForkOrientation] %@", error.localizedDescription)
+            }
+        }
+    }
+}
+
 // MARK: - Fork: projects in Apple's Files app
 
 /// Nyxian's Documents folder is shared with the Files app (UIFileSharingEnabled):
@@ -2985,16 +3024,33 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             }
         }
         guard !pending.isEmpty else { return }
+        /* a file Nyxian was signing when it closed last time is left out, so a
+           binary that makes signing fail cannot make every Python launch fail */
+        let defaults = UserDefaults.standard
+        var skipped = defaults.stringArray(forKey: skippedKey) ?? []
+        if let interrupted = defaults.string(forKey: signingNowKey) {
+            defaults.removeObject(forKey: signingNowKey)
+            if !skipped.contains(interrupted) { skipped.append(interrupted) }
+            defaults.set(skipped, forKey: skippedKey)
+            NSLog("[ForkPython] signing was interrupted at %@; it is skipped from now on", interrupted)
+        }
         for (index, entry) in pending.enumerated() {
-            if index % 5 == 0 { progress("Signing installed packages… \(index)/\(pending.count)") }
-            guard LCUtils.signMachOWithoutPatch(at: entry.0) else { throw Failure.signing(entry.0.lastPathComponent) }
-            _ = trust_nxt2_sign(entry.0.path, [String: Any]() as CFDictionary, true, nil)
-            /* the signature changes the file: remember its new date */
+            if skipped.contains(entry.0.path) { continue }
+            progress("Signing installed packages… \(index + 1)/\(pending.count)\n\(entry.0.lastPathComponent)")
+            defaults.set(entry.0.path, forKey: signingNowKey)
+            defaults.synchronize()
+            let ok = LCUtils.signMachOWithoutPatch(at: entry.0)
+            if ok { _ = trust_nxt2_sign(entry.0.path, [String: Any]() as CFDictionary, true, nil) }
+            defaults.removeObject(forKey: signingNowKey)
+            guard ok else { throw Failure.signing(entry.0.lastPathComponent) }
+            /* the signature changes the file: remember its new date, file by file */
             let date = (try? entry.0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?.timeIntervalSince1970 ?? entry.1
             signed[entry.0.path] = date
+            defaults.set(signed, forKey: signedKey)
         }
-        UserDefaults.standard.set(signed, forKey: signedKey)
     }
+    private static let signingNowKey = "fork.python.signingNow"
+    private static let skippedKey = "fork.python.signingSkipped"
     private static let queue = DispatchQueue(label: "fork.python.install")
     
     private static func isMachO(_ url: URL) -> Bool {
@@ -3025,7 +3081,14 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             
             progress("Unpacking Python \(version)…")
             defaults.removeObject(forKey: signedKey)
+            defaults.removeObject(forKey: skippedKey)
             let opt = home.deletingLastPathComponent()
+            /* packages installed with pip survive a new runtime (every Nyxian update unpacks it again) */
+            let kept = opt.appendingPathComponent(".site-packages-kept")
+            if fm.fileExists(atPath: sitePackages.path) {
+                try? fm.removeItem(at: kept)
+                try? fm.moveItem(at: sitePackages, to: kept)
+            }
             try? fm.removeItem(at: home)
             try fm.createDirectory(at: opt, withIntermediateDirectories: true)
             guard unzipArchiveAtPath(bundledZip.path, opt.path) else { throw Failure.notBundled }
@@ -3053,16 +3116,26 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             guard signLauncher(launcherURL) else { throw Failure.signing("python3") }
             
             /* pip, straight from ensurepip's bundled wheel (ensurepip itself needs subprocesses) */
-            progress("Installing pip…")
-            try? fm.createDirectory(at: sitePackages, withIntermediateDirectories: true)
-            let bundled = home.appendingPathComponent("lib/python\(version)/ensurepip/_bundled")
-            if let wheels = try? fm.contentsOfDirectory(at: bundled, includingPropertiesForKeys: nil) {
-                for wheel in wheels where wheel.pathExtension == "whl" && wheel.lastPathComponent.hasPrefix("pip-") {
-                    _ = unzipArchiveAtPath(wheel.path, sitePackages.path)
+            if fm.fileExists(atPath: kept.path) {
+                progress("Keeping your packages…")
+                try? fm.removeItem(at: sitePackages)
+                try? fm.createDirectory(at: sitePackages.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? fm.moveItem(at: kept, to: sitePackages)
+            }
+            if !fm.fileExists(atPath: sitePackages.appendingPathComponent("pip").path) {
+                progress("Installing pip…")
+                try? fm.createDirectory(at: sitePackages, withIntermediateDirectories: true)
+                let bundled = home.appendingPathComponent("lib/python\(version)/ensurepip/_bundled")
+                if let wheels = try? fm.contentsOfDirectory(at: bundled, includingPropertiesForKeys: nil) {
+                    for wheel in wheels where wheel.pathExtension == "whl" && wheel.lastPathComponent.hasPrefix("pip-") {
+                        _ = unzipArchiveAtPath(wheel.path, sitePackages.path)
+                    }
                 }
             }
             
             writeHelperFiles()
+            /* kept packages are signed again for the new runtime */
+            try signNewPackageBinaries(progress: progress)
             guard let launcher = fastpath(launcherURL, progress: progress) else { throw Failure.fastpath }
             defaults.set(stamp, forKey: stampKey)
             defaults.set(launcher, forKey: launcherKey)
@@ -3189,9 +3262,13 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     
     /// The controller to present from: the top one shown over `presenter`.
     private static func host(for presenter: UIViewController) -> UIViewController {
-        var top: UIViewController = presenter.view.window?.rootViewController ?? presenter
-        while let shown = top.presentedViewController, !shown.isBeingDismissed { top = shown }
-        return top.view.window != nil ? top : presenter
+        var top: UIViewController = presenter.viewIfLoaded?.window != nil ? presenter : (presenter.view.window?.rootViewController ?? presenter)
+        while let shown = top.presentedViewController,
+              !shown.isBeingDismissed, !shown.isBeingPresented,
+              !(shown is UIAlertController) {
+            top = shown
+        }
+        return top
     }
     
     static func launch(from presenter: UIViewController, arguments: [String], workingDirectory: URL?, title: String, closeOnExit: Bool = false, beforeLaunch: (() throws -> Void)? = nil) {
@@ -3306,7 +3383,10 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         alert.addAction(UIAlertAction(title: "Install", style: .default) { [weak alert] _ in
             let names = (alert?.textFields?.first?.text ?? "").split(separator: " ").map(String.init).filter { !$0.isEmpty }
             guard !names.isEmpty else { return }
-            launch(from: presenter, arguments: ["-m", "nyxian_pip", "install"] + names, workingDirectory: nil, title: "pip install")
+            /* after the prompt has gone, so the progress alert is not shown while it is being dismissed */
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                launch(from: presenter, arguments: ["-m", "nyxian_pip", "install"] + names, workingDirectory: nil, title: "pip install")
+            }
         })
         presenter.present(alert, animated: true)
     }
