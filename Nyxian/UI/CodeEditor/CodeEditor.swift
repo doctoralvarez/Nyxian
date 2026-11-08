@@ -25,7 +25,8 @@
  Changelog:
   - 1.11.0 (2026-11-07): Python files — ⌘R (or the play button in the
     editor toolbar) runs the .py file with Python 3 in a terminal window;
-    word completion knows Python's keywords and builtins.
+    word completion knows Python's keywords and builtins; syntax colors with
+    tree-sitter-python.
   - 1.10.0 (2026-11-07): breakpoints — ⌘\\ (or the breakpoint button in the
     editor toolbar) toggles one on the caret's line; lines with a breakpoint
     are tinted blue, the line the debugger stopped at green. Previews are
@@ -77,6 +78,7 @@ import TreeSitterObjc
 import TreeSitterXML
 import TreeSitterCPP
 import TreeSitterSwift
+import TreeSitterPython
 import GameController
 import MobileDevelopmentKit
 
@@ -299,6 +301,11 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         case "swift":
             loadLanguage(language: tree_sitter_swift(), highlightsURL: [
                 URL(fileURLWithPath: "\(Bundle.main.bundlePath)/TreeSitterSwift_TreeSitterSwift.bundle/queries/highlights.scm")
+            ])
+        case "py":
+            /* fork: Python 3 */
+            loadLanguage(language: tree_sitter_python(), highlightsURL: [
+                URL(fileURLWithPath: "\(Bundle.main.bundlePath)/TreeSitterPython_TreeSitterPython.bundle/queries/highlights.scm")
             ])
         default:
             break

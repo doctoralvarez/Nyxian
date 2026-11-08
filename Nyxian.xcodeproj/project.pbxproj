@@ -28,6 +28,7 @@
 		8F75DDC8306344C3004D9A49 /* Runestone in Frameworks */ = {isa = PBXBuildFile; productRef = 8F75DDC7306344C3004D9A49 /* Runestone */; };
 		8F75DDCC306344DC004D9A49 /* TreeSitterObjc in Frameworks */ = {isa = PBXBuildFile; productRef = 8F75DDCB306344DC004D9A49 /* TreeSitterObjc */; };
 		8F75DDCE306344DC004D9A49 /* TreeSitterC in Frameworks */ = {isa = PBXBuildFile; productRef = 8F75DDCD306344DC004D9A49 /* TreeSitterC */; };
+		F0A1B2C3D4E5F60718293A01 /* TreeSitterPython in Frameworks */ = {isa = PBXBuildFile; productRef = F0A1B2C3D4E5F60718293A02 /* TreeSitterPython */; };
 		8F75DDD0306344DC004D9A49 /* TreeSitterXML in Frameworks */ = {isa = PBXBuildFile; productRef = 8F75DDCF306344DC004D9A49 /* TreeSitterXML */; };
 		8F75DDD2306344DC004D9A49 /* TreeSitterCPP in Frameworks */ = {isa = PBXBuildFile; productRef = 8F75DDD1306344DC004D9A49 /* TreeSitterCPP */; };
 		8F75DDD4306344DC004D9A49 /* TreeSitterSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 8F75DDD3306344DC004D9A49 /* TreeSitterSwift */; };
@@ -1313,6 +1314,7 @@
 				8F75DDCC306344DC004D9A49 /* TreeSitterObjc in Frameworks */,
 				8F75DDD4306344DC004D9A49 /* TreeSitterSwift in Frameworks */,
 				8F75DDCE306344DC004D9A49 /* TreeSitterC in Frameworks */,
+				F0A1B2C3D4E5F60718293A01 /* TreeSitterPython in Frameworks */,
 				8F75F22130635AF8004D9A49 /* MobileDevelopmentKit.framework in Frameworks */,
 				8F75DE9D30634E66004D9A49 /* TreeSitter in Frameworks */,
 				8F75DDD0306344DC004D9A49 /* TreeSitterXML in Frameworks */,
@@ -1605,6 +1607,7 @@
 				8F75DDC7306344C3004D9A49 /* Runestone */,
 				8F75DDCB306344DC004D9A49 /* TreeSitterObjc */,
 				8F75DDCD306344DC004D9A49 /* TreeSitterC */,
+				F0A1B2C3D4E5F60718293A02 /* TreeSitterPython */,
 				8F75DDCF306344DC004D9A49 /* TreeSitterXML */,
 				8F75DDD1306344DC004D9A49 /* TreeSitterCPP */,
 				8F75DDD3306344DC004D9A49 /* TreeSitterSwift */,
@@ -1792,6 +1795,7 @@
 			packageReferences = (
 				AF9919562DC9175A00DDF895 /* XCRemoteSwiftPackageReference "tree-sitter-objc" */,
 				AF9919592DC9176900DDF895 /* XCRemoteSwiftPackageReference "tree-sitter-c" */,
+				F0A1B2C3D4E5F60718293A03 /* XCRemoteSwiftPackageReference "tree-sitter-python" */,
 				AFF4E3472DCCCE0F00B1B5F9 /* XCRemoteSwiftPackageReference "tree-sitter-xml" */,
 				793A7E4E2EB599690044418E /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 				79B708BA2F73157F000F38E7 /* XCRemoteSwiftPackageReference "tree-sitter-cpp" */,
@@ -3547,9 +3551,22 @@
 				kind = branch;
 			};
 		};
+		F0A1B2C3D4E5F60718293A03 /* XCRemoteSwiftPackageReference "tree-sitter-python" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-python.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.23.6;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		F0A1B2C3D4E5F60718293A02 /* TreeSitterPython */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F0A1B2C3D4E5F60718293A03 /* XCRemoteSwiftPackageReference "tree-sitter-python" */;
+			productName = TreeSitterPython;
+		};
 		8F75DDC7306344C3004D9A49 /* Runestone */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 8FECB24B2FFD367A00049BB0 /* XCRemoteSwiftPackageReference "Runestone" */;
