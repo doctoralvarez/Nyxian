@@ -4,6 +4,23 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.22.0 — 2026-11-08
+
+- **matplotlib for Python on iOS**: there is no matplotlib wheel for
+  CPython 3.14 on iOS on PyPI or BeeWare's index, so this fork builds it:
+  `.github/workflows/ios-wheels.yml` (cibuildwheel, `--platform ios`)
+  publishes matplotlib 3.11.2 on the **ios-wheels** release, and Nyxian's pip
+  looks there (`PIP_FIND_LINKS`). Its dependencies come from BeeWare's index
+  (kiwisolver, contourpy) and PyPI (pillow, numpy and pure-Python ones).
+- **Binary packages load** (numpy, matplotlib, pillow…): wheels for iOS link
+  `@rpath/Python.framework/Python`; libpython now has that install name and
+  an rpath to `Frameworks/`, where Nyxian links `Python.framework/Python` to
+  it. The runtime changes, so Python is unpacked again on first use:
+  packages installed before have to be installed again.
+- **Key bar**: symbol keys have one width (paste was very wide on iPhone),
+  the fixed keys don't stretch, and the bar has a fixed height (it sometimes
+  came back with none and did not show).
+
 ## 1.21.8 — 2026-11-08
 
 - **Pasting code into the Python console**: the console asks the terminal to

@@ -1,6 +1,10 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.0.2
+# Fork doctoralvarez/Nyxian — version 1.1.0
 # Changelog:
+#  - 1.1.0 (2026-11-08): binary packages from pip (numpy, matplotlib…) link
+#    against @rpath/Python.framework/Python, as on every iOS app: libpython
+#    now has that install name and an rpath to Frameworks/ next to it, where
+#    Nyxian links Python.framework/Python to it.
 #  - 1.0.2 (2026-11-07): the 3.14 stdlib lives in Python.xcframework/lib, shared
 #    by the slices; 1.0.1 missed it and packed the whole checkout (309 MB).
 #    The zip size is now checked.
@@ -58,7 +62,12 @@ find "$HOME_DIR" -name "*.xcprivacy" -delete
 
 echo ">>> libpython"
 cp "$LIBPY_SRC" "$HOME_DIR/libpython${PY_VER}.dylib"
-install_name_tool -id "@loader_path/libpython${PY_VER}.dylib" "$HOME_DIR/libpython${PY_VER}.dylib"
+# wheels for iOS (PyPI, BeeWare, our ios-wheels release) load
+# @rpath/Python.framework/Python: same install name, and an rpath to
+# $PYTHONHOME/Frameworks, where Nyxian puts Python.framework/Python -> libpython
+install_name_tool -id "@rpath/Python.framework/Python" "$HOME_DIR/libpython${PY_VER}.dylib"
+install_name_tool -add_rpath "@loader_path/Frameworks" "$HOME_DIR/libpython${PY_VER}.dylib"
+otool -l "$HOME_DIR/libpython${PY_VER}.dylib" | grep -A2 -E "LC_ID_DYLIB|LC_RPATH" | grep -E "name|path"
 
 # binary modules: point any framework reference at the dylib in PYTHONHOME
 find "$STDLIB/lib-dynload" -name "*.so" -print0 | while IFS= read -r -d '' so; do

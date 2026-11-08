@@ -32,6 +32,16 @@ jobs:
       - name: Test Python terminal (fork)
         run: python3 tools/fork/test_python_terminal.py
 
+      - name: Check pip finds the fork's iOS wheels (fork)
+        continue-on-error: true
+        run: |
+          python3 -m pip download --no-deps --only-binary :all: -d /tmp/ioswheels \
+            --platform ios_13_0_arm64_iphoneos --python-version 3.14 --implementation cp --abi cp314 \
+            --find-links https://github.com/doctoralvarez/Nyxian/releases/expanded_assets/ios-wheels \
+            --extra-index-url https://pypi.anaconda.org/beeware/simple \
+            matplotlib numpy kiwisolver contourpy pillow
+          ls -la /tmp/ioswheels
+
       - name: Extract version
         run: |
           VERSION=$(awk -F'=' '/^[[:space:]]*VERSION[[:space:]]*=/ {gsub(/[[:space:]]/,"",$2); print $2; exit}' Config.xcconfig)

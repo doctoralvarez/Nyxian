@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.11.0
+ Fork doctoralvarez/Nyxian — version 1.12.0
  Changelog:
+  - 1.12.0 (2026-11-08): binary packages load (numpy, matplotlib…): they
+    link @rpath/Python.framework/Python, now a link to libpython found
+    through libpython's rpath; pip also looks for iOS wheels on this fork's
+    "ios-wheels" release (matplotlib 3.11 for Python 3.14, built by CI).
   - 1.11.0 (2026-11-08): pasting code into the Python console works:
     bracketed paste (the block arrives whole), cleaned (line ends of any
     kind, non-breaking / look-alike spaces, zero-width characters, curly
@@ -2795,6 +2799,18 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         ]
     }
     
+    /// Wheels for iOS load @rpath/Python.framework/Python; libpython's rpath
+    /// (@loader_path/Frameworks) finds this link to libpython itself.
+    private static func linkPythonFramework() {
+        let fm = FileManager.default
+        let framework = home.appendingPathComponent("Frameworks/Python.framework")
+        let link = framework.appendingPathComponent("Python")
+        if (try? fm.destinationOfSymbolicLink(atPath: link.path)) != nil { return }
+        try? fm.removeItem(at: link)
+        try? fm.createDirectory(at: framework, withIntermediateDirectories: true)
+        try? fm.createSymbolicLink(atPath: link.path, withDestinationPath: "../../libpython\(version).dylib")
+    }
+    
     /// Binary modules pip put in site-packages since the last run (numpy, Pillow…) get signed, or iOS refuses to load them.
     private static func signNewPackageBinaries(progress: (String) -> Void) throws {
         let fm = FileManager.default
@@ -2843,6 +2859,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                let launcher = defaults.string(forKey: launcherKey),
                fm.fileExists(atPath: launcher),
                fm.fileExists(atPath: home.appendingPathComponent("libpython\(version).dylib").path) {
+                linkPythonFramework()
                 writeHelperFiles()
                 try signNewPackageBinaries(progress: progress)
                 return launcher
@@ -2854,6 +2871,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             try? fm.removeItem(at: home)
             try fm.createDirectory(at: opt, withIntermediateDirectories: true)
             guard unzipArchiveAtPath(bundledZip.path, opt.path) else { throw Failure.notBundled }
+            linkPythonFramework()
             
             /* every binary has to carry Nyxian's signature to be loaded */
             progress("Signing Python…")
@@ -2955,6 +2973,8 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                             /* iOS builds of numpy, Pillow, … (the index BeeWare's Briefcase uses) */
                             "PIP_EXTRA_INDEX_URL": "https://pypi.anaconda.org/beeware/simple",
                             "PIP_PREFER_BINARY": "1",
+                            /* wheels for iOS built by this fork's CI (matplotlib…), see .github/workflows/ios-wheels.yml */
+                            "PIP_FIND_LINKS": "https://github.com/doctoralvarez/Nyxian/releases/expanded_assets/ios-wheels",
                             /* matplotlib draws to files (savefig) — there is no window system for it */
                             "MPLBACKEND": "Agg",
                             "PYTHONPYCACHEPREFIX": rootfs.appendingPathComponent("var/mobile/Python/.pycache").path,
