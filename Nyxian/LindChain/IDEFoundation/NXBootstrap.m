@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-09): works without emexLabs' servers: the SDK zip and the
+    root CA key can be dropped into Nyxian's folder in the Files app (used
+    first, no download), and the root CA key also ships inside the app
+    (Shared/Backup, put there by CI) for when nyxian.app does not answer.
   - 1.1.0 (2026-11-09): when nyxian.app fails twice, the SDK comes from your
     own backup: a GitHub release (Settings › Customization › SDK Backup, a
     private repository with a token), see .github/workflows/ios-sdk.yml.
@@ -99,6 +103,34 @@ static BOOL NXForkDownloadSDKBackup(NSString *destination, NSError **outError)
     }
     NSLog(@"[bootstrap] SDK downloaded from the backup on %@", repository);
     return YES;
+}
+
+/*
+ * fork: a file the user put in Nyxian's folder of the Files app (On My iPhone/iPad ›
+ * Nyxian, i.e. Documents), else one shipped in the app (Shared/Backup), copied to
+ * the temporary folder where the downloads land. Never needs a network.
+ */
+static BOOL NXForkLocalBootstrapFile(NSString *name, NSString *destination, BOOL bundledToo)
+{
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *target = [NSTemporaryDirectory() stringByAppendingPathComponent:destination];
+    NSMutableArray<NSString*> *candidates = [NSMutableArray arrayWithObject:[[NSHomeDirectory() stringByAppendingPathComponent:@"Documents"] stringByAppendingPathComponent:name]];
+    if(bundledToo)
+    {
+        [candidates addObject:[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:[@"Shared/Backup" stringByAppendingPathComponent:name]]];
+    }
+    for(NSString *candidate in candidates)
+    {
+        if(![fm fileExistsAtPath:candidate]) continue;
+        [fm removeItemAtPath:target error:nil];
+        /* a hard link is instant for a big SDK zip and keeps the user's file */
+        if([fm linkItemAtPath:candidate toPath:target error:nil] || [fm copyItemAtPath:candidate toPath:target error:nil])
+        {
+            NSLog(@"[bootstrap] using %@ (no download)", candidate);
+            return YES;
+        }
+    }
+    return NO;
 }
 
 @implementation NXBootstrap {
@@ -379,7 +411,10 @@ static BOOL NXForkDownloadSDKBackup(NSString *destination, NSError **outError)
                 [[NSFileManager defaultManager] createDirectoryAtURL:[self.rootURL URLByAppendingPathComponent:@"RootCAs"] withIntermediateDirectories:true attributes:nil error:nil];
                 
                 NSError *downloadError = nil;
-                if(!fdownloadWithError(@"https://nyxian.app/bootstrap/org.emexlabs.rootca.v1.pub.nxt2c", @"org.emexlabs.rootca.v1.pub.nxt2c", &downloadError))
+                /* fork: a copy in Files or in the app first, nyxian.app otherwise */
+                if(!NXForkLocalBootstrapFile(@"org.emexlabs.rootca.v1.pub.nxt2c", @"org.emexlabs.rootca.v1.pub.nxt2c", NO) &&
+                   !fdownloadWithError(@"https://nyxian.app/bootstrap/org.emexlabs.rootca.v1.pub.nxt2c", @"org.emexlabs.rootca.v1.pub.nxt2c", &downloadError) &&
+                   !NXForkLocalBootstrapFile(@"org.emexlabs.rootca.v1.pub.nxt2c", @"org.emexlabs.rootca.v1.pub.nxt2c", YES))
                 {
                     error = [NSError errorWithDomain:@"" code:0 userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"downloading \"https://nyxian.app/bootstrap/org.emexlabs.rootca.v1.pub.nxt2c\" failed: %@", downloadError.localizedDescription ?: @"unknown error"] }];
                     goto report_error;
@@ -411,10 +446,11 @@ static BOOL NXForkDownloadSDKBackup(NSString *destination, NSError **outError)
                 
                 NSError *downloadError = nil;
                 /* fork: two tries at nyxian.app, then your own copy on GitHub */
-                if(!fdownloadWithOptions(@"https://nyxian.app/bootstrap/iPhoneOS27.0.sdk.zip", @"sdk.zip", nil, 2, &downloadError) &&
+                if(!NXForkLocalBootstrapFile(@"iPhoneOS27.0.sdk.zip", @"sdk.zip", NO) &&
+                   !fdownloadWithOptions(@"https://nyxian.app/bootstrap/iPhoneOS27.0.sdk.zip", @"sdk.zip", nil, 2, &downloadError) &&
                    !NXForkDownloadSDKBackup(@"sdk.zip", &downloadError))
                 {
-                    error = [NSError errorWithDomain:@"" code:0 userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"downloading \"https://nyxian.app/bootstrap/iPhoneOS27.0.sdk.zip\" failed: %@", downloadError.localizedDescription ?: @"unknown error"] }];
+                    error = [NSError errorWithDomain:@"" code:0 userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"downloading \"https://nyxian.app/bootstrap/iPhoneOS27.0.sdk.zip\" failed: %@. Without a network: put iPhoneOS27.0.sdk.zip in Files › On My iPhone/iPad › Nyxian and open Nyxian again.", downloadError.localizedDescription ?: @"unknown error"] }];
                     goto report_error;
                 }
                 

@@ -1,0 +1,107 @@
+# Fork doctoralvarez/Nyxian — version 1.0.0
+# Changelog:
+#  - 1.0.0 (2026-11-09): weekly copies, on your PRIVATE backup repository
+#    (vars.BACKUP_REPO, default doctoralvarez/nyxian-sdk; secret
+#    SDK_REPO_TOKEN with "Contents: Read and write" on it), of everything
+#    needed to keep building and running Nyxian without emexLabs:
+#      - this fork, every branch and tag, as a git bundle (release "source");
+#      - emexlab/Nyxian itself while it is still reachable (release "upstream"),
+#        and emexLabs' public files: the root CA key, the TrustStore and the
+#        OTA list (release "files");
+#      - the iOS wheels the fork built or collected (release "files").
+#    A bundle restores with: git clone Nyxian-fork-DATE.bundle Nyxian
+#    The SDK has its own workflow (ios-sdk.yml); toolchain, Python runtime and
+#    IPAs are saved by build.yml.
+name: Backups
+
+on:
+  schedule:
+    - cron: '41 9 * * 0'   # Sundays 09:41 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    env:
+      BACKUP_REPO: ${{ vars.BACKUP_REPO || 'doctoralvarez/nyxian-sdk' }}
+      GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+    steps:
+      - name: Check the backup repository
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Add the secret SDK_REPO_TOKEN (Settings › Secrets and variables › Actions): a fine-grained token with Contents: Read and write on $BACKUP_REPO"
+            exit 1
+          fi
+          visibility=$(gh api "repos/$BACKUP_REPO" -q .visibility) || { echo "::error::$BACKUP_REPO cannot be read with SDK_REPO_TOKEN"; exit 1; }
+          [ "$visibility" = "private" ] || { echo "::error::$BACKUP_REPO is $visibility — keep backups (the SDK, your IPAs) in a private repository"; exit 1; }
+          echo "backing up to $BACKUP_REPO (private)"
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: This fork (all branches and tags)
+        run: |
+          git fetch --quiet origin '+refs/heads/*:refs/remotes/origin/*' --tags
+          for branch in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin | grep -v '/HEAD$'); do
+            git branch -f "${branch#origin/}" "$branch" 2>/dev/null || true
+          done
+          name="Nyxian-fork-$(date -u +%Y-%m-%d).bundle"
+          git bundle create "$name" --all
+          git bundle verify "$name" >/dev/null
+          ls -la "$name"
+          ./tools/fork/backup_asset.sh save source "$name" "$name"
+
+      - name: emexlab/Nyxian while it is reachable
+        continue-on-error: true
+        run: |
+          if git clone --quiet --mirror https://github.com/emexlab/Nyxian.git upstream.git; then
+            name="emexlab-Nyxian-$(date -u +%Y-%m-%d).bundle"
+            git -C upstream.git bundle create "../$name" --all
+            ./tools/fork/backup_asset.sh save upstream "$name" "$name"
+          else
+            echo "::warning::emexlab/Nyxian is not reachable: the last copies on $BACKUP_REPO (release upstream) stay"
+          fi
+          if git clone --quiet --mirror https://github.com/emexlab/LLVM-On-iOS.git llvm.git; then
+            name="emexlab-LLVM-On-iOS-$(date -u +%Y-%m-%d).bundle"
+            git -C llvm.git bundle create "../$name" --all
+            ./tools/fork/backup_asset.sh save upstream "$name" "$name"
+          fi
+
+      - name: emexLabs' public files
+        continue-on-error: true
+        run: |
+          mkdir -p files && cd files
+          day=$(date -u +%Y-%m-%d)
+          get() {  # url, saved name
+            if curl -fsSL --retry 3 --max-time 120 "$1" -o "$2"; then
+              ../tools/fork/backup_asset.sh save files "$2" "$2" || true
+            else
+              echo "::warning::$1 did not answer"
+            fi
+          }
+          get https://nyxian.app/bootstrap/org.emexlabs.rootca.v1.pub.nxt2c org.emexlabs.rootca.v1.pub.nxt2c
+          get https://emexlabs.org/switzach/truststore/truststore.plist "truststore-$day.plist"
+          get https://emexlabs.org/switzach/ota/ota.json "ota-$day.json"
+
+      - name: The iOS wheels
+        continue-on-error: true
+        env:
+          FORK_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p wheels
+          GH_TOKEN="$FORK_TOKEN" gh release download ios-wheels -R "$GITHUB_REPOSITORY" -D wheels -p '*.whl' --clobber
+          tar -czf ios-wheels.tar.gz -C wheels .
+          name="ios-wheels-$(ls wheels | sort | sha256sum | cut -c1-12).tar.gz"
+          mv ios-wheels.tar.gz "$name"
+          ./tools/fork/backup_asset.sh save files "$name" "$name"
+
+      - name: What the backup repository has
+        run: |
+          for tag in ios-sdk source upstream files toolchain python-runtime ipa; do
+            echo "## $tag" >> "$GITHUB_STEP_SUMMARY"
+            gh release view "$tag" -R "$BACKUP_REPO" --json assets -q '.assets[] | "- \(.name) (\(.size / 1048576 | floor) MB)"' >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "- (none yet)" >> "$GITHUB_STEP_SUMMARY"
+          done

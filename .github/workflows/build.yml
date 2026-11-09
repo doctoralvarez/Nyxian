@@ -17,12 +17,17 @@ jobs:
   build:
     name: Build and Package
     runs-on: macos-latest
+    env:
+      # fork: your PRIVATE backup repository (SDK, toolchain, Python runtime, IPAs); token: secret SDK_REPO_TOKEN
+      BACKUP_REPO: ${{ vars.BACKUP_REPO || 'doctoralvarez/nyxian-sdk' }}
 
     steps:
+      # fork: LLVM-On-iOS is now part of this repository (was a submodule of emexlab's);
+      # libroot and TrollStore are not used by the build, so no submodule is fetched
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          submodules: recursive
+          submodules: false
 
       - name: Set up Python 3.14 (fork, terminal test)
         uses: actions/setup-python@v5
@@ -83,7 +88,8 @@ jobs:
         id: llvm-key
         run: |
           set -e
-          LLVM_SHA=$(git rev-parse HEAD:LLVM-On-iOS)
+          # the commit of emexlab/LLVM-On-iOS the vendored copy comes from (same key as before)
+          LLVM_SHA=$(cat tools/fork/llvm-on-ios.commit)
           XCODE_HASH=$(xcodebuild -version | shasum | cut -c1-12)
           MAKE_HASH=$(cat Makefile LLVM-On-iOS/Makefile | shasum | cut -c1-12)
           echo "key=llvm-${RUNNER_OS}-${LLVM_SHA}-${XCODE_HASH}-${MAKE_HASH}" >> "$GITHUB_OUTPUT"
@@ -95,12 +101,30 @@ jobs:
           path: Frameworks/CoreCompiler/CoreCompilerSupportLibs
           key: ${{ steps.llvm-key.outputs.key }}
 
-      - name: Build LLVM toolchain (cache miss)
+      # fork: GitHub drops caches unused for 7 days; then the toolchain comes from the backup
+      - name: Restore LLVM toolchain from the backup (cache miss)
+        id: llvm-backup
         if: steps.llvm-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+        run: |
+          ./tools/fork/backup_asset.sh restore toolchain "${{ steps.llvm-key.outputs.key }}.tar.gz"
+          test -d Frameworks/CoreCompiler/CoreCompilerSupportLibs
+
+      - name: Build LLVM toolchain (cache miss)
+        if: steps.llvm-cache.outputs.cache-hit != 'true' && steps.llvm-backup.outcome != 'success'
         timeout-minutes: 1200
         run: |
           set -e
           make Frameworks/CoreCompiler/CoreCompilerSupportLibs
+
+      - name: Back up the LLVM toolchain (once per key)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+        run: |
+          ./tools/fork/backup_asset.sh save toolchain "${{ steps.llvm-key.outputs.key }}.tar.gz" Frameworks/CoreCompiler/CoreCompilerSupportLibs || true
 
       # saved right away, so it is kept even if the app build below fails
       - name: Save LLVM toolchain cache
@@ -118,8 +142,19 @@ jobs:
           path: Shared/python-ios.zip
           key: python-ios-3.14-b14-${{ hashFiles('tools/fork/build_python_runtime.sh', 'tools/fork/python_launcher.c') }}
 
-      - name: Pack Python runtime (cache miss)
+      - name: Restore Python runtime from the backup (cache miss)
+        id: python-backup
         if: steps.python-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+        run: |
+          name="python-ios-3.14-b14-${{ hashFiles('tools/fork/build_python_runtime.sh', 'tools/fork/python_launcher.c') }}.zip"
+          ./tools/fork/backup_asset.sh restore python-runtime "$name"
+          mv "$name" Shared/python-ios.zip
+
+      - name: Pack Python runtime (cache miss)
+        if: steps.python-cache.outputs.cache-hit != 'true' && steps.python-backup.outcome != 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -133,6 +168,32 @@ jobs:
           path: Shared/python-ios.zip
           key: python-ios-3.14-b14-${{ hashFiles('tools/fork/build_python_runtime.sh', 'tools/fork/python_launcher.c') }}
 
+      - name: Back up the Python runtime (once per version)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+        run: |
+          ./tools/fork/backup_asset.sh save python-runtime "python-ios-3.14-b14-${{ hashFiles('tools/fork/build_python_runtime.sh', 'tools/fork/python_launcher.c') }}.zip" Shared/python-ios.zip || true
+
+      # fork: the emexLabs root CA public key goes inside the app, so a new install
+      # does not need nyxian.app for it (from nyxian.app, else from the backup)
+      - name: Bundle the emexLabs root CA key
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+        run: |
+          mkdir -p Shared/Backup
+          key=org.emexlabs.rootca.v1.pub.nxt2c
+          if curl -fsSL --retry 3 --max-time 60 "https://nyxian.app/bootstrap/$key" -o "Shared/Backup/$key"; then
+            echo "from nyxian.app: $(wc -c < Shared/Backup/$key) bytes"
+            ./tools/fork/backup_asset.sh save files "$key" "Shared/Backup/$key" || true
+          elif (cd Shared/Backup && ../../tools/fork/backup_asset.sh restore files "$key"); then
+            echo "nyxian.app did not answer: the key comes from the backup"
+          else
+            rm -f "Shared/Backup/$key"
+            echo "::warning::no root CA key to bundle (nyxian.app and the backup failed): new installs download it"
+          fi
+
       - name: Build Nyxian
         timeout-minutes: 1200
         run: |
@@ -145,3 +206,14 @@ jobs:
         with:
           path: Nyxian.ipa
           archive: false
+          retention-days: 90
+
+      # fork: every build's IPA also on the private backup (artifacts expire after 90 days)
+      - name: Back up the IPA
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+        run: |
+          version=$(sed -n 's/^NYXIAN_FORK_VERSION *= *//p' Config.xcconfig | tr -d ' ')
+          ./tools/fork/backup_asset.sh save ipa "Nyxian-${version}-${GITHUB_SHA::7}.ipa" Nyxian.ipa || true

@@ -5,6 +5,8 @@
 # repository has Issues enabled, opens one issue per upstream commit. If Issues are
 # disabled the run is marked as failed on purpose, so GitHub emails you about it.
 # Nothing is merged automatically: the fork's changes are integrated by hand.
+# Fork 1.1.0 (2026-11-09): if emexlab/Nyxian is gone or private, the run says so
+# and ends fine — the fork has its own copies (LLVM-On-iOS, backups.yml).
 name: Check upstream (emexLabs)
 
 on:
@@ -32,7 +34,13 @@ jobs:
           set -e
           BASE=$(tr -d '[:space:]' < .github/upstream-base)
           git remote add upstream https://github.com/emexlab/Nyxian.git
-          git fetch --quiet --no-tags upstream main
+          if ! git fetch --quiet --no-tags upstream main; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "### ⚠️ emexlab/Nyxian could not be reached (deleted, private or GitHub down)" >> "$GITHUB_STEP_SUMMARY"
+            echo "The fork does not need it to build: LLVM-On-iOS is part of this repository and the big pieces are on your private backup (workflow Backups)." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::emexlab/Nyxian could not be reached"
+            exit 0
+          fi
           UPSTREAM=$(git rev-parse upstream/main)
           echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
 
@@ -57,7 +65,7 @@ jobs:
             echo ""
             if git cat-file -e "$BASE^{commit}" 2>/dev/null; then
               if ! git diff --quiet "$BASE" "$UPSTREAM" -- LLVM-On-iOS 2>/dev/null; then
-                echo "⚠️ **The LLVM-On-iOS submodule changed**: the next build recompiles the Swift/LLVM toolchain (about 5 hours)."
+                echo "⚠️ **Upstream LLVM-On-iOS changed**: this fork keeps its own copy (folder LLVM-On-iOS, commit in tools/fork/llvm-on-ios.commit); bring it over by hand if wanted (the next build then recompiles the toolchain, about 5 hours)."
                 echo ""
               fi
               echo "#### Files changed"

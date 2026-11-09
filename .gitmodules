@@ -4,6 +4,3 @@
 [submodule "TrollStore"]
 	path = TrollStore
 	url = https://github.com/opa334/TrollStore
-[submodule "LLVM-On-iOS"]
-	path = LLVM-On-iOS
-	url = https://github.com/emexlab/LLVM-On-iOS

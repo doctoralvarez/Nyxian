@@ -4,6 +4,30 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.40.0 — 2026-11-09
+
+Nyxian keeps building and running even if emexLabs' sites or GitHub
+repositories go away:
+- **LLVM-On-iOS is part of the fork** (it was a submodule of
+  emexlab/LLVM-On-iOS; the same commit, `tools/fork/llvm-on-ios.commit`, so
+  the toolchain cache stays valid). CI no longer fetches submodules
+  (libroot and TrollStore are not used by the build).
+- **Private backup repository** (default `doctoralvarez/nyxian-sdk`, secret
+  `SDK_REPO_TOKEN`; `tools/fork/backup_asset.sh`): CI saves there, once per
+  version, the built LLVM/Swift toolchain (5 hours to rebuild), the Python
+  runtime and every build's IPA (artifacts expire after 90 days). When
+  GitHub's cache is gone, CI takes them back from there before building
+  anything.
+- **Backups workflow** (weekly and by hand): a git bundle of the whole fork,
+  of emexlab/Nyxian and emexlab/LLVM-On-iOS while they are reachable,
+  emexLabs' public files (root CA key, TrustStore, OTA list) and the iOS
+  wheels.
+- **The app**: the emexLabs root CA key ships inside the app (CI puts it in
+  `Shared/Backup`); the SDK zip and that key can be dropped into Files › On
+  My iPhone/iPad › Nyxian and are used without any download.
+- "Check upstream" ends fine (with a warning) when emexlab/Nyxian cannot be
+  reached.
+
 ## 1.39.0 — 2026-11-09
 
 - **Nyxian Shell** (</> › Shell, or ⋯ › Shell in This Project in a `.py`):
