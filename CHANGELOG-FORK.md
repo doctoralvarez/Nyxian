@@ -4,6 +4,18 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.33.1 — 2026-11-09
+
+- **Crash with a template named "ObservableObject"**: the class inherited from
+  itself (`final class ObservableObject: ObservableObject`) and the Swift
+  compiler, which checks the code inside Nyxian, crashed — and again at every
+  launch, as the tab reopened. Now:
+  - templates named like a system type get a suffix (`ObservableObjectModel`);
+  - a type that inherits from itself is found before the compiler is asked,
+    and marked on its line, in every file of the project;
+  - if Nyxian ever closes while checking a project, live checking of that
+    project is paused for the next session (building still shows errors).
+
 ## 1.33.0 — 2026-11-09
 
 - **Your own copy of the iOS SDK as the bootstrap's backup**: after two failed

@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.15.0
+ Fork doctoralvarez/Nyxian — version 1.15.1
  Changelog:
+  - 1.15.1 (2026-11-09): Swift completion does not ask the compiler while the
+    project's code would crash it (ForkSwiftCrashGuard).
   - 1.15.0 (2026-11-08): Rename Symbol (⌃⌘E) in Swift renames only what the
     compiler says is the same symbol (other matches, comments and strings stay;
     "Rename Every Match" remains); Format Document (⌃I) uses
@@ -1568,7 +1570,9 @@ final class EditorCompletionController {
     private func compute(text: String, prefixStart: Int, caret: Int, prefix: String, generation currentGeneration: Int) {
         guard let editor = editor else { return }
         let isPython = editor.file.fileURL?.pathExtension.lowercased() == "py"
-        let wantsEngine = (editor.file.isClang || editor.file.isSwift) && !engineBusy
+        /* fork: not while the project's code would crash the compiler (ForkSwiftCrashGuard) */
+        let guardPath = editor.project?.url.path ?? (editor.file.fileURL?.path ?? "")
+        let wantsEngine = (editor.file.isClang || editor.file.isSwift) && !engineBusy && !(editor.file.isSwift && ForkSwiftCrashGuard.avoidCompiler(guardPath))
         let server = wantsEngine ? editor.languageServer : nil
         /* fork: Python files ask jedi (nyxian_jedi in a python3 without a window) */
         let usePython = isPython && !engineBusy

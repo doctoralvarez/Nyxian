@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.7.0
+ Fork doctoralvarez/Nyxian — version 1.7.1
  Changelog:
+  - 1.7.1 (2026-11-09): a template named like a system type (ObservableObject,
+    View, Codable…) gets a suffix (ObservableObjectModel): the type inherited
+    from itself and the compiler, which runs inside Nyxian, crashed.
   - 1.7.0 (2026-11-08): New › From Template (SwiftUI View, List and Detail,
     Observable Model, Codable Model, Python Script / Notebook / Module).
   - 1.6.1 (2026-11-08): the debugger is off by default (Settings ›
@@ -380,7 +383,12 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
         alert.addAction(UIAlertAction(title: "Create", style: .default) { [weak self, weak alert] _ in
             guard let self else { return }
             let typed = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespaces)
-            let name = ForkFileTemplate.identifier(from: typed.isEmpty ? template.placeholder : typed, type: template.fileExtension != "py")
+            var name = ForkFileTemplate.identifier(from: typed.isEmpty ? template.placeholder : typed, type: template.fileExtension != "py")
+            /* a type named like one it uses (ObservableObject, View, Codable…) would inherit from itself */
+            if template.fileExtension == "swift", ForkFileTemplate.reservedNames.contains(name) {
+                name += template.suffix
+                NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Named \(name): \(typed) is a type of the system", withDelay: 0.0)
+            }
             let destination = URL(fileURLWithPath: self.path).appendingPathComponent("\(name).\(template.fileExtension)")
             guard !FileManager.default.fileExists(atPath: destination.path) else {
                 NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "\(destination.lastPathComponent) already exists", withDelay: 0.0)
@@ -3385,6 +3393,24 @@ struct ForkFileTemplate {
     let fileExtension: String
     let placeholder: String
     let body: (String) -> String
+    
+    /// Names of system types the templates use or that a type should not shadow.
+    static let reservedNames: Set<String> = [
+        "ObservableObject", "Published", "View", "App", "Scene", "Codable", "Identifiable", "Hashable", "Equatable",
+        "Comparable", "Decodable", "Encodable", "Sendable", "Error", "Text", "Image", "List", "Button", "Color",
+        "Data", "Date", "URL", "UUID", "String", "Int", "Double", "Bool", "Array", "Set", "Dictionary", "Optional",
+        "NavigationStack", "NavigationLink", "VStack", "HStack", "ZStack", "State", "Binding", "Environment",
+        "PreviewProvider", "JSONDecoder", "JSONEncoder", "Combine", "Foundation", "SwiftUI", "Observable", "Model"
+    ]
+    
+    /// Added to a reserved name: "ObservableObject" -> "ObservableObjectModel".
+    var suffix: String {
+        switch title {
+        case "Observable Model": return "Model"
+        case "Codable Model": return "Record"
+        default: return "View"
+        }
+    }
     
     /// "my view" -> "MyView" (types) or "my_view" (Python modules).
     static func identifier(from text: String, type: Bool) -> String {

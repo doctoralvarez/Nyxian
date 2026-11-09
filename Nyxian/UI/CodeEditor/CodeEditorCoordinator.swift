@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-09): ForkSwiftCrashGuard — the Swift compiler runs inside
+    Nyxian, so code that crashes it closed the app, again at every launch (the
+    tabs reopen). A type that inherits from itself (e.g. "class
+    ObservableObject: ObservableObject") is caught first and marked, without
+    asking the compiler; and if Nyxian closed while checking a project, live
+    checking of that project is paused for the next session.
   - 1.2.0 (2026-11-08): .py files: syntax errors and warnings from Python
     itself (nyxian_jedi) and the line the last run ended with an error on.
   - 1.1.0 (2026-11-07): also forwards edits to the parameter help.
@@ -120,7 +126,28 @@ class CodeEditorCoordinator: NSObject, TextViewDelegate {
             
             if parent.file.isSwift {
                 let swiftFies: [String] = LDEFilesFinder(parent.project?.url.path, ["swift"], ["Resources", "Config"])
-                server.reparseFile(self.parent?.textView.text, withArgs: (parent.project?.projectConfig.swiftFlags ?? []) + swiftFies)
+                let current = self.parent?.textView.text ?? ""
+                /* fork: code that makes the compiler crash takes Nyxian with it (it runs inside the app) */
+                let projectPath = parent.project?.url.path ?? (parent.file.fileURL?.path ?? "")
+                let problem = ForkSwiftCrashGuard.selfInheritance(current: current, currentPath: parent.file.fileURL?.path, files: swiftFies)
+                ForkSwiftCrashGuard.setBlocked(projectPath, problem != nil)
+                if let problem {
+                    DispatchQueue.main.async {
+                        self.diag = ForkSwiftCrashGuard.diagnostics(for: problem, in: parent.file.fileURL)
+                        self.updateDiag()
+                    }
+                    return
+                }
+                guard !ForkSwiftCrashGuard.isPaused(projectPath) else {
+                    DispatchQueue.main.async {
+                        self.diag = []
+                        self.updateDiag()
+                    }
+                    return
+                }
+                ForkSwiftCrashGuard.begin(projectPath)
+                server.reparseFile(current, withArgs: (parent.project?.projectConfig.swiftFlags ?? []) + swiftFies)
+                ForkSwiftCrashGuard.end()
             } else if parent.file.isClang {
                 server.reparseFile(self.parent?.textView.text, withArgs: flags)
             }
@@ -415,5 +442,107 @@ class CodeEditorCoordinator: NSObject, TextViewDelegate {
             }
             super.willMove(toSuperview: newSuperview)
         }
+    }
+}
+
+// MARK: - Fork: keep a compiler crash from closing Nyxian again and again
+
+/// The Swift compiler that checks the code runs inside Nyxian: if it crashes, Nyxian closes,
+/// and the reopened tabs make it crash again. This guard stops that loop.
+enum ForkSwiftCrashGuard {
+    struct SelfInheritance {
+        let path: String
+        let line: Int
+        let name: String
+    }
+    
+    private static let runningKey = "fork.swiftcheck.running"
+    private static var paused: Set<String> = []
+    private static var announced = false
+    private static let lock = NSLock()
+    
+    /// Checked once per launch: a check that never ended means Nyxian closed during it.
+    private static let interrupted: String? = {
+        let value = UserDefaults.standard.string(forKey: runningKey)
+        UserDefaults.standard.removeObject(forKey: runningKey)
+        return value
+    }()
+    
+    /// Projects whose code would crash the compiler right now (found by the last check).
+    private static var blocked: Set<String> = []
+    
+    static func setBlocked(_ project: String, _ value: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        if value { blocked.insert(project) } else { blocked.remove(project) }
+    }
+    
+    /// Completion and other compiler calls stay away from such a project.
+    static func avoidCompiler(_ project: String) -> Bool {
+        if isPaused(project) { return true }
+        lock.lock(); defer { lock.unlock() }
+        return blocked.contains(project)
+    }
+    
+    static func isPaused(_ project: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if let interrupted, interrupted == project, !paused.contains(project) {
+            paused.insert(project)
+            if !announced {
+                announced = true
+                DispatchQueue.main.async {
+                    NXAlertDiagnosticPresenter.notifyUser(with: .warning, withMessage: "Nyxian closed while checking this project's Swift code, so live checking is off for it until Nyxian restarts. Building still shows the errors.", withDelay: 1.0)
+                }
+            }
+        }
+        return paused.contains(project)
+    }
+    
+    static func begin(_ project: String) {
+        _ = interrupted
+        UserDefaults.standard.set(project, forKey: runningKey)
+    }
+    
+    static func end() {
+        UserDefaults.standard.removeObject(forKey: runningKey)
+    }
+    
+    private static let declaration = try! NSRegularExpression(pattern: "^\\s*(?:@\\w+(?:\\([^)]*\\))?\\s+)*(?:(?:public|internal|private|fileprivate|open|final|indirect)\\s+)*(?:class|struct|enum|protocol|actor)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?:<[^>]*>)?\\s*:\\s*([^{]*)", options: [.anchorsMatchLines])
+    
+    /// A type whose inheritance list names the type itself.
+    static func selfInheritance(current: String, currentPath: String?, files: [String]) -> SelfInheritance? {
+        var sources: [(String, String)] = []
+        if let currentPath { sources.append((currentPath, current)) }
+        for file in files where file != currentPath {
+            if let text = try? String(contentsOfFile: file, encoding: .utf8) { sources.append((file, text)) }
+        }
+        for (path, text) in sources {
+            let ns = text as NSString
+            for match in declaration.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+                let name = ns.substring(with: match.range(at: 1))
+                var clause = ns.substring(with: match.range(at: 2))
+                if let whereRange = clause.range(of: " where ") { clause = String(clause[..<whereRange.lowerBound]) }
+                let parents = clause.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                if parents.contains(name) {
+                    let line = ns.substring(to: match.range.location).reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+                    return SelfInheritance(path: path, line: line, name: name)
+                }
+            }
+        }
+        return nil
+    }
+    
+    static func diagnostics(for problem: SelfInheritance, in file: URL?) -> [MDKDiagnostic] {
+        let message = "\"\(problem.name)\" inherits from itself (the name hides the type it should use, e.g. ObservableObject or View): rename it — the compiler is not run on this code because it would close Nyxian"
+        guard let file, file.resolvingSymlinksInPath().path == URL(fileURLWithPath: problem.path).resolvingSymlinksInPath().path else {
+            DispatchQueue.main.async {
+                NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "\(URL(fileURLWithPath: problem.path).lastPathComponent), line \(problem.line): \(message)", withDelay: 0.0)
+            }
+            return []
+        }
+        var location = MDKSourceLocation()
+        location.isValid = true
+        location.line = CFIndex(problem.line)
+        location.column = 1
+        return [MDKDiagnostic(type: .file, level: .error, mainSource: file.path, fileSourceLocation: MDKFileSourceLocation(fileURL: file, with: location), message: message)]
     }
 }
