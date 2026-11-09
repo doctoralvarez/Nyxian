@@ -21,6 +21,12 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-09): per-program permissions (NXForkPermission…).
+*/
+
 #ifndef TRUST_TRUST_H
 #define TRUST_TRUST_H
 
@@ -83,5 +89,15 @@ ksurface_trust_identity_t *trust_identity_create_from_path_with_parent_identity(
 void trust_identity_destroy(ksurface_trust_identity_t *identity);
 
 PEEntitlementFlags trust_identity_entitlement_flags_from_entitlements(CFDictionaryRef entitlements);
+
+/* fork: per-program permissions (Management → Permissions), stored in NSUserDefaults under
+   fork.permissions.v1: @{ key: @{ @"name", @"files": default|declared|full, @"read": @[paths],
+   @"readWrite": @[paths], @"network": @(BOOL) } }, key "bundle:<id>" or "path:<executable>" */
+bool NXForkPermissionNetworkBlocked(const char *executablePath);
+#if __OBJC__
+extern NSString *const NXForkPermissionsDefaultsKey;
+NSString *NXForkPermissionKeyForExecutable(NSString *executablePath);
+NSDictionary *NXForkPermissionPolicyForExecutable(NSString *executablePath);
+#endif /* __OBJC__ */
 
 #endif /* TRUST_TRUST_H */

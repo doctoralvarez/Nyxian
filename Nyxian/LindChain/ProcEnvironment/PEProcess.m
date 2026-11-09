@@ -180,7 +180,22 @@ static void PEAttachControllingTTYForSpawn(NSDictionary *items,
         [mutableItems setObject:(__bridge NSArray*)sb_identity->filePermissions forKey:@"PEFilePermissions"];
         items = mutableItems;
     }
+    /* fork: whose network setting applies (the parent's too: a child cannot escape it) */
+    char ownPath[MAXPATHLEN];
+    char sandboxPath[MAXPATHLEN];
+    strlcpy(ownPath, identity->path, sizeof(ownPath));
+    strlcpy(sandboxPath, sb_identity->path, sizeof(sandboxPath));
     kvo_unlock(proc);
+    
+    if(NXForkPermissionNetworkBlocked(ownPath) || NXForkPermissionNetworkBlocked(sandboxPath))
+    {
+        NSMutableDictionary *mutableItems = [items mutableCopy];
+        NSMutableDictionary *environment = [mutableItems[@"PEEnvironment"] mutableCopy] ?: [NSMutableDictionary dictionary];
+        environment[@"NYXIAN_NETWORK"] = @"blocked";
+        mutableItems[@"PEEnvironment"] = environment;
+        items = mutableItems;
+        klog_log("PEProcess:permissions", "network blocked for %s", ownPath);
+    }
     
     /* assigning potential bundle information */
     self.applicationObject = nil;

@@ -4,6 +4,22 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.37.0 — 2026-11-09
+
+- **Per-program permissions** (Settings → Management → Permissions, or
+  Processes → a process → Permissions…): for an installed app, Python
+  (python3) or any executable:
+  - **Files**: *Nyxian default* (as the file system sandbox setting says),
+    *Only what it declares* (its container and the folders its entitlements
+    ask for, even with the sandbox off) or *All of Nyxian* (even with the
+    sandbox on), plus extra **read-only** and **read-write** folders.
+    Enforced by iOS's sandbox extensions the kernel hands the program.
+  - **Network**: on/off. Off: IPv4/IPv6 `socket()`/`connect()` fail with
+    "Operation not permitted" (local sockets keep working). A guard in the
+    program's libc calls set when it starts, not a firewall.
+  - Applied when the program starts; programs it starts follow it. "Restart
+    It Now" ends it so the next start uses them. The kernel log notes them.
+
 ## 1.36.0 — 2026-11-09
 
 - **Processes** (Settings → Management → Processes): every process of

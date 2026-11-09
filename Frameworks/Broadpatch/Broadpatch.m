@@ -20,6 +20,12 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-09): socket and connect can be patched (network permission).
+*/
+
 #include "Broadpatch.h"
 
 /* libc API */
@@ -315,3 +321,7 @@ LIBKERN_DEFINE_INTERPOSE_PATCHABLE(os_unfair_lock_assert_owner);
 
 /* daemon and launch services shit */
 LIBKERN_DEFINE_INTERPOSE_PATCHABLE(daemon);
+
+/* fork: network permission of the program (Management → Permissions) */
+LIBKERN_DEFINE_INTERPOSE_PATCHABLE(socket);
+LIBKERN_DEFINE_INTERPOSE_PATCHABLE(connect);

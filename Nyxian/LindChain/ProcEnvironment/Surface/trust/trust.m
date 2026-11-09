@@ -21,6 +21,17 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-09): per-program permissions (Settings → Management →
+    Permissions): file access "Nyxian default", "only what it declares"
+    (its entitlements and container, even with the file system sandbox
+    off) or "all of Nyxian", plus extra read-only and read-write folders;
+    network allowed or blocked (NXForkPermissionNetworkBlocked). Applied
+    when the program starts; its children follow it.
+*/
+
 /* ----------------------------------------------------------------------
  *  System Headers
  * -------------------------------------------------------------------- */
@@ -45,6 +56,7 @@
 #import <LindChain/ProcEnvironment/Surface/libkern/patch.h>
 #import <LindChain/ProcEnvironment/Surface/libkern/klog.h>
 #import <ksurface_config.h>
+#import <LindChain/ProcEnvironment/PEUserspaceManager.h>
 
 /* ----------------------------------------------------------------------
  *  Types
@@ -347,6 +359,67 @@ static void trust_identity_append_file_permissions_for_paths(NSMutableArray<NSDa
     }
 }
 
+/* ----------------------------------------------------------------------
+ *  fork: per-program permissions
+ * -------------------------------------------------------------------- */
+NSString *const NXForkPermissionsDefaultsKey = @"fork.permissions.v1";
+
+NSString *NXForkPermissionKeyForExecutable(NSString *executablePath)
+{
+    if(executablePath.length == 0) return nil;
+    /* bootstrapd is asked only once it runs (daemons start before it) */
+    LDEApplicationObject *app = PEUserspaceManager.shared.isLaunchServiceManagerStable ? [[LDEApplicationWorkspace shared] applicationObjectForExecutablePath:executablePath] : nil;
+    if(app.bundleIdentifier.length) return [@"bundle:" stringByAppendingString:app.bundleIdentifier];
+    NSString *canonical = PECanonicalizePath(executablePath) ?: executablePath;
+    return [@"path:" stringByAppendingString:canonical];
+}
+
+NSDictionary *NXForkPermissionPolicyForExecutable(NSString *executablePath)
+{
+    NSDictionary *all = [[NSUserDefaults standardUserDefaults] dictionaryForKey:NXForkPermissionsDefaultsKey];
+    if(all.count == 0 || executablePath.length == 0) return nil;
+    NSString *key = NXForkPermissionKeyForExecutable(executablePath);
+    NSDictionary *policy = key ? all[key] : nil;
+    if(policy == nil)
+    {
+        /* also by its plain path, for a program added by path that is a bundle */
+        NSString *canonical = PECanonicalizePath(executablePath) ?: executablePath;
+        policy = all[[@"path:" stringByAppendingString:canonical]];
+    }
+    return [policy isKindOfClass:[NSDictionary class]] ? policy : nil;
+}
+
+bool NXForkPermissionNetworkBlocked(const char *executablePath)
+{
+    if(executablePath == NULL) return false;
+    @autoreleasepool {
+        NSDictionary *policy = NXForkPermissionPolicyForExecutable(@(executablePath));
+        return [policy[@"network"] isKindOfClass:[NSNumber class]] && ![policy[@"network"] boolValue];
+    }
+}
+
+/* "/var/mobile" and "$(NXROOT)/var/mobile" both mean Nyxian's root; "~" is not supported */
+static NSArray<NSString*> *NXForkPermissionTemplates(id list)
+{
+    if(![list isKindOfClass:[NSArray class]]) return @[];
+    NSMutableArray *paths = [NSMutableArray array];
+    for(id item in (NSArray*)list)
+    {
+        if(![item isKindOfClass:[NSString class]]) continue;
+        NSString *path = [(NSString*)item stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        if(path.length == 0 || [path containsString:@".."]) continue;
+        if(![path hasPrefix:@"$("])
+        {
+            if(![path hasPrefix:@"/"]) path = [@"/" stringByAppendingString:path];
+            path = [@"$(NXROOT)" stringByAppendingString:path];
+        }
+        [paths addObject:path];
+        /* a folder: what is inside it too */
+        if(![path hasSuffix:@"/*"]) [paths addObject:[path stringByAppendingString:@"/*"]];
+    }
+    return paths;
+}
+
 LIBKERN_DEFINE_PATCHABLE(CFArrayRef, trust_identity_give_file_permissions, (CFStringRef executableString,
                                                                             CFDictionaryRef entitlements))
 {
@@ -361,7 +434,24 @@ LIBKERN_DEFINE_PATCHABLE(CFArrayRef, trust_identity_give_file_permissions, (CFSt
             @"EXECUTABLE": (__bridge NSString*)executableString,
         } mutableCopy];
         
-        if(![[NSUserDefaults standardUserDefaults] boolForKey:@"nyxian.boot.sandbox.filesystems"])
+        /* fork: the program's own permissions, if set (Management → Permissions) */
+        NSDictionary *policy = NXForkPermissionPolicyForExecutable((__bridge NSString*)executableString);
+        NSString *filesMode = [policy[@"files"] isKindOfClass:[NSString class]] ? policy[@"files"] : @"default";
+        NSArray<NSString*> *extraRead = NXForkPermissionTemplates(policy[@"read"]);
+        NSArray<NSString*> *extraReadWrite = NXForkPermissionTemplates(policy[@"readWrite"]);
+        if(policy != nil)
+        {
+            klog_log("trust:permissions", "%s: files %s, %lu extra read, %lu extra read-write, network %s",
+                     [(__bridge NSString*)executableString UTF8String], filesMode.UTF8String,
+                     (unsigned long)extraRead.count, (unsigned long)extraReadWrite.count,
+                     NXForkPermissionNetworkBlocked([(__bridge NSString*)executableString UTF8String]) ? "blocked" : "allowed");
+        }
+        
+        BOOL sandboxed = [[NSUserDefaults standardUserDefaults] boolForKey:@"nyxian.boot.sandbox.filesystems"];
+        if([filesMode isEqualToString:@"declared"]) sandboxed = YES;
+        if([filesMode isEqualToString:@"full"]) sandboxed = NO;
+        
+        if(!sandboxed)
         {
             trust_identity_append_file_permissions_for_paths(filePermissions, @[
                 @"$(NXROOT)",
@@ -383,6 +473,10 @@ LIBKERN_DEFINE_PATCHABLE(CFArrayRef, trust_identity_give_file_permissions, (CFSt
         /* append file permissions from entitlements */
         trust_identity_append_file_permissions_for_paths(filePermissions, nsEntitlements[(__bridge NSString*)kNXT2EntitlementSandboxFileRead], vars, kFSMountPermissionRead, true, entitlements);
         trust_identity_append_file_permissions_for_paths(filePermissions, nsEntitlements[(__bridge NSString*)kNXT2EntitlementSandboxFileReadWrite], vars, kFSMountPermissionReadWrite, true, entitlements);
+        
+        /* fork: folders added in Management → Permissions */
+        trust_identity_append_file_permissions_for_paths(filePermissions, extraRead, vars, kFSMountPermissionRead, true, entitlements);
+        trust_identity_append_file_permissions_for_paths(filePermissions, extraReadWrite, vars, kFSMountPermissionReadWrite, true, entitlements);
         
         /* append extra file permissions that are on by default */
         trust_identity_append_file_permissions_for_paths(filePermissions, @[

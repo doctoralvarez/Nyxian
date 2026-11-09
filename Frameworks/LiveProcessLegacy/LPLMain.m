@@ -20,6 +20,13 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-09): applies the network permission (LPLNetworkPolicyApply)
+    once the environment is set.
+*/
+
 #import <dlfcn.h>
 #import <UIKit/UIKit.h>
 #import <mach-o/dyld.h>
@@ -205,6 +212,10 @@ int LiveProcessMain(int argc, char *argv[])
     /* overwriting environment and arguments */
     overwriteEnvironmentProperties(environmentDictionary);
     overwriteArguments(argumentDictionary, &argc, &argv);
+    
+    /* fork: network permission (NYXIAN_NETWORK=blocked), before any of the program's code runs */
+    extern void LPLNetworkPolicyApply(void);
+    LPLNetworkPolicyApply();
     
     /* set libc stuff correctly for constructors */
     *_NSGetArgc() = argc;

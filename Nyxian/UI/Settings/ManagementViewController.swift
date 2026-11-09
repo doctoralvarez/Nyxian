@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-09): Permissions: per program (app, python3, any
+    executable) file access — Nyxian default, only what it declares, or all
+    of Nyxian — extra read-only / read-write folders, and network on or off;
+    also from a process in Processes ("Permissions…").
   - 1.0.0 (2026-11-09): Processes (process monitor: every process of
     Nyxian's kernel with state, CPU, memory, threads and run time, updated
     every second; stop, continue, terminate or kill one) and Kernel Log
@@ -63,7 +67,7 @@ class ManagementViewController: NXUITableViewController {
             case 1:
                 return 1
             case 2:
-                return 4
+                return 5
             default:
                 return 6
         }
@@ -93,6 +97,10 @@ class ManagementViewController: NXUITableViewController {
                 } else if indexPath.row == 3 {
                     tableViewCell.textLabel?.text = "Kernel Log (kmsg)"
                     tableViewCell.imageView?.image = UIImage(systemName: "text.alignleft")
+                    tableViewCell.accessoryType = .disclosureIndicator
+                } else if indexPath.row == 4 {
+                    tableViewCell.textLabel?.text = "Permissions"
+                    tableViewCell.imageView?.image = UIImage(systemName: "lock.shield")
                     tableViewCell.accessoryType = .disclosureIndicator
                 }
             default:
@@ -130,8 +138,10 @@ class ManagementViewController: NXUITableViewController {
                 navigationController?.pushViewController(KEXTManagementViewController(style: .insetGrouped), animated: true)
             } else if indexPath.row == 2 {
                 navigationController?.pushViewController(ForkProcessMonitorViewController(style: .insetGrouped), animated: true)
-            } else {
+            } else if indexPath.row == 3 {
                 navigationController?.pushViewController(ForkKernelLogViewController(), animated: true)
+            } else {
+                navigationController?.pushViewController(ForkPermissionsListViewController(style: .insetGrouped), animated: true)
             }
         default:
             if indexPath.row == 0 {
@@ -521,6 +531,11 @@ final class ForkProcessMonitorViewController: UITableViewController, UISearchRes
                 self.confirmed("Kill", critical ? "PID 1 is launchd: killing it restarts Nyxian's userspace." : "\(name) ends at once, without saving anything.") { self.send(SIGKILL, to: pid, name: name) }
             })
         }
+        if pid != Int(ownPid), pid > 1, let program = ForkPermissionProgram(processEntry: entry) {
+            sheet.addAction(UIAlertAction(title: "Permissions…", style: .default) { [weak self] _ in
+                self?.navigationController?.pushViewController(ForkPermissionEditorViewController(program: program), animated: true)
+            })
+        }
         sheet.addAction(UIAlertAction(title: "Copy Details", style: .default) { _ in UIPasteboard.general.string = name + "\n" + details })
         sheet.addAction(UIAlertAction(title: "Close", style: .cancel))
         if let popover = sheet.popoverPresentationController {
@@ -714,5 +729,428 @@ final class ForkKernelLogViewController: UIViewController, UISearchBarDelegate {
         let activity = UIActivityViewController(activityItems: [file], applicationActivities: nil)
         activity.popoverPresentationController?.barButtonItem = navigationItem.rightBarButtonItems?.last
         present(activity, animated: true)
+    }
+}
+
+// MARK: - fork: per-program permissions
+
+/// A program permissions can be set for: an app (by bundle identifier) or an executable (by its real path).
+/// Stored in UserDefaults under fork.permissions.v1, read by the kernel (trust.m) when the program starts.
+struct ForkPermissionProgram {
+    static let defaultsKey = "fork.permissions.v1"
+    let key: String
+    let name: String
+    let detail: String
+    
+    init(key: String, name: String, detail: String) {
+        self.key = key
+        self.name = name
+        self.detail = detail
+    }
+    
+    init(application: LDEApplicationObject) {
+        key = "bundle:" + (application.bundleIdentifier ?? "")
+        name = application.localizedName ?? application.bundleIdentifier ?? "App"
+        detail = application.bundleIdentifier ?? ""
+    }
+    
+    init?(executablePath: String, name: String? = nil) {
+        guard !executablePath.isEmpty else { return nil }
+        key = "path:" + Self.realPath(executablePath)
+        self.name = name ?? (executablePath as NSString).lastPathComponent
+        detail = executablePath
+    }
+    
+    init?(processEntry entry: [String: Any]) {
+        let display = (entry["displayName"] as? String) ?? (entry["name"] as? String)
+        if let bundle = entry["bundleIdentifier"] as? String, !bundle.isEmpty {
+            key = "bundle:" + bundle
+            name = display ?? bundle
+            detail = bundle
+        } else if let path = entry["executablePath"] as? String, !path.isEmpty {
+            key = "path:" + Self.realPath(path)
+            name = display ?? (path as NSString).lastPathComponent
+            detail = path
+        } else {
+            return nil
+        }
+    }
+    
+    /// the same canonical path as the kernel's realpath()
+    static func realPath(_ path: String) -> String {
+        guard let resolved = realpath(path, nil) else { return path }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+    
+    static func allPolicies() -> [String: [String: Any]] {
+        (UserDefaults.standard.dictionary(forKey: defaultsKey) as? [String: [String: Any]]) ?? [:]
+    }
+    
+    var policy: [String: Any] {
+        get { Self.allPolicies()[key] ?? ["name": name, "files": "default", "network": true] }
+        nonmutating set {
+            var all = Self.allPolicies()
+            var value = newValue
+            value["name"] = name
+            value["detail"] = detail
+            all[key] = value
+            UserDefaults.standard.set(all, forKey: Self.defaultsKey)
+        }
+    }
+    
+    func remove() {
+        var all = Self.allPolicies()
+        all.removeValue(forKey: key)
+        UserDefaults.standard.set(all, forKey: Self.defaultsKey)
+    }
+    
+    /// one line for lists: what differs from Nyxian's default
+    static func summary(_ policy: [String: Any]) -> String {
+        var parts: [String] = []
+        switch policy["files"] as? String ?? "default" {
+        case "declared": parts.append("files: only what it declares")
+        case "full": parts.append("files: all of Nyxian")
+        default: parts.append("files: Nyxian default")
+        }
+        let read = (policy["read"] as? [String])?.count ?? 0
+        let readWrite = (policy["readWrite"] as? [String])?.count ?? 0
+        if read + readWrite > 0 { parts.append("+\(read + readWrite) folders") }
+        parts.append((policy["network"] as? Bool ?? true) ? "network on" : "network blocked")
+        return parts.joined(separator: " · ")
+    }
+}
+
+final class ForkPermissionsListViewController: UITableViewController {
+    private var keys: [String] = []
+    private var policies: [String: [String: Any]] = [:]
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Permissions"
+        navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .add, primaryAction: nil, menu: addMenu())
+    }
+    
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        reload()
+    }
+    
+    private func reload() {
+        policies = ForkPermissionProgram.allPolicies()
+        keys = policies.keys.sorted { (policies[$0]?["name"] as? String ?? $0).localizedCaseInsensitiveCompare(policies[$1]?["name"] as? String ?? $1) == .orderedAscending }
+        tableView.reloadData()
+    }
+    
+    private func addMenu() -> UIMenu {
+        UIMenu(children: [
+            UIAction(title: "Installed App…", image: UIImage(systemName: "app")) { [weak self] _ in self?.pickApplication() },
+            UIAction(title: "Running Process…", image: UIImage(systemName: "cpu")) { [weak self] _ in self?.pickProcess() },
+            UIAction(title: "Python (python3)", image: UIImage(systemName: "chevron.left.forwardslash.chevron.right")) { [weak self] _ in self?.addPython() },
+            UIAction(title: "Executable by Path…", image: UIImage(systemName: "terminal")) { [weak self] _ in self?.addByPath() },
+        ])
+    }
+    
+    private func open(_ program: ForkPermissionProgram) {
+        navigationController?.pushViewController(ForkPermissionEditorViewController(program: program), animated: true)
+    }
+    
+    private func choose(_ title: String, _ programs: [ForkPermissionProgram]) {
+        guard !programs.isEmpty else {
+            let alert = UIAlertController(title: title, message: "There is nothing to choose from right now.", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+            present(alert, animated: true)
+            return
+        }
+        let sheet = UIAlertController(title: title, message: nil, preferredStyle: .actionSheet)
+        for program in programs.prefix(30) {
+            sheet.addAction(UIAlertAction(title: program.name, style: .default) { [weak self] _ in self?.open(program) })
+        }
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        sheet.popoverPresentationController?.barButtonItem = navigationItem.rightBarButtonItem
+        present(sheet, animated: true)
+    }
+    
+    private func pickApplication() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let apps = LDEApplicationWorkspace.shared().allApplicationObjects() ?? []
+            let programs = apps.map { ForkPermissionProgram(application: $0) }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            DispatchQueue.main.async { self?.choose("Installed App", programs) }
+        }
+    }
+    
+    private func pickProcess() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let own = Int(getpid())
+            let entries = (PEProcessManager.shared().forkProcessSnapshot() ?? []).filter { ($0["pid"] as? Int ?? 0) > 1 && ($0["pid"] as? Int) != own }
+            var seen = Set<String>()
+            let programs = entries.compactMap { ForkPermissionProgram(processEntry: $0) }.filter { seen.insert($0.key).inserted }
+            DispatchQueue.main.async { self?.choose("Running Process", programs) }
+        }
+    }
+    
+    private func addPython() {
+        if let launcher = UserDefaults.standard.string(forKey: "fork.python.launcher"), let program = ForkPermissionProgram(executablePath: launcher, name: "Python (python3)") {
+            open(program)
+        } else {
+            let alert = UIAlertController(title: "Python is not installed yet", message: "Run a .py file or open the Python console once, then come back.", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+            present(alert, animated: true)
+        }
+    }
+    
+    private func addByPath() {
+        let alert = UIAlertController(title: "Executable by Path", message: "The full path of the program, e.g. one of your command line tools.", preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "/…/MyTool"
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Add", style: .default) { [weak self] _ in
+            let path = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespaces)
+            if let program = ForkPermissionProgram(executablePath: path) { self?.open(program) }
+        })
+        present(alert, animated: true)
+    }
+    
+    override func numberOfSections(in tableView: UITableView) -> Int { 1 }
+    
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { max(keys.count, 1) }
+    
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        let sandbox = UserDefaults.standard.bool(forKey: "nyxian.boot.sandbox.filesystems")
+        return "Add a program with +. Its permissions apply the next time it starts, and to the programs it starts. "
+            + "Nyxian's default now: " + (sandbox ? "each program only gets what it declares (file system sandbox on)." : "every program can read and write all of Nyxian (file system sandbox off).")
+            + " Blocking the network makes its IPv4/IPv6 sockets fail (\"Operation not permitted\"); it is a guard in the program's own libc calls, not a firewall."
+    }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        guard !keys.isEmpty else {
+            cell.textLabel?.text = "No program has its own permissions"
+            cell.textLabel?.textColor = .secondaryLabel
+            cell.selectionStyle = .none
+            return cell
+        }
+        let key = keys[indexPath.row]
+        let policy = policies[key] ?? [:]
+        cell.textLabel?.text = policy["name"] as? String ?? key
+        cell.detailTextLabel?.text = ForkPermissionProgram.summary(policy)
+        cell.detailTextLabel?.textColor = .secondaryLabel
+        cell.detailTextLabel?.numberOfLines = 0
+        cell.imageView?.image = UIImage(systemName: key.hasPrefix("bundle:") ? "app.fill" : "terminal.fill")
+        cell.accessoryType = .disclosureIndicator
+        return cell
+    }
+    
+    private func program(at row: Int) -> ForkPermissionProgram {
+        let key = keys[row]
+        let policy = policies[key] ?? [:]
+        return ForkPermissionProgram(key: key, name: policy["name"] as? String ?? key, detail: policy["detail"] as? String ?? String(key.drop(while: { $0 != ":" }).dropFirst()))
+    }
+    
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        guard !keys.isEmpty else { return }
+        open(program(at: indexPath.row))
+    }
+    
+    override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard !keys.isEmpty else { return nil }
+        let program = program(at: indexPath.row)
+        let remove = UIContextualAction(style: .destructive, title: "Remove") { [weak self] _, _, done in
+            program.remove()
+            self?.reload()
+            done(true)
+        }
+        return UISwipeActionsConfiguration(actions: [remove])
+    }
+}
+
+final class ForkPermissionEditorViewController: UITableViewController {
+    private let program: ForkPermissionProgram
+    private static let suggestions = ["/var/mobile", "/var/mobile/Documents", "/tmp", "/opt/python"]
+    private let modes: [(id: String, title: String, detail: String)] = [
+        ("default", "Nyxian Default", "As Settings decide for every program (file system sandbox)."),
+        ("declared", "Only What It Declares", "Its own container and the folders its entitlements ask for, even with the sandbox off."),
+        ("full", "All of Nyxian", "Read and write everything in Nyxian's root, even with the sandbox on."),
+    ]
+    
+    init(program: ForkPermissionProgram) {
+        self.program = program
+        super.init(style: .insetGrouped)
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = program.name
+    }
+    
+    private var policy: [String: Any] {
+        get { program.policy }
+        set { program.policy = newValue; tableView.reloadData() }
+    }
+    
+    private func folders(_ key: String) -> [String] { policy[key] as? [String] ?? [] }
+    
+    override func numberOfSections(in tableView: UITableView) -> Int { 5 }
+    
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        switch section {
+        case 0: return modes.count
+        case 1: return folders("read").count + 1
+        case 2: return folders("readWrite").count + 1
+        case 3: return 1
+        default: return 2
+        }
+    }
+    
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        switch section {
+        case 0: return "Files"
+        case 1: return "Extra Folders — Read Only"
+        case 2: return "Extra Folders — Read and Write"
+        case 3: return "Network"
+        default: return nil
+        }
+    }
+    
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        switch section {
+        case 0: return program.detail
+        case 2: return "Folders are inside Nyxian's root (\"/var/mobile\" is $(NXROOT)/var/mobile) and include what is in them. They add to the file mode above."
+        case 3: return "Off: its connections to the internet and the local network fail with \"Operation not permitted\". Local sockets keep working."
+        default: return section == 4 ? "Changes apply the next time it starts." : nil
+        }
+    }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        switch indexPath.section {
+        case 0:
+            let mode = modes[indexPath.row]
+            cell.textLabel?.text = mode.title
+            cell.detailTextLabel?.text = mode.detail
+            cell.detailTextLabel?.numberOfLines = 0
+            cell.detailTextLabel?.textColor = .secondaryLabel
+            cell.accessoryType = (policy["files"] as? String ?? "default") == mode.id ? .checkmark : .none
+        case 1, 2:
+            let list = folders(indexPath.section == 1 ? "read" : "readWrite")
+            if indexPath.row < list.count {
+                cell.textLabel?.text = list[indexPath.row]
+                cell.textLabel?.font = .monospacedSystemFont(ofSize: 15, weight: .regular)
+                cell.imageView?.image = UIImage(systemName: indexPath.section == 1 ? "eye" : "pencil")
+            } else {
+                cell.textLabel?.text = "Add Folder…"
+                cell.textLabel?.textColor = .systemBlue
+                cell.imageView?.image = UIImage(systemName: "plus.circle")
+            }
+        case 3:
+            cell.textLabel?.text = "Network Access"
+            let toggle = UISwitch()
+            toggle.isOn = policy["network"] as? Bool ?? true
+            toggle.addAction(UIAction { [weak self] action in
+                guard let self = self, let toggle = action.sender as? UISwitch else { return }
+                var value = self.policy
+                value["network"] = toggle.isOn
+                self.policy = value
+            }, for: .valueChanged)
+            cell.accessoryView = toggle
+            cell.selectionStyle = .none
+        default:
+            if indexPath.row == 0 {
+                cell.textLabel?.text = "Restart It Now"
+                cell.textLabel?.textColor = .systemBlue
+                cell.detailTextLabel?.text = "Ends it if it runs, so the next start uses these permissions."
+                cell.detailTextLabel?.textColor = .secondaryLabel
+            } else {
+                cell.textLabel?.text = "Back to Nyxian's Default"
+                cell.textLabel?.textColor = .systemRed
+            }
+        }
+        return cell
+    }
+    
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        switch indexPath.section {
+        case 0:
+            var value = policy
+            value["files"] = modes[indexPath.row].id
+            policy = value
+        case 1, 2:
+            let key = indexPath.section == 1 ? "read" : "readWrite"
+            if indexPath.row >= folders(key).count { addFolder(to: key) }
+        case 4:
+            if indexPath.row == 0 {
+                endRunning()
+            } else {
+                program.remove()
+                navigationController?.popViewController(animated: true)
+            }
+        default:
+            break
+        }
+    }
+    
+    override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard indexPath.section == 1 || indexPath.section == 2 else { return nil }
+        let key = indexPath.section == 1 ? "read" : "readWrite"
+        guard indexPath.row < folders(key).count else { return nil }
+        let remove = UIContextualAction(style: .destructive, title: "Remove") { [weak self] _, _, done in
+            guard let self = self else { return }
+            var value = self.policy
+            var list = self.folders(key)
+            list.remove(at: indexPath.row)
+            value[key] = list
+            self.policy = value
+            done(true)
+        }
+        return UISwipeActionsConfiguration(actions: [remove])
+    }
+    
+    private func addFolder(to key: String) {
+        let alert = UIAlertController(title: key == "read" ? "Read-Only Folder" : "Read and Write Folder",
+                                      message: "A folder inside Nyxian's root, e.g. " + Self.suggestions.joined(separator: ", "), preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "/var/mobile/Documents"
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        let save: (String) -> Void = { [weak self] raw in
+            guard let self = self else { return }
+            var path = raw.trimmingCharacters(in: .whitespaces)
+            guard !path.isEmpty, !path.contains("..") else { return }
+            if !path.hasPrefix("/") && !path.hasPrefix("$(") { path = "/" + path }
+            while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
+            var value = self.policy
+            var list = self.folders(key)
+            if !list.contains(path) { list.append(path) }
+            value[key] = list
+            self.policy = value
+        }
+        for suggestion in Self.suggestions where !folders(key).contains(suggestion) {
+            alert.addAction(UIAlertAction(title: suggestion, style: .default) { _ in save(suggestion) })
+        }
+        alert.addAction(UIAlertAction(title: "Add Typed Folder", style: .default) { _ in save(alert.textFields?.first?.text ?? "") })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(alert, animated: true)
+    }
+    
+    private func endRunning() {
+        let entries = PEProcessManager.shared().forkProcessSnapshot() ?? []
+        var ended = 0
+        for entry in entries {
+            guard let pid = entry["pid"] as? Int, pid > 1, pid != Int(getpid()),
+                  ForkPermissionProgram(processEntry: entry)?.key == program.key else { continue }
+            if PEProcessManager.shared().forkSendSignal(SIGKILL, toProcessIdentifier: pid_t(pid)) { ended += 1 }
+        }
+        let alert = UIAlertController(title: ended > 0 ? "\(program.name) ended" : "\(program.name) is not running",
+                                      message: "Start it again and it uses these permissions.", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+        present(alert, animated: true)
     }
 }
