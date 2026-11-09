@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.18.1
+ Fork doctoralvarez/Nyxian — version 1.19.0
  Changelog:
+  - 1.19.0 (2026-11-08): the runtime comes with numpy, scipy, pandas,
+    matplotlib and scikit-learn; on an update they join the kept packages
+    once (never over your own versions); bundled binaries are signed once;
+    no PYTHONPYCACHEPREFIX (the runtime ships its bytecode).
   - 1.18.1 (2026-11-08): pip also looks in Flet's index of mobile wheels
     (scipy, scikit-learn, … for iOS); "Install Science Pack" in Packages.
   - 1.18.0 (2026-11-08): Python cells (# %%) run in a console that stays open
@@ -3535,6 +3539,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         }
     }
     private static let signingNowKey = "fork.python.signingNow"
+    private static let bundledMergedKey = "fork.python.bundledMerged"
     private static let skippedKey = "fork.python.signingSkipped"
     private static let queue = DispatchQueue(label: "fork.python.install")
     
@@ -3595,18 +3600,40 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                 guard LCUtils.signMachOWithoutPatch(at: url) else { throw Failure.signing(url.lastPathComponent) }
                 _ = trust_nxt2_sign(url.path, [String: Any]() as CFDictionary, true, nil)
             }
+            /* bundled packages were just signed: not again when site-packages is put together */
+            var signedNow: [String: Double] = [:]
+            for url in binaries where url.path.hasPrefix(sitePackages.path + "/") {
+                signedNow[url.path] = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?.timeIntervalSince1970 ?? 0
+            }
+            defaults.set(signedNow, forKey: signedKey)
             progress("Signing python3…")
             try? fm.removeItem(at: launcherOriginal)
             try? fm.copyItem(at: launcherURL, to: launcherOriginal)
             guard signLauncher(launcherURL) else { throw Failure.signing("python3") }
             
             /* pip, straight from ensurepip's bundled wheel (ensurepip itself needs subprocesses) */
+            let bundledList = (try? String(contentsOf: home.appendingPathComponent("BUNDLED_PACKAGES"), encoding: .utf8)) ?? ""
             if fm.fileExists(atPath: kept.path) {
                 progress("Keeping your packages…")
+                /* packages that come with the runtime (numpy, scipy, …) join the kept ones, once per
+                   new set — never over a version installed by you, and not again after you uninstalled them */
+                if defaults.string(forKey: bundledMergedKey) != bundledList {
+                    func distribution(_ name: String) -> String {
+                        String(name.prefix { $0 != "-" }).lowercased().replacingOccurrences(of: "-", with: "_").replacingOccurrences(of: ".", with: "_")
+                    }
+                    let keptItems = Set((try? fm.contentsOfDirectory(atPath: kept.path)) ?? [])
+                    let keptDistributions = Set(keptItems.filter { $0.hasSuffix(".dist-info") }.map(distribution))
+                    for item in (try? fm.contentsOfDirectory(atPath: sitePackages.path)) ?? [] {
+                        if keptItems.contains(item) { continue }
+                        if item.hasSuffix(".dist-info"), keptDistributions.contains(distribution(item)) { continue }
+                        try? fm.moveItem(at: sitePackages.appendingPathComponent(item), to: kept.appendingPathComponent(item))
+                    }
+                }
                 try? fm.removeItem(at: sitePackages)
                 try? fm.createDirectory(at: sitePackages.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try? fm.moveItem(at: kept, to: sitePackages)
             }
+            defaults.set(bundledList, forKey: bundledMergedKey)
             if !fm.fileExists(atPath: sitePackages.appendingPathComponent("pip").path) {
                 progress("Installing pip…")
                 try? fm.createDirectory(at: sitePackages, withIntermediateDirectories: true)
@@ -3769,7 +3796,8 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             "PIP_FIND_LINKS": "https://github.com/doctoralvarez/Nyxian/releases/expanded_assets/ios-wheels",
             /* plt.show() saves the figures and Nyxian shows them (nyxian_mplbackend) */
             "MPLBACKEND": "module://nyxian_mplbackend",
-            "PYTHONPYCACHEPREFIX": rootfs.appendingPathComponent("var/mobile/Python/.pycache").path,
+            /* no PYTHONPYCACHEPREFIX: the runtime ships its bytecode in __pycache__ (compiled by CI),
+               and opt/python is writable for the rest */
             "TERM": "xterm-256color",
             /* scripts pip installs (idna, normalizer, …) live in bin/; on PATH pip
                does not warn. Both spellings: pip compares paths as text and

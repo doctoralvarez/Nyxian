@@ -1,6 +1,11 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.2.0
+# Fork doctoralvarez/Nyxian — version 1.3.0
 # Changelog:
+#  - 1.3.0 (2026-11-08): the runtime comes with numpy, scipy, pandas,
+#    matplotlib and scikit-learn (and their dependencies) installed, from the
+#    fork's ios-wheels release / BeeWare / Flet; everything is compiled to
+#    bytecode here (unchecked-hash .pyc, CPython 3.14), so the device does
+#    not compile the standard library or the packages on first import.
 #  - 1.2.0 (2026-11-08): jedi and parso (pure Python) in lib/nyxian, for the
 #    editor's Python completion; not in site-packages, so pip leaves them be.
 #  - 1.1.0 (2026-11-08): binary packages from pip (numpy, matplotlib…) link
@@ -92,6 +97,40 @@ for wheel in "$WORK"/jedi/*.whl; do
 done
 du -sh "$HOME_DIR/lib/nyxian"
 
+echo ">>> bundled packages (installed from the start)"
+SITE="$STDLIB/site-packages"
+mkdir -p "$WORK/wheels" "$SITE"
+python3 -m pip download --quiet --only-binary :all: -d "$WORK/wheels" \
+  --platform ios_13_0_arm64_iphoneos --python-version "${PY_VER}" --implementation cp --abi "cp${PY_VER/./}" \
+  --find-links https://github.com/doctoralvarez/Nyxian/releases/expanded_assets/ios-wheels \
+  --extra-index-url https://pypi.anaconda.org/beeware/simple \
+  --extra-index-url https://pypi.flet.dev \
+  numpy scipy pandas matplotlib scikit-learn
+for wheel in "$WORK"/wheels/*.whl; do
+  echo "  $(basename "$wheel")"
+  unzip -q -o "$wheel" -d "$SITE"
+done
+# what pip would do on install: no .data folders left, and an INSTALLER file
+for data in "$SITE"/*.data; do
+  [ -d "$data" ] || continue
+  [ -d "$data/purelib" ] && cp -R "$data/purelib/." "$SITE/"
+  [ -d "$data/platlib" ] && cp -R "$data/platlib/." "$SITE/"
+  rm -rf "$data"
+done
+for info in "$SITE"/*.dist-info; do echo "pip" > "$info/INSTALLER"; done
+# Nyxian's own list of what came bundled (re-added to a kept site-packages once)
+ls "$SITE" > "$HOME_DIR/BUNDLED_PACKAGES"
+du -sh "$SITE"
+
+echo ">>> bytecode (CPython $(python3 -c 'import sys; print(sys.version.split()[0])') here)"
+HOST_TAG="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+if [ "$HOST_TAG" = "$PY_VER" ]; then
+  python3 -m compileall -q -j 0 --invalidation-mode unchecked-hash "$HOME_DIR/lib" >/dev/null 2>&1 || true
+  echo "  $(find "$HOME_DIR/lib" -name "*.pyc" | wc -l) .pyc files"
+else
+  echo "  host Python is $HOST_TAG, not $PY_VER: no bytecode shipped"
+fi
+
 echo "${PY_VER}-${PY_BUILD}" > "$HOME_DIR/VERSION"
 cp "$WORK/VERSIONS" "$HOME_DIR/VERSIONS" 2>/dev/null || true
 
@@ -101,4 +140,4 @@ rm -f "$OUT"
 ls -la "$OUT"
 # a runtime is tens of MB; anything far bigger means the wrong folder was packed
 SIZE=$(stat -f%z "$OUT")
-[ "$SIZE" -lt 150000000 ] || { echo "python-ios.zip is $SIZE bytes: refusing (wrong folder packed?)"; rm -f "$OUT"; exit 1; }
+[ "$SIZE" -lt 450000000 ] || { echo "python-ios.zip is $SIZE bytes: refusing (wrong folder packed?)"; rm -f "$OUT"; exit 1; }

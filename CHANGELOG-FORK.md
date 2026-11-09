@@ -4,6 +4,19 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.31.0 — 2026-11-08
+
+- **Python comes with the science pack installed**: numpy, scipy, pandas,
+  matplotlib and scikit-learn (with their dependencies) are part of the
+  runtime inside the app — nothing to download after installing or
+  reinstalling Nyxian. On an update they join the packages you already have,
+  once, never over a version you installed yourself, and not again after you
+  uninstall one.
+- **Faster first imports**: the standard library and the bundled packages
+  ship compiled to bytecode (by CI, CPython 3.14, unchecked-hash .pyc), so the
+  device does not compile them the first time; `PYTHONPYCACHEPREFIX` is gone.
+- Bundled binaries are signed once while unpacking, not again afterwards.
+
 ## 1.30.0 — 2026-11-08
 
 - **scipy and scikit-learn for Python on iOS**: pip also looks in Flet's index
