@@ -64,7 +64,7 @@ case "$command" in
     while IFS= read -r asset; do
       base=${asset%.part[0-9][0-9]}
       # shellcheck disable=SC2053
-      [[ $base == $pattern ]] && match=$base
+      if [[ $base == $pattern ]]; then match=$base; fi
     done < <(gh release view "$tag" -R "$repo" --json assets -q '.assets | sort_by(.createdAt) | .[].name' 2>/dev/null || true)
     if [ -z "$match" ]; then
       echo "backup: nothing like $pattern on $repo ($tag)"
