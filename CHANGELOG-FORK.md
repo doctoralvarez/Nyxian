@@ -4,6 +4,23 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.36.0 — 2026-11-09
+
+- **Processes** (Settings → Management → Processes): every process of
+  Nyxian's kernel with its PID, parent, group, state (running, stopped,
+  zombie), CPU, memory, threads and run time, updated every second; search,
+  sort by PID/CPU/memory/name, pause updates. Tap one to stop (SIGSTOP),
+  continue, interrupt, terminate or kill it (swipe: Stop/Continue, Kill);
+  PID 1 (launchd) asks first.
+- **Kernel Log** (Management → Kernel Log (kmsg)): what the kernel logs, of
+  this launch (live, follows the end) or of the previous one (to see why it
+  crashed); filter lines, errors in red, copy, share as a file.
+- **Job control** in terminal windows: ^Z stops the program
+  (`[1]+ Stopped`) and the window takes commands: `fg` continues it here,
+  `bg` in the background (its output still shows), `jobs`, `kill [-9]`,
+  `exit`, `help`; ^Z stops a job in the background again. A program stopped
+  or continued from Processes is noticed too.
+
 ## 1.35.0 — 2026-11-09
 
 - **Real terminal line discipline** (canonical mode, as on macOS/Linux): a

@@ -20,6 +20,12 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-09): -forkProcessSnapshot, -forkSendSignal:toProcessIdentifier:.
+*/
+
 #ifndef PEPROCESSMANAGER_H
 #define PEPROCESSMANAGER_H
 
@@ -39,6 +45,13 @@
 - (PEProcess*)processForBundleIdentifier:(NSString*)bundleIdentifier;
 
 - (void)killAllRunningProcesses;
+
+/* fork: every process of Nyxian's kernel, by pid: @{ @"pid", @"ppid", @"pgid"?, @"sid"?, @"uid", @"name",
+   @"state" (running, stopped, zombie, starting), @"uptime"? (s), and for processes Nyxian runs
+   @"displayName"?, @"bundleIdentifier"?, @"executablePath"?, @"cpu"?, @"memory"?, @"threads"? } */
+- (NSArray<NSDictionary<NSString*,id>*>*)forkProcessSnapshot;
+/* fork: a signal to any process (SIGSTOP, SIGCONT, SIGTERM, SIGKILL…) */
+- (BOOL)forkSendSignal:(int)signal toProcessIdentifier:(pid_t)pid;
 
 @end
 

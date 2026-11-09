@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.5.0
+ Fork doctoralvarez/Nyxian — version 1.6.0
  Changelog:
+  - 1.6.0 (2026-11-09): job control: ^Z stops the program ("[1]+ Stopped")
+    and the window takes commands — fg (continue here), bg (continue in the
+    background), jobs, kill [-9], help; ^Z stops a job in the background
+    again. A program stopped or continued elsewhere (Processes) is noticed.
   - 1.5.0 (2026-11-09): the terminal starts in canonical mode with echo
     (ICANON, ECHO, ECHOE, ECHOKE, ECHOCTL, IEXTEN, IUTF8): what a program
     reads with scanf/fgets/readLine() is shown and can be edited (⌫, ^W, ^U),
@@ -46,7 +50,15 @@
 #import <LindChain/ProcEnvironment/PEProcessManager.h>
 #import <Frameworks/LiveProcessLegacy/LindChain/Services/bootstrapd/LDEApplicationWorkspace.h>
 #import <LindChain/ProcEnvironment/Surface/tty/tty.h>
+#import <LindChain/ProcEnvironment/Surface/proc/lookup.h>
 #import <Nyxian-Swift.h>
+
+/* fork: job control states of the window's program */
+typedef NS_ENUM(NSInteger, NXForkJobState) {
+    NXForkJobForeground = 0,    /* keys go to the program */
+    NXForkJobStopped = 1,       /* ^Z: keys go to the job prompt */
+    NXForkJobBackground = 2,    /* bg: runs, keys go to the job prompt */
+};
 
 @interface NXWindowSessionTerminal () <TerminalViewDelegateObjC>
 
@@ -55,6 +67,12 @@
 @property (nonatomic) bool atExit;
 @property (nonatomic) id_t identifier;
 @property (nonatomic) ksurface_tty_t *tty;
+
+/* fork: job control */
+@property (nonatomic) NXForkJobState forkJobState;
+@property (nonatomic,strong) dispatch_source_t forkJobTimer;
+@property (nonatomic,strong) NSMutableData *forkJobLine;
+@property (nonatomic) int forkJobEscape;
 
 @end
 
@@ -197,6 +215,7 @@
         [[NXWindowServer shared] closeWindowWithIdentifier:strongSelf.windowIdentifier withCompletion:nil];
     };
     [_process addObserver:self];
+    [self forkStartJobControl];
     
     _terminal.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:_terminal];
@@ -266,6 +285,13 @@
         [[NXWindowServer shared] closeWindowWithIdentifier:self.windowIdentifier withCompletion:nil];
     }
     
+    /* fork: while the job is stopped or in the background, keys are commands */
+    if(self.forkJobState != NXForkJobForeground && !self.atExit)
+    {
+        [self forkJobInput:data];
+        return;
+    }
+    
     write(self.terminal.ttyHandle.fileDescriptor, data.bytes, data.length);
 }
 
@@ -292,6 +318,12 @@
     {
         return;
     }
+    
+    /* fork: no job left to control */
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self forkStopJobControl];
+        self.forkJobState = NXForkJobForeground;
+    });
     
     /* fork: e.g. a Python run copies the files the script made into its project */
     if(self.exitHandler != nil)
@@ -343,6 +375,245 @@
     return YES;
 }
 
+/* MARK: fork — job control */
+
+- (NSString*)forkJobName
+{
+    NSString *name = self.title.length ? self.title : self.utilityPath.lastPathComponent;
+    return name.length ? name : @"job";
+}
+
+/* text for the screen, through the tty's output (LF becomes CR LF) */
+- (void)forkJobPrint:(NSString*)text
+{
+    if(_tty == NULL) return;
+    const char *bytes = text.UTF8String;
+    size_t left = strlen(bytes);
+    while(left > 0)
+    {
+        ssize_t written = write(_tty->userspacefd[SLAVEFD], bytes, left);
+        if(written <= 0) return;
+        bytes += written;
+        left -= (size_t)written;
+    }
+}
+
+- (void)forkJobPrompt
+{
+    [self forkJobPrint:@"\033[1mjob>\033[0m "];
+}
+
+- (void)forkStartJobControl
+{
+    if(self.forkJobTimer != nil) return;
+    self.forkJobState = NXForkJobForeground;
+    self.forkJobLine = [NSMutableData data];
+    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC), 250 * NSEC_PER_MSEC, 50 * NSEC_PER_MSEC);
+    __weak typeof(self) weakSelf = self;
+    dispatch_source_set_event_handler(timer, ^{
+        [weakSelf forkJobTick];
+    });
+    self.forkJobTimer = timer;
+    dispatch_resume(timer);
+}
+
+- (void)forkStopJobControl
+{
+    if(self.forkJobTimer != nil)
+    {
+        dispatch_source_cancel(self.forkJobTimer);
+        self.forkJobTimer = nil;
+    }
+}
+
+/* the kernel's view of the program: stopped (SSTOP) or not; -1 when it is gone */
+- (int)forkJobIsStopped
+{
+    PEProcess *process = self.process;
+    if(process == nil || self.atExit) return -1;
+    ksurface_proc_t *proc = NULL;
+    if(proc_for_pid(process.pid, &proc) != KERN_SUCCESS || proc == NULL) return -1;
+    kvo_rdlock(proc);
+    char stat = proc->bsd.kp_proc.p_stat;
+    kvo_unlock(proc);
+    kvo_release(proc);
+    if(stat == SZOMB) return -1;
+    return stat == SSTOP ? 1 : 0;
+}
+
+- (void)forkJobTick
+{
+    int stopped = [self forkJobIsStopped];
+    if(stopped < 0) return;
+    if(stopped == 1 && self.forkJobState != NXForkJobStopped)
+    {
+        self.forkJobState = NXForkJobStopped;
+        [self.forkJobLine setLength:0];
+        [self forkJobPrint:[NSString stringWithFormat:@"\n\033[33m[1]+  Stopped\033[0m                 %@\n"
+                            "fg: continue here · bg: in the background · kill: end it · help\n", [self forkJobName]]];
+        [self forkJobPrompt];
+    }
+    else if(stopped == 0 && self.forkJobState == NXForkJobStopped)
+    {
+        /* continued from somewhere else (Processes) */
+        self.forkJobState = NXForkJobForeground;
+        [self forkJobPrint:[NSString stringWithFormat:@"\n[1]+  %@ (continued)\n", [self forkJobName]]];
+    }
+}
+
+- (void)forkJobInput:(NSData*)data
+{
+    const unsigned char *bytes = data.bytes;
+    for(NSUInteger i = 0; i < data.length; i++)
+    {
+        unsigned char c = bytes[i];
+        /* arrows, bracketed paste marks… are not commands */
+        if(self.forkJobEscape == 1)
+        {
+            self.forkJobEscape = (c == '[' || c == 'O') ? 2 : 0;
+            continue;
+        }
+        if(self.forkJobEscape == 2)
+        {
+            if(c >= 0x40 && c <= 0x7e) self.forkJobEscape = 0;
+            continue;
+        }
+        if(c == 0x1b)
+        {
+            self.forkJobEscape = 1;
+            continue;
+        }
+        if(c == '\r' || c == '\n')
+        {
+            [self forkJobPrint:@"\n"];
+            NSString *line = [[NSString alloc] initWithData:self.forkJobLine encoding:NSUTF8StringEncoding] ?: @"";
+            [self.forkJobLine setLength:0];
+            [self forkJobRun:[line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]];
+            if(self.forkJobState == NXForkJobForeground)
+            {
+                /* the rest goes to the program again */
+                if(i + 1 < data.length && c == '\r' && bytes[i + 1] == '\n') i++;
+                if(i + 1 < data.length)
+                {
+                    write(self.terminal.ttyHandle.fileDescriptor, bytes + i + 1, data.length - i - 1);
+                }
+                return;
+            }
+            continue;
+        }
+        if(c == 0x7f || c == 0x08)
+        {
+            NSString *line = [[NSString alloc] initWithData:self.forkJobLine encoding:NSUTF8StringEncoding];
+            if(line.length > 0)
+            {
+                NSRange last = [line rangeOfComposedCharacterSequenceAtIndex:line.length - 1];
+                NSData *kept = [[line substringToIndex:last.location] dataUsingEncoding:NSUTF8StringEncoding];
+                self.forkJobLine = [kept mutableCopy];
+                [self forkJobPrint:@"\b \b"];
+            }
+            continue;
+        }
+        if(c == 0x03)
+        {
+            [self.forkJobLine setLength:0];
+            [self forkJobPrint:@"^C\n"];
+            [self forkJobPrompt];
+            continue;
+        }
+        if(c == 0x15)
+        {
+            while(self.forkJobLine.length > 0) [self forkJobInput:[NSData dataWithBytes:"\x7f" length:1]];
+            continue;
+        }
+        if(c == 0x1a)
+        {
+            if(self.forkJobState == NXForkJobBackground)
+            {
+                [self forkJobPrint:@"^Z"];
+                [self.process sendSignal:SIGTSTP];
+            }
+            continue;
+        }
+        if(c < 0x20)
+        {
+            continue;
+        }
+        [self.forkJobLine appendBytes:&c length:1];
+        write(_tty->userspacefd[SLAVEFD], &c, 1);
+    }
+}
+
+- (void)forkJobRun:(NSString*)line
+{
+    NSArray<NSString*> *words = [[line componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceCharacterSet]
+                                 filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"length > 0"]];
+    NSString *command = words.firstObject.lowercaseString ?: @"";
+    NSString *name = [self forkJobName];
+    NSString *status = self.forkJobState == NXForkJobStopped ? @"Stopped" : @"Running";
+    
+    if(command.length == 0)
+    {
+        [self forkJobPrompt];
+    }
+    else if([command isEqualToString:@"fg"] || [command isEqualToString:@"%1"] || [command isEqualToString:@"%"])
+    {
+        [self forkJobPrint:[NSString stringWithFormat:@"%@\n", name]];
+        BOOL wasStopped = self.forkJobState == NXForkJobStopped;
+        self.forkJobState = NXForkJobForeground;
+        if(wasStopped) [self.process sendSignal:SIGCONT];
+        /* a full-screen program draws itself again */
+        [self.process sendSignal:SIGWINCH];
+    }
+    else if([command isEqualToString:@"bg"])
+    {
+        if(self.forkJobState == NXForkJobBackground)
+        {
+            [self forkJobPrint:@"bg: the job is already running in the background\n"];
+        }
+        else
+        {
+            self.forkJobState = NXForkJobBackground;
+            [self.process sendSignal:SIGCONT];
+            [self forkJobPrint:[NSString stringWithFormat:@"[1]+ %@ &\n", name]];
+        }
+        [self forkJobPrompt];
+    }
+    else if([command isEqualToString:@"jobs"])
+    {
+        [self forkJobPrint:[NSString stringWithFormat:@"[1]+  %@   %@ (PID %d)\n", status, name, self.process.pid]];
+        [self forkJobPrompt];
+    }
+    else if([command isEqualToString:@"kill"])
+    {
+        BOOL force = [words containsObject:@"-9"] || [words containsObject:@"-KILL"] || [words containsObject:@"-SIGKILL"];
+        [self.process sendSignal:force ? SIGKILL : SIGTERM];
+        if(!force && self.forkJobState == NXForkJobStopped)
+        {
+            /* a stopped program only sees SIGTERM once it runs */
+            [self.process sendSignal:SIGCONT];
+        }
+        [self forkJobPrint:[NSString stringWithFormat:@"[1]+  %@ %@\n", force ? @"Killed" : @"Terminated", name]];
+    }
+    else if([command isEqualToString:@"exit"] || [command isEqualToString:@"close"])
+    {
+        [[NXWindowServer shared] closeWindowWithIdentifier:self.windowIdentifier withCompletion:nil];
+    }
+    else
+    {
+        if(![command isEqualToString:@"help"]) [self forkJobPrint:[NSString stringWithFormat:@"%@: not a job command\n", words.firstObject]];
+        [self forkJobPrint:[NSString stringWithFormat:
+            @"Job control of this window (%@, %@):\n"
+             "  fg         continue it here (keys go to it again)\n"
+             "  bg         continue it in the background (its output still shows)\n"
+             "  jobs       its state\n"
+             "  kill [-9]  end it (-9: at once)\n"
+             "  exit       close the window\n"
+             "  ^Z         stops it again while it runs in the background\n", name, status.lowercaseString]];
+        [self forkJobPrompt];
+    }
+}
+
 - (void)forkBringToFront
 {
     [[NXWindowServer shared] activateWindowForIdentifier:self.windowIdentifier animated:YES withCompletion:nil];
@@ -350,6 +621,7 @@
 
 - (void)dealloc
 {
+    [self forkStopJobControl];
     if(_tty != NULL)
     {
         kvo_release(_tty);
