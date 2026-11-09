@@ -20,6 +20,13 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-09): state of the line discipline (the line being
+    typed, ^V pending, end of input sent).
+*/
+
 #ifndef TTY_DEF_H
 #define TTY_DEF_H
 
@@ -62,6 +69,12 @@ struct ksurface_tty {
     /* controlling session and foreground process group */
     pid_t sid;
     pid_t pgrp;
+    
+    /* fork: line discipline (ICANON): the line being typed, ^V pending, end of input sent */
+    char fork_line[TTY_MAX_RD];
+    size_t fork_llen;
+    int fork_lnext;
+    int fork_eof;
 };
 
 #endif /* TTY_DEF_H */

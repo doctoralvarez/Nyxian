@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.20.0
+ Fork doctoralvarez/Nyxian — version 1.21.0
  Changelog:
+  - 1.21.0 (2026-11-09): Python's line editor reads in raw mode (the
+    terminal now edits lines and echoes by itself, canonical mode): it is
+    switched off while input() reads and for the whole REPL session.
   - 1.20.0 (2026-11-09): Python — variable inspector of the cell console
     (nyxian_repl snapshot, ForkPythonVariablesViewController: type, shape,
     dtype, value; DataFrames and arrays as tables); pyflakes linting in
@@ -2778,8 +2781,10 @@ enum ForkPython {
     /// Python files Nyxian adds to site-packages: the line editor, the REPL, input() with echo.
     private static let helperFiles: [String: String] = [
         "nyxian_lineedit.py": #"""
-# Nyxian line editor: Nyxian's terminal hands keys over raw (no echo, no line
-# editing), so Python does both here. Used by input() and the Nyxian REPL.
+# Nyxian line editor: echo, ← →, history, paste, indentation. Nyxian's
+# terminal edits lines itself too (canonical mode, like macOS), which is
+# switched off while this editor reads (raw mode) and back on after.
+# Used by input() and the Nyxian REPL (raw for its whole session).
 # NYXIAN_KEYDEBUG=1 shows the code of every byte received.
 import codecs
 import os
@@ -2933,7 +2938,59 @@ def _input_waiting():
 _QUOTES = {"\u201c": '"', "\u201d": '"', "\u201e": '"', "\u2018": "'", "\u2019": "'"}
 
 
+_session_raw = False
+
+
+def _set_raw():
+    """Raw mode for this editor: no line editing or echo by the terminal;
+    signals (Ctrl-C) stay. Returns the previous settings (None: unchanged)."""
+    try:
+        import termios
+        old = termios.tcgetattr(0)
+        if not old[3] & (termios.ICANON | termios.ECHO | termios.ECHONL | termios.IEXTEN):
+            return None
+        new = [old[0], old[1], old[2], old[3], old[4], old[5], list(old[6])]
+        new[3] &= ~(termios.ICANON | termios.ECHO | termios.ECHONL | termios.IEXTEN)
+        new[6][termios.VMIN] = 1
+        new[6][termios.VTIME] = 0
+        termios.tcsetattr(0, termios.TCSANOW, new)
+        return old
+    except Exception:
+        return None
+
+
+def _restore(old):
+    if old is not None:
+        try:
+            import termios
+            termios.tcsetattr(0, termios.TCSANOW, old)
+        except Exception:
+            pass
+
+
+def raw_session():
+    """Raw mode until Python exits (the REPL: keys typed while code runs
+    wait for the editor instead of being echoed by the terminal)."""
+    global _session_raw
+    if _session_raw:
+        return
+    old = _set_raw()
+    _session_raw = True
+    if old is not None:
+        import atexit
+        atexit.register(_restore, old)
+
+
 def read_line(prompt="", indent="", code=False):
+    old = None if _session_raw else _set_raw()
+    try:
+        return _read_line(prompt, indent, code)
+    finally:
+        if not _session_raw:
+            _restore(old)
+
+
+def _read_line(prompt="", indent="", code=False):
     """Reads one line. indent is shown and kept in front of the line (not
     when text was pasted or typed ahead); code=True turns curly quotes from
     the keyboard into straight ones.
@@ -3111,7 +3168,7 @@ import os
 import sys
 import traceback
 
-from nyxian_lineedit import Pasted, _flush, _write, read_line
+from nyxian_lineedit import Pasted, _flush, _write, raw_session, read_line
 
 
 def _describe(value):
@@ -3267,6 +3324,7 @@ def _warm_pip():
 
 
 def main():
+    raw_session()
     import threading
     threading.Thread(target=_warm_pip, daemon=True).start()
     banner = (
@@ -3304,13 +3362,14 @@ if __name__ == "__main__":
 import os
 import sys
 
-from nyxian_lineedit import _write
+from nyxian_lineedit import _write, raw_session
 
 NAMES = {3: "Ctrl-C", 4: "Ctrl-D", 9: "Tab", 10: "LF (Enter)", 13: "CR (Enter)", 27: "Esc", 127: "Backspace"}
 
 
 def main():
     _write("Python keyboard test: press keys, Enter included. Ctrl-D twice quits.\n")
+    raw_session()
     try:
         _write("stdin isatty=%s stdout isatty=%s\n" % (os.isatty(0), os.isatty(1)))
         import termios
@@ -3678,8 +3737,8 @@ if __name__ == "__main__":
     main()
 """#,
         "sitecustomize.py": #"""
-# Nyxian: only when Python runs in a Nyxian terminal window, input() echoes
-# what you type (the terminal does not), sys.stdout / sys.stderr write
+# Nyxian: only when Python runs in a Nyxian terminal window, input() uses
+# Nyxian's line editor (history, ← →, paste), sys.stdout / sys.stderr write
 # straight to the terminal, and Ctrl-\ prints where Python is stuck.
 import os
 

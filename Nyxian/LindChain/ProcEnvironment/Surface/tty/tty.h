@@ -20,6 +20,12 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-09): tty_ldisc_mode_changed().
+*/
+
 #ifndef TTY_TTY_H
 #define TTY_TTY_H
 
@@ -28,6 +34,9 @@
 #import <LindChain/ProcEnvironment/Surface/tty/lookup.h>
 
 void tty_kill(ksurface_tty_t *tty, int sig);
+
+/* fork: after TIOCSETA*: a line typed so far is handed over when ICANON goes off; flush drops it */
+void tty_ldisc_mode_changed(ksurface_tty_t *tty, const struct termios *old, int flush);
 
 DEFINE_KVOBJECT_MAIN_EVENT_HANDLER(tty);
 

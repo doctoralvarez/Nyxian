@@ -4,6 +4,22 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.35.0 — 2026-11-09
+
+- **Real terminal line discipline** (canonical mode, as on macOS/Linux): a
+  program that reads lines (C `scanf`/`fgets`, Swift `readLine()`, Python
+  `sys.stdin.readline()`, pip's "Proceed (Y/n)?") now **shows what you type**
+  and lets you edit it before Enter: ⌫ erases a character (a whole ñ/á/€),
+  ^W a word, ^U the line, ^R shows it again, ^V types the next key as it is.
+  **^D on an empty line ends the input** (`read()` returns 0, `EOFError` in
+  Python); with text, it hands it over without Enter. ^C/^Z/^\ show as ^C…
+  and drop the half-typed line.
+- Programs that read keys one by one turn it off as usual (`tcsetattr`,
+  raw mode); Nyxian's Python REPL and `input()` do so, so they behave as
+  before. Without canonical mode nothing changed (^U still kills).
+- CI tests the line discipline (30 cases) and the Python terminal now starts
+  in canonical mode, as in the app.
+
 ## 1.34.0 — 2026-11-09
 
 - **Variable inspector** (⌥⌘V, Show Variables): the variables of the

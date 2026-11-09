@@ -20,6 +20,14 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-09): TIOCSETA* tell the line discipline about the new
+    mode (a half-typed line is handed over when ICANON goes off;
+    TIOCSETAF drops it).
+*/
+
 #include <LindChain/ProcEnvironment/Surface/libkern/pthread.h>
 #include <LindChain/ProcEnvironment/Surface/sys/host/ioctl.h>
 #include <LindChain/ProcEnvironment/Surface/tty/tty.h>
@@ -86,7 +94,10 @@ DEFINE_SYSCALL_HANDLER(ioctl)
                 goto out_fault;
             }
             
+            struct termios previous = tty->t;
             memcpy(&(tty->t), &temp, sizeof(struct termios));
+            /* fork: the line discipline follows the new mode (TIOCSETAF drops typed input) */
+            tty_ldisc_mode_changed(tty, &previous, u_flag == TIOCSETAF);
             pthread_resume(tty->pump_thread);
             break;
         }

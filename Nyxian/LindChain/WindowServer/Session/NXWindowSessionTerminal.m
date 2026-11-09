@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.0
+ Fork doctoralvarez/Nyxian — version 1.5.0
  Changelog:
+  - 1.5.0 (2026-11-09): the terminal starts in canonical mode with echo
+    (ICANON, ECHO, ECHOE, ECHOKE, ECHOCTL, IEXTEN, IUTF8): what a program
+    reads with scanf/fgets/readLine() is shown and can be edited (⌫, ^W, ^U),
+    ^D on an empty line ends its input. Raw programs switch it off.
   - 1.4.0 (2026-11-08): forkIsRunning, forkSendText: (text typed into the
     program, for Python cells) and forkBringToFront.
   - 1.3.0 (2026-11-08): exitHandler: its text is shown when the process ends.
@@ -89,20 +93,28 @@
     
     /* setting tty properties */
     kvo_wrlock(tty);
-    tty->t.c_iflag = ICRNL | INPCK /*| IXON | BRKINT*/; /* fork: no ISTRIP, UTF-8 needs the 8th bit */
+    tty->t.c_iflag = ICRNL | INPCK | IUTF8 /*| IXON | BRKINT*/; /* fork: no ISTRIP, UTF-8 needs the 8th bit */
     tty->t.c_oflag = OPOST | ONLCR;
     /*tty->t.c_cflag = CS8 | CREAD | CLOCAL;*/
-    tty->t.c_lflag = /*ICANON | ECHO | ECHOE | ECHOK |*/ ISIG /*| IEXTEN*/;
-    tty->t.c_cc[VINTR]  = 0x03;
-    tty->t.c_cc[VQUIT]  = 0x1C;
-    /*tty->t.c_cc[VERASE] = 0x7F;*/
-    tty->t.c_cc[VKILL]  = 0x15;
-    /*tty->t.c_cc[VEOF]   = 0x04;*/
-    tty->t.c_cc[VSUSP]  = 0x1A;
+    /* fork: a real line discipline (see tty.c), like a terminal on macOS or Linux */
+    tty->t.c_lflag = ICANON | ECHO | ECHOE | ECHOK | ECHOKE | ECHOCTL | ISIG | IEXTEN;
+    for(int i = 0; i < NCCS; i++) tty->t.c_cc[i] = _POSIX_VDISABLE;
+    tty->t.c_cc[VINTR]    = 0x03;
+    tty->t.c_cc[VQUIT]    = 0x1C;
+    tty->t.c_cc[VERASE]   = 0x7F;
+    tty->t.c_cc[VKILL]    = 0x15;
+    tty->t.c_cc[VEOF]     = 0x04;
+    tty->t.c_cc[VSUSP]    = 0x1A;
+    tty->t.c_cc[VWERASE]  = 0x17;
+    tty->t.c_cc[VREPRINT] = 0x12;
+    tty->t.c_cc[VLNEXT]   = 0x16;
     /*tty->t.c_cc[VSTART] = 0x11;
-    tty->t.c_cc[VSTOP]  = 0x13;
+    tty->t.c_cc[VSTOP]  = 0x13;*/
     tty->t.c_cc[VMIN]   = 1;
-    tty->t.c_cc[VTIME]  = 0;*/
+    tty->t.c_cc[VTIME]  = 0;
+    tty->fork_llen = 0;
+    tty->fork_lnext = 0;
+    tty->fork_eof = 0;
     kvo_unlock(tty);
     
     kvo_retain(tty);

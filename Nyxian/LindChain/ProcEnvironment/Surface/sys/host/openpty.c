@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-09): new ptys start in canonical mode with echo, as on
+    macOS (ICANON, ECHO, …, IUTF8; VERASE, VEOF, VWERASE, …).
   - 1.0.0 (2026-11-08): ISTRIP off, so UTF-8 input (ñ, accents) arrives
     intact.
 */
@@ -49,14 +51,25 @@ DEFINE_SYSCALL_HANDLER(openpty)
     tty->sid = 0;
     tty->pgrp = 0;
     
-    tty->t.c_iflag = ICRNL | INPCK; /* fork: no ISTRIP */
+    tty->t.c_iflag = ICRNL | INPCK | IUTF8; /* fork: no ISTRIP */
     tty->t.c_oflag = OPOST | ONLCR;
-    tty->t.c_lflag = ISIG;
+    tty->t.c_lflag = ICANON | ECHO | ECHOE | ECHOK | ECHOKE | ECHOCTL | ISIG | IEXTEN; /* fork: line discipline */
     
+    for(int i = 0; i < NCCS; i++) tty->t.c_cc[i] = _POSIX_VDISABLE;
     tty->t.c_cc[VINTR] = 0x03;
     tty->t.c_cc[VQUIT] = 0x1c;
+    tty->t.c_cc[VERASE] = 0x7f;
     tty->t.c_cc[VKILL] = 0x15;
+    tty->t.c_cc[VEOF] = 0x04;
     tty->t.c_cc[VSUSP] = 0x1a;
+    tty->t.c_cc[VWERASE] = 0x17;
+    tty->t.c_cc[VREPRINT] = 0x12;
+    tty->t.c_cc[VLNEXT] = 0x16;
+    tty->t.c_cc[VMIN] = 1;
+    tty->t.c_cc[VTIME] = 0;
+    tty->fork_llen = 0;
+    tty->fork_lnext = 0;
+    tty->fork_eof = 0;
     
     tty->ws.ws_col = 80;
     tty->ws.ws_row = 24;

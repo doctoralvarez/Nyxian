@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-# Fork doctoralvarez/Nyxian — version 1.2.0
+# Fork doctoralvarez/Nyxian — version 1.3.0
 # Changelog:
+#  - 1.3.0 (2026-11-09): the pseudo terminal starts like Nyxian's now does
+#    (canonical mode with echo): the REPL must switch to raw by itself, and
+#    a script's input() must give canonical mode back (sys.stdin.readline()).
 #  - 1.2.0 (2026-11-08): pasted blocks (bracketed paste, look-alike spaces,
 #    CR LF, common indentation, tabs).
 #  - 1.1.0 (2026-11-08): checks automatic indentation, pasted blocks and
@@ -31,20 +34,51 @@ def extract(folder):
             handle.write(match.group(1) + "\n")
 
 
-def spawn(folder, module):
+def spawn(folder, module=None, script=None):
     pid, fd = pty.fork()
     if pid == 0:
+        # as NXWindowSessionTerminal.m sets up Nyxian's terminal
         attrs = termios.tcgetattr(0)
-        attrs[0] = termios.ICRNL | termios.INPCK
+        attrs[0] = termios.ICRNL | termios.INPCK | getattr(termios, "IUTF8", 0)
         attrs[1] = termios.OPOST | termios.ONLCR
-        attrs[3] = termios.ISIG
-        attrs[6][termios.VMIN] = 1
-        attrs[6][termios.VTIME] = 0
+        attrs[3] = (termios.ICANON | termios.ECHO | termios.ECHOE | termios.ECHOK | termios.ECHOKE
+                    | termios.ECHOCTL | termios.ISIG | termios.IEXTEN)
         termios.tcsetattr(0, termios.TCSANOW, attrs)
         os.environ.update(NYXIAN_TERMINAL="1", PYTHONPATH=folder, PYTHONUNBUFFERED="1")
         os.chdir(folder)
+        if script:
+            os.execv(sys.executable, [sys.executable, "-q", script])
         os.execv(sys.executable, [sys.executable, "-q", "-m", module])
     return fd
+
+
+SCRIPT = '''import sys, termios
+a = input("a? ")
+print("A=" + a)
+lflag = termios.tcgetattr(0)[3]
+print("canonical=%s echo=%s" % (bool(lflag & termios.ICANON), bool(lflag & termios.ECHO)))
+b = sys.stdin.readline()
+print("B=" + b.strip())
+'''
+
+
+def script_checks(folder):
+    path = os.path.join(folder, "script.py")
+    with open(path, "w") as handle:
+        handle.write(SCRIPT)
+    fd = spawn(folder, script=path)
+    ok = drain(fd, 10, b"a? ").endswith(b"a? ")
+    for byte in b"uno\x7fo\r":
+        os.write(fd, bytes([byte]))
+    out = drain(fd, 5, b"echo=True\r\n")
+    first = b"A=uno" in out and b"canonical=True echo=True" in out
+    print("OK  " if first else "FAIL", "script: input() then canonical mode again ->", out)
+    for byte in b"dos\x7fs\r":
+        os.write(fd, bytes([byte]))
+    out = drain(fd, 5, None)
+    second = b"dos\r\n" in out and b"B=dos" in out
+    print("OK  " if second else "FAIL", "script: sys.stdin.readline() with the terminal's echo and erase ->", out)
+    return ok and first and second
 
 
 def drain(fd, seconds=2.0, until=b">>> "):
@@ -115,6 +149,13 @@ def main():
         ok = expected in out
         failed |= not ok
         print("OK  " if ok else "FAIL", keys, "->", out)
+    # the terminal's echo must be off in the REPL: what was typed shows once
+    os.write(fd, b"'eco'+'x'\r")
+    out = drain(fd, 5)
+    once = out.count(b"'eco'+'x'") == 1 and b"'ecox'" in out
+    failed |= not once
+    print("OK  " if once else "FAIL", "REPL in raw mode (typed text shown once) ->", out)
+    failed |= not script_checks(folder)
     sys.exit(1 if failed else 0)
 
 
