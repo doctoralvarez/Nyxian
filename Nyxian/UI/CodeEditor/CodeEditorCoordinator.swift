@@ -88,7 +88,7 @@ class CodeEditorCoordinator: NSObject, TextViewDelegate {
                 location.isValid = true
                 location.line = CFIndex(line)
                 location.column = CFIndex(column)
-                return MDKDiagnostic(type: .file, level: level, mainSource: url.path, fileSourceLocation: MDKFileSourceLocation(fileURL: url, withSourceLocation: location), message: message)
+                return MDKDiagnostic(type: .file, level: level, mainSource: url.path, fileSourceLocation: MDKFileSourceLocation(fileURL: url, with: location), message: message)
             }
             for problem in ForkPythonJedi.shared.problems(source: text, path: url.path) ?? [] {
                 found.append(diagnostic(problem.0, problem.1, problem.2 ? .error : .warning, problem.3))

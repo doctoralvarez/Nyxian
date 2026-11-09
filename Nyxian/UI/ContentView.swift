@@ -1878,7 +1878,10 @@ final class ForkPythonJedi {
         }
         let toChild = Pipe(), fromChild = Pipe(), errors = Pipe()
         errors.fileHandleForReading.readabilityHandler = { handle in _ = handle.availableData }
-        let table = PEFileTable.empty()
+        guard let table = PEFileTable.empty() else {
+            lastFailure = Date()
+            return false
+        }
         table.appendFileDescriptor(toChild.fileHandleForReading.fileDescriptor, withMappingToLoc: STDIN_FILENO)
         table.appendFileDescriptor(fromChild.fileHandleForWriting.fileDescriptor, withMappingToLoc: STDOUT_FILENO)
         table.appendFileDescriptor(errors.fileHandleForWriting.fileDescriptor, withMappingToLoc: STDERR_FILENO)
