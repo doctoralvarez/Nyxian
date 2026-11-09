@@ -39,7 +39,8 @@ jobs:
 
       - name: Test Swift formatter (fork)
         run: |
-          xcrun swiftc -O -o /tmp/formatter_test tools/fork/formatter_test/main.swift Nyxian/UI/CodeEditor/ForkSwiftFormatter.swift
+          { echo "import Foundation"; sed -n '/^\/\/ BEGIN ForkSwiftFormatter/,/^\/\/ END ForkSwiftFormatter/p' Nyxian/UI/CodeEditor/CodeEditor.swift; } > /tmp/ForkSwiftFormatter.swift
+          xcrun swiftc -O -o /tmp/formatter_test tools/fork/formatter_test/main.swift /tmp/ForkSwiftFormatter.swift
           /tmp/formatter_test
 
       - name: Check pip finds the fork's iOS wheels (fork)

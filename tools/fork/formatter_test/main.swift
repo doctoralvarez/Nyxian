@@ -1,7 +1,8 @@
-// Fork doctoralvarez/Nyxian — version 1.0.0
+// Fork doctoralvarez/Nyxian — version 1.1.0
 // Changelog:
-//  - 1.0.0 (2026-11-08): CI test of ForkSwiftFormatter (built with swiftc
-//    together with Nyxian/UI/CodeEditor/ForkSwiftFormatter.swift).
+//  - 1.1.0 (2026-11-08): the formatter is taken from CodeEditor.swift
+//    (BEGIN/END ForkSwiftFormatter block).
+//  - 1.0.0 (2026-11-08): CI test of ForkSwiftFormatter.
 import Foundation
 
 var failures = 0
