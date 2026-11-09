@@ -4,6 +4,17 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.32.1 — 2026-11-08
+
+- **Bootstrap downloads that survive a bad connection** (the iOS SDK after a
+  fresh install): up to 6 attempts with pauses, each one resuming where the
+  last stopped instead of starting over, waiting while the network is gone,
+  and only an HTTP 2xx answer counts. The error now says why it failed.
+- **A failed bootstrap no longer deletes everything**: the steps already done
+  stay, and the failed step is tried again by itself after 30 s (5 times).
+  Before, a failure reset the bootstrap to zero and builds waited forever for
+  it — likely the cause of ▶ hanging the first time after reinstalling.
+
 ## 1.32.0 — 2026-11-08
 
 - **Rename Symbol (⌃⌘E) by meaning in Swift**: every match of the name in the

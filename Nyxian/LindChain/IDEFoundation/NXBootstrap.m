@@ -20,6 +20,15 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-08): a failed bootstrap step (e.g. the SDK download) no
+    longer deletes what was done and resets to version 0: the steps done stay,
+    the error says why the download failed, and the bootstrap tries again by
+    itself after 30 s (5 times). Downloads retry and resume (fdownload.m).
+*/
+
 #import <LindChain/IDEFoundation/NXBootstrap.h>
 #import <LindChain/IDEFoundation/NXAlertDiagnosticPresenter.h>
 #import <LindChain/Utils/Zip.h>
@@ -150,9 +159,19 @@ extern BOOL PEURLIsContainedIn(NSURL *candidate, NSURL *root);
         {
             NSLog(@"bootstrapping sadly failed :c");
             
-            [NXAlertDiagnosticPresenter notifyUserWithLevel:NXAlertDiagnosticPresenterLevelError withMessage:[NSString stringWithFormat:@"Bootstrapping failed: %@", error.localizedDescription] withDelay:1.0];
-            self.version = 0;
-            [self clearURL:self.rootURL];
+            /* fork: the steps already done stay done (each step cleans up its own folder before it
+               starts), and the failed one is tried again by itself in a while — before, everything was
+               deleted and builds waited for a bootstrap that would never finish */
+            static int retries = 0;
+            retries++;
+            BOOL again = retries <= 5;
+            [NXAlertDiagnosticPresenter notifyUserWithLevel:NXAlertDiagnosticPresenterLevelError withMessage:[NSString stringWithFormat:@"Bootstrapping failed: %@%@", error.localizedDescription, again ? @" — trying again in 30 s" : @" — reopen Nyxian to try again"] withDelay:1.0];
+            if(again)
+            {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                    [self bootstrap];
+                });
+            }
             return;
         }
         
@@ -305,9 +324,10 @@ extern BOOL PEURLIsContainedIn(NSURL *candidate, NSURL *root);
                 
                 [[NSFileManager defaultManager] createDirectoryAtURL:[self.rootURL URLByAppendingPathComponent:@"RootCAs"] withIntermediateDirectories:true attributes:nil error:nil];
                 
-                if(!fdownload(@"https://nyxian.app/bootstrap/org.emexlabs.rootca.v1.pub.nxt2c", @"org.emexlabs.rootca.v1.pub.nxt2c"))
+                NSError *downloadError = nil;
+                if(!fdownloadWithError(@"https://nyxian.app/bootstrap/org.emexlabs.rootca.v1.pub.nxt2c", @"org.emexlabs.rootca.v1.pub.nxt2c", &downloadError))
                 {
-                    error = [NSError errorWithDomain:@"" code:0 userInfo:@{ NSLocalizedDescriptionKey: @"downloading \"https://nyxian.app/bootstrap/org.emexlabs.rootca.v1.pub.nxt2c\" failed" }];
+                    error = [NSError errorWithDomain:@"" code:0 userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"downloading \"https://nyxian.app/bootstrap/org.emexlabs.rootca.v1.pub.nxt2c\" failed: %@", downloadError.localizedDescription ?: @"unknown error"] }];
                     goto report_error;
                 }
                 
@@ -335,9 +355,10 @@ extern BOOL PEURLIsContainedIn(NSURL *candidate, NSURL *root);
                 [[NSFileManager defaultManager] removeItemAtURL:[self.rootURL URLByAppendingPathComponent:@"SDK"] error:nil];
                 [[NSFileManager defaultManager] removeItemAtURL:self.swiftModuleCacheURL error:nil];    /* clearing module cache */
                 
-                if(!fdownload(@"https://nyxian.app/bootstrap/iPhoneOS27.0.sdk.zip", @"sdk.zip"))
+                NSError *downloadError = nil;
+                if(!fdownloadWithError(@"https://nyxian.app/bootstrap/iPhoneOS27.0.sdk.zip", @"sdk.zip", &downloadError))
                 {
-                    error = [NSError errorWithDomain:@"" code:0 userInfo:@{ NSLocalizedDescriptionKey: @"downloading \"https://nyxian.app/bootstrap/iPhoneOS27.0.sdk.zip\" failed" }];
+                    error = [NSError errorWithDomain:@"" code:0 userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"downloading \"https://nyxian.app/bootstrap/iPhoneOS27.0.sdk.zip\" failed: %@", downloadError.localizedDescription ?: @"unknown error"] }];
                     goto report_error;
                 }
                 

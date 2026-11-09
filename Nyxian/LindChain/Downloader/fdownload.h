@@ -29,3 +29,8 @@
  */
 BOOL fdownload(NSString *urlString,
                NSString *destinationPath);
+
+/* fork: retries and resumes (see fdownload.m); outError says why it failed */
+BOOL fdownloadWithError(NSString *urlString,
+                        NSString *destinationPath,
+                        NSError **outError);
