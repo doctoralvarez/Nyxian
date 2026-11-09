@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.12.3
+ Fork doctoralvarez/Nyxian — version 1.13.0
  Changelog:
+  - 1.13.0 (2026-11-08): Python completion from jedi (members after "." too,
+    with signatures and docs); words remain the fallback.
   - 1.12.3 (2026-11-08): "Copy Python Output to Project" also in the ⋯ menu
     on iPhone.
   - 1.12.2 (2026-11-08): LiveEditorRegistry.visiblePythonFile (▶ in Python
@@ -1475,7 +1477,8 @@ final class EditorCompletionController {
         
         /* the compilers know the members after "." (and "->" in C) even before anything is typed */
         let isClang = editor.file.isClang
-        let afterMemberAccess = start > 0 && (editor.file.isSwift || isClang) && (
+        let isPythonFile = editor.file.fileURL?.pathExtension.lowercased() == "py"
+        let afterMemberAccess = start > 0 && (editor.file.isSwift || isClang || isPythonFile) && (
             ns.character(at: start - 1) == 0x2E /* . */ ||
             (isClang && start > 1 && ns.character(at: start - 1) == 0x3E /* > */ && ns.character(at: start - 2) == 0x2D /* - */)
         )
@@ -1530,11 +1533,15 @@ final class EditorCompletionController {
     
     private func compute(text: String, prefixStart: Int, caret: Int, prefix: String, generation currentGeneration: Int) {
         guard let editor = editor else { return }
+        let isPython = editor.file.fileURL?.pathExtension.lowercased() == "py"
         let wantsEngine = (editor.file.isClang || editor.file.isSwift) && !engineBusy
         let server = wantsEngine ? editor.languageServer : nil
-        if server != nil { engineBusy = true }
+        /* fork: Python files ask jedi (nyxian_jedi in a python3 without a window) */
+        let usePython = isPython && !engineBusy
+        if server != nil || usePython { engineBusy = true }
+        let pythonPath = editor.file.fileURL?.path
+        let pythonRoot = editor.project.map { ($0.url as URL).path }
         let words = projectWords
-        let isPython = editor.file.fileURL?.pathExtension.lowercased() == "py"
         let keywords = isPython ? EditorCompletionController.pythonWords : (editor.file.isSwift ? EditorCompletionController.swiftWords : EditorCompletionController.cWords)
         
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -1546,6 +1553,16 @@ final class EditorCompletionController {
                 usedEngine = true
                 let position = EditorCompletionController.lineAndUTF8Column(text, utf16Offset: prefixStart)
                 if let raw = server.completions(line: position.line, utf8Column: position.column, content: text) {
+                    items = EditorCompletionController.rankEngine(raw, prefix: prefix)
+                }
+            }
+            
+            /* fork: jedi for Python, at the caret (1-based line, column in characters) */
+            if usePython {
+                usedEngine = true
+                let before = (text as NSString).substring(to: min(caret, (text as NSString).length))
+                let lines = before.components(separatedBy: "\n")
+                if let raw = ForkPythonJedi.shared.completions(source: text, line: lines.count, column: lines.last?.unicodeScalars.count ?? 0, path: pythonPath, root: pythonRoot) {
                     items = EditorCompletionController.rankEngine(raw, prefix: prefix)
                 }
             }

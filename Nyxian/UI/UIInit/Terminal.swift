@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.2
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-08): a program can ask for a preview of files
+    (ESC ] 7770 ; nyxian-preview ; paths BEL — Python's plt.show()): the
+    sequence is taken out of the output and the files open in Quick Look.
   - 1.3.2 (2026-11-08): key bar: symbol keys have one fixed width (the paste
     key was very wide on iPhone), the fixed keys never stretch, and the bar
     has a fixed height (with self-sizing it sometimes came back with no
@@ -131,11 +134,14 @@ import UIKit
         
         self.ttyHandle?.readabilityHandler = { [weak self] fileHandle in
             guard let self = self else { return }
-            let data = fileHandle.availableData
+            var data = fileHandle.availableData
             guard !data.isEmpty else { return }
+            /* fork: plt.show() in Python asks for a preview of its figures */
+            let previews = TerminalViewObjC.forkTakePreviewRequests(from: &data)
             
             DispatchQueue.main.async {
-                self.feed(byteArray: ArraySlice<UInt8>(data))
+                if !data.isEmpty { self.feed(byteArray: ArraySlice<UInt8>(data)) }
+                if !previews.isEmpty { self.forkShowPreview(previews) }
             }
         }
         
@@ -167,6 +173,44 @@ import UIKit
             NotificationCenter.default.addObserver(self, selector: #selector(forkKeyboardChanged(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
         }
         handleThemeChange(nil)
+    }
+    
+    // MARK: fork — previews asked for by the program (Python's plt.show())
+    
+    private static let previewStart = Array("\u{1b}]7770;nyxian-preview;".utf8)
+    
+    /// Takes ESC ] 7770 ; nyxian-preview ; path|path BEL out of the output and returns the paths.
+    static func forkTakePreviewRequests(from data: inout Data) -> [String] {
+        var paths: [String] = []
+        var bytes = [UInt8](data)
+        var searchFrom = 0
+        while let start = forkFind(previewStart, in: bytes, from: searchFrom) {
+            guard let end = bytes[(start + previewStart.count)...].firstIndex(of: 0x07) else { break }
+            if let text = String(bytes: bytes[(start + previewStart.count)..<end], encoding: .utf8) {
+                paths.append(contentsOf: text.split(separator: "|").map(String.init))
+            }
+            bytes.removeSubrange(start...end)
+            searchFrom = start
+        }
+        if !paths.isEmpty { data = Data(bytes) }
+        return paths
+    }
+    
+    private static func forkFind(_ needle: [UInt8], in haystack: [UInt8], from: Int) -> Int? {
+        guard haystack.count >= needle.count, from <= haystack.count - needle.count else { return nil }
+        var index = from
+        while index <= haystack.count - needle.count {
+            if haystack[index] == needle[0], Array(haystack[index..<(index + needle.count)]) == needle { return index }
+            index += 1
+        }
+        return nil
+    }
+    
+    func forkShowPreview(_ paths: [String]) {
+        let urls = paths.map { URL(fileURLWithPath: $0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !urls.isEmpty, let root = window?.rootViewController else { return }
+        _ = resignFirstResponder()
+        ForkQuickLook.present(urls, from: root)
     }
     
     // MARK: fork — key bar actions

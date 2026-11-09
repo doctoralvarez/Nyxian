@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.16.0
+ Fork doctoralvarez/Nyxian — version 1.17.0
  Changelog:
+  - 1.17.0 (2026-11-08): plt.show() previews its figures (nyxian_mplbackend);
+    ForkPythonJedi (python3 with nyxian_jedi, no window: completion with jedi,
+    syntax checks); a run that ends with an error marks its line in the editor
+    (ForkPythonIssues) and, on iPad, opens the file there.
   - 1.16.0 (2026-11-08): when a .py run ends, the files the script made are
     copied into the project by themselves (and listed in the terminal); a
     file the script wrote again (a new plot) replaces the project's copy.
@@ -1793,6 +1797,157 @@ enum ForkCapabilities {
     }
 }
 
+// MARK: - Fork: Python help for the editor (jedi, without a window)
+
+/// A python3 running nyxian_jedi in the background: completion (jedi) and
+/// syntax checks for .py files. Started on first use, again if it ends.
+final class ForkPythonJedi {
+    static let shared = ForkPythonJedi()
+    
+    private let lock = NSLock()
+    private var toChild: Pipe?
+    private var fromChild: Pipe?
+    private var errors: Pipe?
+    private var pid: pid_t = -1
+    private var buffer = Data()
+    private var nextID = 0
+    private var lastFailure: Date?
+    
+    /// Suggestions at a 1-based line and 0-based column (Unicode scalars), in the format of the editor's engines.
+    func completions(source: String, line: Int, column: Int, path: String?, root: String?) -> [[String: Any]]? {
+        var body: [String: Any] = ["op": "complete", "source": source, "line": line, "column": column]
+        if let path { body["path"] = path }
+        if let root { body["root"] = root }
+        return request(body, timeout: 4)?["items"] as? [[String: Any]]
+    }
+    
+    /// Syntax errors and warnings: (line, column, isError, message).
+    func problems(source: String, path: String?) -> [(Int, Int, Bool, String)]? {
+        var body: [String: Any] = ["op": "diagnose", "source": source]
+        if let path { body["path"] = path }
+        guard let list = request(body, timeout: 3)?["problems"] as? [[String: Any]] else { return nil }
+        return list.compactMap { entry in
+            guard let line = entry["line"] as? Int else { return nil }
+            return (line, entry["column"] as? Int ?? 1, (entry["level"] as? String) != "warning", entry["message"] as? String ?? "")
+        }
+    }
+    
+    private func request(_ body: [String: Any], timeout: TimeInterval) -> [String: Any]? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard ensureRunning(), let input = toChild?.fileHandleForWriting, let output = fromChild?.fileHandleForReading else { return nil }
+        nextID += 1
+        let id = nextID
+        var message = body
+        message["id"] = id
+        guard var data = try? JSONSerialization.data(withJSONObject: message) else { return nil }
+        data.append(0x0a)
+        do { try input.write(contentsOf: data) } catch { stop(); return nil }
+        let deadline = Date().addingTimeInterval(timeout)
+        var chunk = [UInt8](repeating: 0, count: 65536)
+        while true {
+            if let end = buffer.firstIndex(of: 0x0a) {
+                let line = Data(buffer[buffer.startIndex..<end])
+                buffer.removeSubrange(buffer.startIndex...end)
+                /* an answer that came too late for an earlier request is dropped */
+                if let answer = try? JSONSerialization.jsonObject(with: line) as? [String: Any], (answer["id"] as? Int) == id {
+                    return answer
+                }
+                continue
+            }
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { return nil }
+            var descriptor = pollfd(fd: output.fileDescriptor, events: Int16(POLLIN), revents: 0)
+            let ready = poll(&descriptor, 1, Int32(max(1, remaining * 1000)))
+            if ready < 0 && errno == EINTR { continue }
+            guard ready > 0 else { return nil }
+            let count = read(output.fileDescriptor, &chunk, chunk.count)
+            guard count > 0 else { stop(); return nil }
+            buffer.append(contentsOf: chunk[0..<count])
+        }
+    }
+    
+    private func ensureRunning() -> Bool {
+        if pid > 0, PEProcessManager.shared().process(forProcessIdentifier: pid) != nil { return true }
+        stop()
+        if let failure = lastFailure, Date().timeIntervalSince(failure) < 20 { return false }
+        guard let launcher = ForkPython.readyLauncher(),
+              let homePath = LDEApplicationWorkspace.shared().utilityHomePath() else {
+            lastFailure = Date()
+            return false
+        }
+        let toChild = Pipe(), fromChild = Pipe(), errors = Pipe()
+        errors.fileHandleForReading.readabilityHandler = { handle in _ = handle.availableData }
+        let table = PEFileTable.empty()
+        table.appendFileDescriptor(toChild.fileHandleForReading.fileDescriptor, withMappingToLoc: STDIN_FILENO)
+        table.appendFileDescriptor(fromChild.fileHandleForWriting.fileDescriptor, withMappingToLoc: STDOUT_FILENO)
+        table.appendFileDescriptor(errors.fileHandleForWriting.fileDescriptor, withMappingToLoc: STDERR_FILENO)
+        var environment = ForkPython.baseEnvironment(workingDirectory: nil)
+        environment["HOME"] = homePath
+        environment["CFFIXED_USER_HOME"] = homePath
+        environment["TMPDIR"] = (homePath as NSString).appendingPathComponent("Tmp")
+        let spawned = PEProcessManager.shared().spawnProcess(withItems: [
+            "PEExecutablePath": launcher,
+            "PEArguments": [launcher, "-q", "-m", "nyxian_jedi"],
+            "PEEnvironment": environment,
+            "PEWorkingDirectory": homePath,
+            "PEFileTable": table
+        ], withKernelSurfaceProcess: nil)
+        guard spawned > 0 else {
+            lastFailure = Date()
+            return false
+        }
+        self.toChild = toChild
+        self.fromChild = fromChild
+        self.errors = errors
+        self.pid = spawned
+        self.buffer = Data()
+        return true
+    }
+    
+    private func stop() {
+        if pid > 0, let process = PEProcessManager.shared().process(forProcessIdentifier: pid) {
+            process.terminate()
+        }
+        errors?.fileHandleForReading.readabilityHandler = nil
+        toChild = nil
+        fromChild = nil
+        errors = nil
+        pid = -1
+        buffer = Data()
+    }
+}
+
+/// The error a Python run ended with, by file: the editor marks its line.
+enum ForkPythonIssues {
+    static let changed = Notification.Name("ForkPythonIssuesChanged")
+    private static let lock = NSLock()
+    private static var runtime: [String: (line: Int, message: String)] = [:]
+    
+    private static func key(_ url: URL) -> String { url.resolvingSymlinksInPath().standardizedFileURL.path }
+    
+    static func setRuntime(file: URL, line: Int, message: String) {
+        lock.lock(); runtime[key(file)] = (line, message); lock.unlock()
+        DispatchQueue.main.async { NotificationCenter.default.post(name: changed, object: nil) }
+    }
+    
+    static func runtimeIssue(for file: URL) -> (line: Int, message: String)? {
+        lock.lock(); defer { lock.unlock() }
+        return runtime[key(file)]
+    }
+    
+    static func clearRuntime(for file: URL) {
+        lock.lock(); let removed = runtime.removeValue(forKey: key(file)) != nil; lock.unlock()
+        if removed { DispatchQueue.main.async { NotificationCenter.default.post(name: changed, object: nil) } }
+    }
+    
+    static func clearRuntime(under root: URL) {
+        let prefix = key(root)
+        lock.lock(); let before = runtime.count; runtime = runtime.filter { !$0.key.hasPrefix(prefix) }; let removed = before != runtime.count; lock.unlock()
+        if removed { DispatchQueue.main.async { NotificationCenter.default.post(name: changed, object: nil) } }
+    }
+}
+
 // MARK: - Fork: orientation (Settings → Customization → Orientation)
 
 /// 0 automatic (landscape too, also on iPhone), 1 portrait, 2 landscape.
@@ -2899,6 +3054,157 @@ def main():
 if __name__ == "__main__":
     main()
 """#,
+        "nyxian_mplbackend.py": #"""
+# matplotlib in Nyxian: plt.show() saves the open figures as PNG (in
+# figures/ of the run folder, copied into the project when the run ends) and
+# asks Nyxian's terminal to show them.
+import os
+import sys
+
+from matplotlib.backend_bases import FigureManagerBase as FigureManager  # noqa: F401
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas  # noqa: F401
+
+
+def _folder():
+    folder = os.environ.get("NYXIAN_PLOT_DIR") or os.path.join(os.getcwd(), "figures")
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
+
+def show(*args, **kwargs):
+    import matplotlib.pyplot as plt
+    from matplotlib import _pylab_helpers
+
+    managers = _pylab_helpers.Gcf.get_all_fig_managers()
+    if not managers:
+        return
+    paths = []
+    for manager in managers:
+        path = os.path.join(_folder(), "figure-%s.png" % manager.num)
+        manager.canvas.figure.savefig(path, dpi=144, bbox_inches="tight")
+        paths.append(path)
+    plt.close("all")
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:
+            pass
+    # private sequence, taken out by Nyxian's terminal before it is drawn
+    os.write(1, ("\x1b]7770;nyxian-preview;%s\x07" % "|".join(paths)).encode("utf-8"))
+    names = ", ".join(os.path.relpath(path) for path in paths)
+    os.write(1, ("[figure: %s]\n" % names).encode("utf-8"))
+"""#,
+        "nyxian_jedi.py": #"""
+# Python help for Nyxian's editor, without a window: one JSON request per
+# line on stdin, one JSON answer per line on stdout.
+#   complete: suggestions at a position (jedi)
+#   diagnose: syntax errors and warnings of the text (the compiler itself)
+import json
+import os
+import sys
+import warnings
+
+_LIB = os.path.join(sys.prefix, "lib", "nyxian")
+if os.path.isdir(_LIB) and _LIB not in sys.path:
+    sys.path.append(_LIB)
+
+try:
+    import jedi
+    jedi.settings.cache_directory = os.path.join(os.environ.get("HOME") or "/tmp", "Library", "Caches", "jedi")
+    _JEDI_ERROR = None
+except Exception as error:  # completion off, diagnostics still work
+    jedi = None
+    _JEDI_ERROR = repr(error)
+
+_projects = {}
+
+KINDS = {"function": 11, "class": 10, "module": 3, "keyword": 1, "instance": 12, "statement": 12, "param": 12, "property": 12, "path": 3}
+
+
+def _project(root):
+    if not root or jedi is None:
+        return None
+    if root not in _projects:
+        try:
+            _projects[root] = jedi.Project(path=root, added_sys_path=[root])
+        except Exception:
+            _projects[root] = None
+    return _projects[root]
+
+
+def complete(request):
+    script = jedi.Script(code=request["source"], path=request.get("path") or None, project=_project(request.get("root")))
+    items = []
+    for index, completion in enumerate(script.complete(request["line"], request["column"])):
+        if index >= 150:
+            break
+        kind = completion.type
+        item = {"text": completion.name, "display": completion.name, "type": kind, "kind": KINDS.get(kind, 0)}
+        if index < 20:
+            try:
+                signatures = completion.get_signatures() if kind in ("function", "class") else []
+                if signatures:
+                    item["display"] = signatures[0].to_string()[:90]
+                text = completion.docstring(raw=True) or ""
+                summary = " ".join(text.strip().split("\n\n")[0].split())
+                if summary:
+                    item["doc"] = summary[:220]
+            except Exception:
+                pass
+        if kind == "function":
+            item["insert"] = completion.name + "()"
+            item["cursor"] = len(completion.name) + 1
+        items.append(item)
+    return items
+
+
+def diagnose(request):
+    source = request["source"]
+    path = request.get("path") or "<editor>"
+    problems = []
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            compile(source, path, "exec", dont_inherit=True)
+        except SyntaxError as error:
+            problems.append({"line": error.lineno or 1, "column": error.offset or 1, "level": "error",
+                             "message": "%s: %s" % (type(error).__name__, error.msg)})
+        except ValueError as error:
+            problems.append({"line": 1, "column": 1, "level": "error", "message": str(error)})
+        for warning in caught:
+            if issubclass(warning.category, SyntaxWarning):
+                problems.append({"line": warning.lineno or 1, "column": 1, "level": "warning",
+                                 "message": "SyntaxWarning: %s" % warning.message})
+    return problems
+
+
+def main():
+    for raw in sys.stdin.buffer:
+        try:
+            request = json.loads(raw)
+        except Exception:
+            continue
+        answer = {"id": request.get("id")}
+        try:
+            op = request.get("op")
+            if op == "ping":
+                answer.update(ok=jedi is not None, error=_JEDI_ERROR, jedi=getattr(jedi, "__version__", None))
+            elif op == "diagnose":
+                answer["problems"] = diagnose(request)
+            elif op == "complete":
+                answer["items"] = complete(request) if jedi is not None else []
+                if jedi is None:
+                    answer["error"] = _JEDI_ERROR
+        except Exception as error:
+            answer["error"] = repr(error)
+        data = (json.dumps(answer) + "\n").encode("utf-8")
+        while data:
+            data = data[os.write(1, data):]
+
+
+if __name__ == "__main__":
+    main()
+"""#,
         "sitecustomize.py": #"""
 # Nyxian: only when Python runs in a Nyxian terminal window, input() echoes
 # what you type (the terminal does not), sys.stdout / sys.stderr write
@@ -2926,6 +3232,34 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         faulthandler.register(signal.SIGQUIT, file=sys.stderr, all_threads=True, chain=False)
     except Exception:
         pass
+    if os.environ.get("NYXIAN_ERROR_FILE"):
+        # a script that ends with an error tells Nyxian's editor the line
+        try:
+            _previous_hook = sys.excepthook
+
+            def _nyxian_excepthook(kind, value, tb):
+                try:
+                    import json
+                    import traceback
+                    folder = os.getcwd()
+                    frames = [frame for frame in traceback.extract_tb(tb) if frame.filename.startswith(folder)]
+                    if isinstance(value, SyntaxError) and value.filename and value.filename.startswith(folder):
+                        where = {"file": value.filename, "line": value.lineno or 1}
+                    elif frames:
+                        where = {"file": frames[-1].filename, "line": frames[-1].lineno or 1}
+                    else:
+                        where = None
+                    if where:
+                        where["message"] = "".join(traceback.format_exception_only(kind, value)).strip()
+                        with open(os.environ["NYXIAN_ERROR_FILE"], "w") as handle:
+                            json.dump(where, handle)
+                except Exception:
+                    pass
+                _previous_hook(kind, value, tb)
+
+            sys.excepthook = _nyxian_excepthook
+        except Exception:
+            pass
     try:
         import builtins
         from nyxian_lineedit import read_line
@@ -3274,7 +3608,41 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         return top
     }
     
-    static func launch(from presenter: UIViewController, arguments: [String], workingDirectory: URL?, title: String, closeOnExit: Bool = false, beforeLaunch: (() throws -> Void)? = nil, onExit: ((Int32) -> String?)? = nil) {
+    /// Environment of every python3 Nyxian starts (windows and the editor's helper).
+    static func baseEnvironment(workingDirectory: URL?) -> [String: String] {
+        var environment = [
+            "PYTHONHOME": home.path,
+            "PYTHONUNBUFFERED": "1",
+            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+            /* iOS builds of numpy, Pillow, … (the index BeeWare's Briefcase uses) */
+            "PIP_EXTRA_INDEX_URL": "https://pypi.anaconda.org/beeware/simple",
+            "PIP_PREFER_BINARY": "1",
+            /* wheels for iOS built by this fork's CI (matplotlib…), see .github/workflows/ios-wheels.yml */
+            "PIP_FIND_LINKS": "https://github.com/doctoralvarez/Nyxian/releases/expanded_assets/ios-wheels",
+            /* plt.show() saves the figures and Nyxian shows them (nyxian_mplbackend) */
+            "MPLBACKEND": "module://nyxian_mplbackend",
+            "PYTHONPYCACHEPREFIX": rootfs.appendingPathComponent("var/mobile/Python/.pycache").path,
+            "TERM": "xterm-256color",
+            /* scripts pip installs (idna, normalizer, …) live in bin/; on PATH pip
+               does not warn. Both spellings: pip compares paths as text and
+               reports them with /private in front. */
+            "PATH": pathWithPythonBin
+        ]
+        if let workingDirectory { environment["PYTHONPATH"] = workingDirectory.path }
+        return environment
+    }
+    
+    /// The signed launcher when Python is ready to start without unpacking or signing anything.
+    static func readyLauncher() -> String? {
+        let defaults = UserDefaults.standard
+        guard defaults.string(forKey: stampKey) != nil,
+              let launcher = defaults.string(forKey: launcherKey),
+              FileManager.default.fileExists(atPath: launcher),
+              FileManager.default.fileExists(atPath: home.appendingPathComponent("libpython\(version).dylib").path) else { return nil }
+        return launcher
+    }
+    
+    static func launch(from presenter: UIViewController, arguments: [String], workingDirectory: URL?, title: String, closeOnExit: Bool = false, extraEnvironment: [String: String] = [:], beforeLaunch: (() throws -> Void)? = nil, onExit: ((Int32) -> String?)? = nil) {
         let progress = UIAlertController(title: "Python \(version)", message: "Preparing…", preferredStyle: .alert)
         let host = host(for: presenter)
         host.present(progress, animated: true)
@@ -3291,26 +3659,9 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                     progress.dismiss(animated: true) {
                         guard let session = NXWindowSessionTerminal(utilityPath: launcher) else { return }
                         session.arguments = [launcher] + arguments
-                        var environment = [
-                            "PYTHONHOME": home.path,
-                            "PYTHONUNBUFFERED": "1",
-                            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
-                            /* iOS builds of numpy, Pillow, … (the index BeeWare's Briefcase uses) */
-                            "PIP_EXTRA_INDEX_URL": "https://pypi.anaconda.org/beeware/simple",
-                            "PIP_PREFER_BINARY": "1",
-                            /* wheels for iOS built by this fork's CI (matplotlib…), see .github/workflows/ios-wheels.yml */
-                            "PIP_FIND_LINKS": "https://github.com/doctoralvarez/Nyxian/releases/expanded_assets/ios-wheels",
-                            /* matplotlib draws to files (savefig) — there is no window system for it */
-                            "MPLBACKEND": "Agg",
-                            "PYTHONPYCACHEPREFIX": rootfs.appendingPathComponent("var/mobile/Python/.pycache").path,
-                            "TERM": "xterm-256color",
-                            "NYXIAN_TERMINAL": "1",
-                            /* scripts pip installs (idna, normalizer, …) live in bin/; on PATH pip
-                               does not warn. Both spellings: pip compares paths as text and
-                               reports them with /private in front. */
-                            "PATH": pathWithPythonBin
-                        ]
-                        if let workingDirectory { environment["PYTHONPATH"] = workingDirectory.path }
+                        var environment = baseEnvironment(workingDirectory: workingDirectory)
+                        environment["NYXIAN_TERMINAL"] = "1"
+                        environment.merge(extraEnvironment) { _, new in new }
                         session.extraEnvironment = environment
                         session.workingDirectory = workingDirectory?.path
                         session.title = title
@@ -3380,9 +3731,26 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         let root: URL = project.map { $0.url as URL } ?? script.deletingLastPathComponent()
         let relative = ProjectFileIndex.relativePath(script, root: root)
         let openTexts = LiveEditorRegistry.openTexts()
-        launch(from: presenter, arguments: [relative], workingDirectory: mirrorFolder(project: root), title: "python3 \(script.lastPathComponent)", beforeLaunch: {
+        let runFolder = mirrorFolder(project: root)
+        let errorFile = runFolder.appendingPathComponent(".nyxian-error.json")
+        ForkPythonIssues.clearRuntime(under: root)
+        launch(from: presenter, arguments: [relative], workingDirectory: runFolder, title: "python3 \(script.lastPathComponent)", extraEnvironment: ["NYXIAN_ERROR_FILE": errorFile.path], beforeLaunch: {
             _ = try mirror(project: root, openTexts: openTexts)
+            try? FileManager.default.removeItem(at: errorFile)
         }, onExit: { _ in
+            /* an error that ended the script: its line is marked in the editor */
+            if let data = try? Data(contentsOf: errorFile),
+               let info = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let file = info["file"] as? String, let line = info["line"] as? Int {
+                let relative = ProjectFileIndex.relativePath(URL(fileURLWithPath: file), root: runFolder)
+                let source = root.appendingPathComponent(relative)
+                ForkPythonIssues.setRuntime(file: source, line: line, message: info["message"] as? String ?? "Error")
+                DispatchQueue.main.async {
+                    if UIDevice.current.userInterfaceIdiom == .pad, FileManager.default.fileExists(atPath: source.path) {
+                        NotificationCenter.default.post(name: Notification.Name("FileListAct"), object: ["open", source.path, "\(line)", "1", "0"])
+                    }
+                }
+            }
             /* files the script made (plots, CSV…) come into the project by themselves */
             let copied = copyOutput(project: root)
             DispatchQueue.main.async {

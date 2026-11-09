@@ -4,6 +4,23 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.27.0 — 2026-11-08
+
+- **`plt.show()` shows the figures**: Nyxian's matplotlib backend
+  (`nyxian_mplbackend`) saves the open figures as PNG in `figures/` and the
+  terminal opens them in a preview right away (swipe between several); in
+  the console as well as in scripts. The PNGs come into the project when the
+  run ends.
+- **Python completion with jedi**: suggestions of modules, functions and
+  attributes — after `np.`, `os.`… too — with the signature and the first
+  line of the documentation. jedi and parso ship inside the runtime
+  (`lib/nyxian`, apart from pip's packages) and run in a python3 without a
+  window (`nyxian_jedi`).
+- **Errors marked in the editor**: syntax errors and warnings of `.py` files
+  are marked on their line while you type (from Python's own compiler), and
+  when a run ends with an error its line is marked (and, on iPad, the file
+  opens there). The mark goes when you edit the file.
+
 ## 1.26.0 — 2026-11-08
 
 - **Plots and other files from Python scripts come into the project by

@@ -32,6 +32,11 @@ jobs:
       - name: Test Python terminal (fork)
         run: python3 tools/fork/test_python_terminal.py
 
+      - name: Test Python editor help and plots (fork)
+        run: |
+          python3 -m pip install --quiet jedi matplotlib
+          python3 tools/fork/test_python_helpers.py
+
       - name: Check pip finds the fork's iOS wheels (fork)
         continue-on-error: true
         run: |

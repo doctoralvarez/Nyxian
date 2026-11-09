@@ -1,6 +1,8 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.1.0
+# Fork doctoralvarez/Nyxian — version 1.2.0
 # Changelog:
+#  - 1.2.0 (2026-11-08): jedi and parso (pure Python) in lib/nyxian, for the
+#    editor's Python completion; not in site-packages, so pip leaves them be.
 #  - 1.1.0 (2026-11-08): binary packages from pip (numpy, matplotlib…) link
 #    against @rpath/Python.framework/Python, as on every iOS app: libpython
 #    now has that install name and an rpath to Frameworks/ next to it, where
@@ -80,6 +82,15 @@ echo ">>> python3 launcher"
 xcrun -sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0 -O2 \
   -DNYXIAN_PYTHON_VERSION="\"${PY_VER}\"" \
   -o "$HOME_DIR/bin/python3" "$ROOT/tools/fork/python_launcher.c"
+
+echo ">>> jedi + parso (editor completion)"
+mkdir -p "$WORK/jedi" "$HOME_DIR/lib/nyxian"
+python3 -m pip download --quiet --no-deps --only-binary :all: -d "$WORK/jedi" jedi parso
+for wheel in "$WORK"/jedi/*.whl; do
+  echo "  $(basename "$wheel")"
+  unzip -q -o "$wheel" -d "$HOME_DIR/lib/nyxian"
+done
+du -sh "$HOME_DIR/lib/nyxian"
 
 echo "${PY_VER}-${PY_BUILD}" > "$HOME_DIR/VERSION"
 cp "$WORK/VERSIONS" "$HOME_DIR/VERSIONS" 2>/dev/null || true

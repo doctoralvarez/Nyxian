@@ -3302,25 +3302,38 @@ import QuickLook
 final class ForkQuickLook: NSObject, QLPreviewControllerDataSource {
     private static let previewable: Set<String> = ["png", "jpg", "jpeg", "gif", "heic", "heif", "tif", "tiff", "bmp", "webp", "svg", "pdf", "usdz", "mov", "mp4", "m4a", "mp3", "wav"]
     private static var current: ForkQuickLook?
-    private let url: URL
+    private let urls: [URL]
     
-    private init(url: URL) { self.url = url }
+    private init(urls: [URL]) { self.urls = urls }
     
     static func canPreview(_ url: URL) -> Bool {
         previewable.contains(url.pathExtension.lowercased())
     }
     
     static func present(_ url: URL, from presenter: UIViewController) {
-        let source = ForkQuickLook(url: url)
+        present([url], from: presenter)
+    }
+    
+    /// Several files: swipe between them (the figures of one plt.show()).
+    static func present(_ urls: [URL], from presenter: UIViewController) {
+        guard !urls.isEmpty else { return }
+        let source = ForkQuickLook(urls: urls)
         current = source
         let preview = QLPreviewController()
         preview.dataSource = source
-        presenter.present(preview, animated: true)
+        var host = presenter
+        while let shown = host.presentedViewController, !shown.isBeingDismissed { host = shown }
+        if host is QLPreviewController {
+            /* a newer plt.show(): replace the preview that is open */
+            host.dismiss(animated: false) { presenter.present(preview, animated: true) }
+            return
+        }
+        host.present(preview, animated: true)
     }
     
-    func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+    func numberOfPreviewItems(in controller: QLPreviewController) -> Int { urls.count }
     
     func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
-        url as NSURL
+        urls[index] as NSURL
     }
 }

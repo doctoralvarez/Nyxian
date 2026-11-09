@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-08): .py files: syntax errors and warnings from Python
+    itself (nyxian_jedi) and the line the last run ended with an error on.
   - 1.1.0 (2026-11-07): also forwards edits to the parameter help.
   - 1.0.0 (2026-11-07): forwards text and selection changes to the code
     completion controller.
@@ -50,17 +52,63 @@ class CodeEditorCoordinator: NSObject, TextViewDelegate {
         .fatal: ("xmark.octagon.fill", UIColor.systemRed.withAlphaComponent(0.3))
     ]
     
+    /* fork: .py files are checked by Python itself (nyxian_jedi), and the line
+       a run ended with an error on is marked */
+    private(set) var isPython = false
+    private var pythonObserver: NSObjectProtocol?
+    
     init(parent: CodeEditorViewController) {
         self.parent = parent
         super.init()
-        guard self.parent?.languageServer != nil else { return }
-        self.debounce = LDEDebouncer(delay: 1.5, with: DispatchQueue.main, withTarget: self, with: #selector(typecheckCode))
+        self.isPython = parent.file.fileURL?.pathExtension.lowercased() == "py"
+        guard self.parent?.languageServer != nil || isPython else { return }
+        self.debounce = LDEDebouncer(delay: isPython ? 0.8 : 1.5, with: DispatchQueue.main, withTarget: self, with: #selector(typecheckCode))
+        if isPython {
+            pythonObserver = NotificationCenter.default.addObserver(forName: ForkPythonIssues.changed, object: nil, queue: .main) { [weak self] _ in
+                self?.typecheckCode()
+            }
+        }
         if let textView = self.parent?.textView {
             self.textViewDidChange(textView)
         }
     }
     
+    deinit {
+        if let pythonObserver { NotificationCenter.default.removeObserver(pythonObserver) }
+    }
+    
+    private func checkPython() {
+        guard let parent = self.parent, let url = parent.file.fileURL else { return }
+        let text = parent.textView.text
+        self.isProcessing = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var found: [MDKDiagnostic] = []
+            func diagnostic(_ line: Int, _ column: Int, _ level: MDKDiagnosticLevel, _ message: String) -> MDKDiagnostic {
+                var location = MDKSourceLocation()
+                location.isValid = true
+                location.line = CFIndex(line)
+                location.column = CFIndex(column)
+                return MDKDiagnostic(type: .file, level: level, mainSource: url.path, fileSourceLocation: MDKFileSourceLocation(fileURL: url, withSourceLocation: location), message: message)
+            }
+            for problem in ForkPythonJedi.shared.problems(source: text, path: url.path) ?? [] {
+                found.append(diagnostic(problem.0, problem.1, problem.2 ? .error : .warning, problem.3))
+            }
+            if let issue = ForkPythonIssues.runtimeIssue(for: url) {
+                found.append(diagnostic(issue.line, 1, .error, issue.message + " (last run)"))
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.diag = found
+                self.updateDiag()
+            }
+        }
+    }
+    
     @objc func typecheckCode() {
+        if isPython {
+            checkPython()
+            return
+        }
         self.isProcessing = true
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
@@ -92,7 +140,11 @@ class CodeEditorCoordinator: NSObject, TextViewDelegate {
         /* fork: suggestions follow every edit, also in files without a language server */
         self.parent?.completion?.textDidChange()
         self.parent?.signatureHelp?.textDidChange()
-        guard self.parent?.languageServer != nil else { return }
+        guard self.parent?.languageServer != nil || isPython else { return }
+        /* the line of the last run's error is no longer where it was */
+        if isPython, let url = self.parent?.file.fileURL, ForkPythonIssues.runtimeIssue(for: url) != nil {
+            ForkPythonIssues.clearRuntime(for: url)
+        }
         if !self.isInvalidated {
             self.isInvalidated = true
             for item in self.entries {
