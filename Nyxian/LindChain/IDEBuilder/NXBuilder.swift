@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-08): Cancel button (top left) while a project builds: the
+    screen is usable at once, the build stops before its next stage, nothing
+    is installed or run, and what was compiled is kept.
   - 1.1.0 (2026-11-07): Metal shaders — every .metal file of the project is
     copied into the app, and all of them together as NyxianShaders.metal, so
     the app can compile them on the device with makeLibrary(source:)
@@ -49,6 +52,8 @@ final class NXBuilder: NSObject {
     private let argsString: String
     
     static var builds: Bool = false
+    /* fork: Cancel during a build — the build stops before its next stage and nothing is installed or run */
+    static var forkCancelRequested: Bool = false
     
     init?(project: NXProject) {
         self.project = project
@@ -292,6 +297,7 @@ final class NXBuilder: NSObject {
                              buildType: NXBuilder.BuildType,
                              completion: @escaping (Bool,String?) -> Void) {
         project.projectConfig.reloadData()
+        NXBuilder.forkCancelRequested = false
         
         XCButton.resetProgress()
         
@@ -311,6 +317,7 @@ final class NXBuilder: NSObject {
                 
                 var resetNeeded: Bool = false
                 func progressStage(systemName: String? = nil, increment: Double? = nil, handler: () throws -> Void) throws {
+                    if NXBuilder.forkCancelRequested { throw CancellationError() }
                     let doReset: Bool = (increment == nil)
                     if doReset, resetNeeded {
                         XCButton.resetProgress()
@@ -346,11 +353,15 @@ final class NXBuilder: NSObject {
                     
                     // doit, just do it!
                     try progressFlowBuilder(flow: flow)
+                } catch is CancellationError {
+                    /* fork: cancelled — what was compiled stays for the next build */
+                    result = false
                 } catch {
                     try? builder.clean()
                     result = false
                     builder.database.addMessage(message: error.localizedDescription, severity: .error)
                 }
+                if NXBuilder.forkCancelRequested { result = false }
                 builder.database.saveDatabase(toPath: project.cacheURL.appendingPathComponent("debug.json").path)
                 
                 completion(result, execPath)
@@ -374,19 +385,41 @@ func buildProjectWithArgumentUI(targetViewController: UIViewController,
         targetViewController.navigationItem.setRightBarButtonItems([barButton], animated: true)
         targetViewController.navigationItem.setHidesBackButton(true, animated: true)
         
+        /* fork: Cancel (top left) while it builds: the screen is yours again at once,
+           the build stops before its next stage and nothing is installed or run */
+        let oldLeftButtons = targetViewController.navigationItem.leftBarButtonItems
+        var uiRestored = false
+        let restoreUI = { [weak targetViewController] in
+            guard !uiRestored, let targetViewController else { return }
+            uiRestored = true
+            targetViewController.navigationItem.setLeftBarButtonItems(oldLeftButtons, animated: true)
+            targetViewController.navigationItem.setRightBarButtonItems(oldBarButtons, animated: true)
+            targetViewController.navigationItem.setHidesBackButton(false, animated: true)
+            targetViewController.navigationController?.navigationBar.isUserInteractionEnabled = true
+            targetViewController.navigationItem.titleView?.isUserInteractionEnabled = true
+        }
+        let cancelButton = UIBarButtonItem(title: "Cancel", primaryAction: UIAction { _ in
+            NXBuilder.forkCancelRequested = true
+            XCButton.switchImage(withSystemName: "xmark", animated: true)
+            restoreUI()
+        })
+        cancelButton.tintColor = .systemRed
+        targetViewController.navigationItem.setLeftBarButtonItems([cancelButton], animated: true)
+        
         NXDocumentManager.shared().saveAll {
             NXDocumentManager.shared().changeAllLockState(toBoolean: true)
             NXBuilder.buildProject(withProject: project, buildType: buildType) { result, fastPath in
                 NXDocumentManager.shared().changeAllLockState(toBoolean: false)
                 DispatchQueue.main.async {
-                    targetViewController.navigationItem.setRightBarButtonItems(oldBarButtons, animated: true)
-                    targetViewController.navigationItem.setHidesBackButton(false, animated: true)
-                    targetViewController.navigationController?.navigationBar.isUserInteractionEnabled = true
-                    targetViewController.navigationItem.titleView?.isUserInteractionEnabled = true
+                    let cancelled = NXBuilder.forkCancelRequested
+                    NXBuilder.forkCancelRequested = false
+                    restoreUI()
                     
                     NXBuilder.builds = false
                     
-                    if !result {
+                    if cancelled {
+                        NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Build cancelled", withDelay: 0.0)
+                    } else if !result {
                         let loggerView = UINavigationController(rootViewController: UIDebugViewController(project: project))
                         loggerView.modalPresentationStyle = .formSheet
                         targetViewController.present(loggerView, animated: true)

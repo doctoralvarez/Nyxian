@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.13.0
+ Fork doctoralvarez/Nyxian — version 1.13.1
  Changelog:
+  - 1.13.1 (2026-11-08): setting a breakpoint with the debugger off says
+    where to turn it on.
   - 1.13.0 (2026-11-08): Python completion from jedi (members after "." too,
     with signatures and docs); words remain the fallback.
   - 1.12.3 (2026-11-08): "Copy Python Output to Project" also in the ⋯ menu
@@ -3348,6 +3350,9 @@ extension CodeEditorViewController {
         let caret = min(self.textView.selectedRange.location, text.length)
         let line = text.substring(to: caret).reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
         ForkBreakpoints.toggle(project: project, url: url, line: line)
+        if !UserDefaults.standard.bool(forKey: "fork.debugger") {
+            NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Breakpoints stop the app once the debugger is on: Settings › Customization › Debugger", withDelay: 0.0)
+        }
     }
     
     /// Tints breakpoint lines blue and the line the debugger stopped at green.

@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.1
+ Fork doctoralvarez/Nyxian — version 1.4.2
  Changelog:
+  - 1.4.2 (2026-11-08): ▶ while a cancelled build is still stopping says so.
   - 1.4.1 (2026-11-08): ▶ / ⌘R in a Python project runs the .py on screen (no build).
   - 1.4.0 (2026-11-07): the debugger attaches to every run (Pause /
     Continue next to the profiler, ⌃⌘Y); ⌘\\ toggles a breakpoint (editor).
@@ -312,6 +313,11 @@ class MainSplitViewController: UISplitViewController, UISplitViewControllerDeleg
     }
     
     @objc func invokeBuild() {
+        /* fork: a cancelled build can still be finishing its current step */
+        if NXBuilder.builds && NXBuilder.forkCancelRequested {
+            NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "The cancelled build is still stopping, try again in a moment", withDelay: 0.0)
+            return
+        }
         NXDocumentManager.shared().saveAll { [weak self] in
             /* fork: a Python project runs its script, there is nothing to build */
             if let self, let detailVC = self.detailVC, ForkPython.isPythonProject(detailVC.project) {

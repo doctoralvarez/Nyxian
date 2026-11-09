@@ -4,6 +4,18 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.28.0 — 2026-11-08
+
+- **Faster Swift builds** (as fast as Nyxian's own again): the cross-import
+  overlays are loaded only for projects whose code uses one (SceneView,
+  SpriteView, Map, VideoPlayer…), and line-table debug info is made only with
+  the debugger on. The debugger is now **off by default** (Settings ›
+  Customization › Debugger); setting a breakpoint with it off says so. Turning
+  it on or off rebuilds the project once.
+- **Cancel** (top left, red) while a project builds: the screen is yours at
+  once, the build stops before its next stage, nothing is installed or run,
+  and what was already compiled is kept for the next build.
+
 ## 1.27.0 — 2026-11-08
 
 - **`plt.show()` shows the figures**: Nyxian's matplotlib backend

@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.0
+ Fork doctoralvarez/Nyxian — version 1.5.0
  Changelog:
+  - 1.5.0 (2026-11-08): faster Swift builds — cross-import overlays only for
+    projects whose code uses one (SceneView, SpriteView, Map, VideoPlayer…),
+    and line-table debug info only with the debugger turned on.
   - 1.4.0 (2026-11-07): framework + SwiftUI overlays back on (global
     -enable-cross-import-overlays plus -import-module for the overlays the code
     uses): the @State error of 1.1–1.3 came from the SDK's Xcode-only @State
@@ -142,7 +145,17 @@ static NSArray<NSString*> *NXForkOverlayImports(NSString *sourceRoot)
         return flags;
     }
     NSArray<NSString*> *overlays = NXForkOverlayImports(self.variables[@"SRCROOT"]);
-    return overlays.count ? [flags arrayByAddingObjectsFromArray:overlays] : flags;
+    if(overlays.count == 0)
+    {
+        return flags;
+    }
+    NSMutableArray<NSString*> *withOverlays = [flags mutableCopy];
+    if(![withOverlays containsObject:@"-enable-cross-import-overlays"])
+    {
+        [withOverlays addObjectsFromArray:@[@"-Xfrontend", @"-enable-cross-import-overlays"]];
+    }
+    [withOverlays addObjectsFromArray:overlays];
+    return withOverlays;
 }
 
 
@@ -254,17 +267,17 @@ static NSArray<NSString*> *NXForkOverlayImports(NSString *sourceRoot)
          * the Swift frontend. (The @State failure blamed on them in 1.17.x was the
          * SDK's Xcode-only @State macro, handled by ForkSDKPatches.)
          */
-        if(_swiftFlags.count > 0 && ![_swiftFlags containsObject:@"-enable-cross-import-overlays"])
-        {
-            _swiftFlags = [_swiftFlags arrayByAddingObjectsFromArray:@[@"-Xfrontend", @"-enable-cross-import-overlays"]];
-        }
+        /* fork 1.5.0: added in -swiftFlags only when the code uses an overlay —
+           loading them for every project made every Swift build slower */
         
         /*
          * fork: line tables (address <-> file:line) for the debugger's backtraces and
          * line breakpoints. Passed to the frontend / cc1 directly, so the drivers do
          * not add a dSYM job. Off for kernel extensions.
          */
-        if(_schemeKind != NXProjectSchemeKindKSurfaceKext)
+        /* fork 1.5.0: only with the debugger on (Settings › Customization), so
+           ordinary builds are as fast as Nyxian's own */
+        if(_schemeKind != NXProjectSchemeKindKSurfaceKext && [[NSUserDefaults standardUserDefaults] boolForKey:@"fork.debugger"])
         {
             if(_swiftFlags.count > 0 && ![_swiftFlags containsObject:@"-gline-tables-only"] && ![_swiftFlags containsObject:@"-g"])
             {

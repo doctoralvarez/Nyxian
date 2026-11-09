@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.6.0
+ Fork doctoralvarez/Nyxian — version 1.6.1
  Changelog:
+  - 1.6.1 (2026-11-08): the debugger is off by default (Settings ›
+    Customization › Debugger); it attaches only when it is on.
   - 1.6.0 (2026-11-08): pictures, PDFs and media open in a Quick Look preview
     (ForkQuickLook) instead of the text editor.
   - 1.5.1 (2026-11-08): "Run" in a Python project runs its script (no build).
@@ -3051,7 +3053,8 @@ final class ForkDebugSession {
     private var observer: NSObjectProtocol?
     
     /// Customization > "Debugger" (on by default)
-    var isEnabled: Bool { UserDefaults.standard.object(forKey: "fork.debugger") as? Bool ?? true }
+    /// Off by default since 1.28: its debug info made every build slower.
+    var isEnabled: Bool { UserDefaults.standard.bool(forKey: "fork.debugger") }
     var debugger: NXForkDebugger { NXForkDebugger.shared() }
     
     private init() {

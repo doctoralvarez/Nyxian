@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.0
+ Fork doctoralvarez/Nyxian — version 1.4.1
  Changelog:
+  - 1.4.1 (2026-11-08): Debugger off by default ("breakpoints; slower builds").
   - 1.4.0 (2026-11-08): "Orientation" picker (Automatic / Portrait /
     Landscape).
   - 1.3.0 (2026-11-08): "Python Font Size" stepper (Python console and
@@ -185,7 +186,7 @@ int main(void)
             } else {
                 /* fork: attach the debugger to every run */
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
-                (cell as! ToggleTableCell).configure(title: "Debugger (pause, breakpoints)", key: "fork.debugger", defaultValue: true)
+                (cell as! ToggleTableCell).configure(title: "Debugger (breakpoints; slower builds)", key: "fork.debugger", defaultValue: false)
             }
         } else {
             cell = UITableViewCell(style: .default, reuseIdentifier: nil)
