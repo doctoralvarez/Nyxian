@@ -1,6 +1,8 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.3.0
+# Fork doctoralvarez/Nyxian — version 1.3.1
 # Changelog:
+#  - 1.3.1 (2026-11-08): the support package download retries (GitHub 504s)
+#    and falls back to gh release download.
 #  - 1.3.0 (2026-11-08): the runtime comes with numpy, scipy, pandas,
 #    matplotlib and scikit-learn (and their dependencies) installed, from the
 #    fork's ios-wheels release / BeeWare / Flet; everything is compiled to
@@ -32,7 +34,12 @@ trap 'rm -rf "$WORK"' EXIT
 
 URL="https://github.com/beeware/Python-Apple-support/releases/download/${PY_VER}-${PY_BUILD}/Python-${PY_VER}-iOS-support.${PY_BUILD}.tar.gz"
 echo ">>> Downloading $URL"
-curl -fsSL --retry 3 -o "$WORK/support.tar.gz" "$URL"
+# GitHub's download servers answer 504 at times: retry, then go through the API
+if ! curl -fsSL --retry 8 --retry-delay 15 --retry-all-errors -o "$WORK/support.tar.gz" "$URL"; then
+  echo ">>> direct download failed, trying gh release download"
+  gh release download "${PY_VER}-${PY_BUILD}" -R beeware/Python-Apple-support \
+    -p "Python-${PY_VER}-iOS-support.${PY_BUILD}.tar.gz" -O "$WORK/support.tar.gz" --clobber
+fi
 tar -xzf "$WORK/support.tar.gz" -C "$WORK"
 
 echo ">>> Layout of the support package"

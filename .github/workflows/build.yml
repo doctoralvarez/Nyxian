@@ -108,6 +108,8 @@ jobs:
 
       - name: Pack Python runtime (cache miss)
         if: steps.python-cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -e
           ./tools/fork/build_python_runtime.sh
