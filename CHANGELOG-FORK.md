@@ -4,6 +4,16 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.30.0 — 2026-11-08
+
+- **scipy and scikit-learn for Python on iOS**: pip also looks in Flet's index
+  of mobile wheels (`pypi.flet.dev`, which has scipy 1.18 built for iOS and
+  CPython 3.14 — with a Fortran compiler and Accelerate), and the fork's
+  "iOS wheels" CI copies those wheels onto its own release so Nyxian does not
+  depend on that site.
+- **Install Science Pack** (Packages › +): numpy, scipy, pandas, matplotlib and
+  scikit-learn in one go.
+
 ## 1.29.0 — 2026-11-08
 
 - **Python cells, like a notebook**: in a `.py` file, `# %%` lines split it

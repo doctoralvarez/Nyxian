@@ -44,7 +44,8 @@ jobs:
             --platform ios_13_0_arm64_iphoneos --python-version 3.14 --implementation cp --abi cp314 \
             --find-links https://github.com/doctoralvarez/Nyxian/releases/expanded_assets/ios-wheels \
             --extra-index-url https://pypi.anaconda.org/beeware/simple \
-            matplotlib numpy kiwisolver contourpy pillow
+            --extra-index-url https://pypi.flet.dev \
+            matplotlib numpy kiwisolver contourpy pillow scipy scikit-learn pandas
           ls -la /tmp/ioswheels
 
       - name: Extract version

@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.18.0
+ Fork doctoralvarez/Nyxian — version 1.18.1
  Changelog:
+  - 1.18.1 (2026-11-08): pip also looks in Flet's index of mobile wheels
+    (scipy, scikit-learn, … for iOS); "Install Science Pack" in Packages.
   - 1.18.0 (2026-11-08): Python cells (# %%) run in a console that stays open
     per project (runCell); Packages… (installed list, upgrade, uninstall,
     install, requirements.txt); installRequirements.
@@ -1949,6 +1951,10 @@ final class ForkPythonPackagesViewController: UITableViewController, UISearchRes
                     guard let self else { return }
                     ForkPython.promptInstallPackage(from: self)
                 },
+                UIAction(title: "Install Science Pack", subtitle: "numpy · scipy · pandas · matplotlib · scikit-learn", image: UIImage(systemName: "function")) { [weak self] _ in
+                    guard let self else { return }
+                    ForkPython.pip(["install", "numpy", "scipy", "pandas", "matplotlib", "scikit-learn"], title: "pip install (science pack)", from: self)
+                },
                 UIAction(title: "Install from requirements.txt…", image: UIImage(systemName: "doc.text")) { [weak self] _ in
                     guard let self else { return }
                     let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.plainText, .text, .data], asCopy: true)
@@ -3756,8 +3762,8 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             "PYTHONHOME": home.path,
             "PYTHONUNBUFFERED": "1",
             "PIP_DISABLE_PIP_VERSION_CHECK": "1",
-            /* iOS builds of numpy, Pillow, … (the index BeeWare's Briefcase uses) */
-            "PIP_EXTRA_INDEX_URL": "https://pypi.anaconda.org/beeware/simple",
+            /* iOS builds of numpy, Pillow, … (BeeWare's index) and scipy, scikit-learn, … (Flet's index of mobile wheels) */
+            "PIP_EXTRA_INDEX_URL": "https://pypi.anaconda.org/beeware/simple https://pypi.flet.dev",
             "PIP_PREFER_BINARY": "1",
             /* wheels for iOS built by this fork's CI (matplotlib…), see .github/workflows/ios-wheels.yml */
             "PIP_FIND_LINKS": "https://github.com/doctoralvarez/Nyxian/releases/expanded_assets/ios-wheels",

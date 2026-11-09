@@ -1,5 +1,8 @@
-# Fork doctoralvarez/Nyxian — version 1.2.0
+# Fork doctoralvarez/Nyxian — version 1.3.0
 # Changelog:
+#  - 1.3.0 (2026-11-08): also looks in Flet's index of mobile wheels
+#    (pypi.flet.dev: scipy 1.18 for iOS, …); wheels found elsewhere are copied
+#    onto this release; default: scipy scikit-learn pandas.
 #  - 1.2.0 (2026-11-08): meson builds that import numpy for its headers
 #    (pandas) find them without importing it (patch_numpy_include.py);
 #    default package: pandas (scipy needs a Fortran compiler for iOS).
@@ -18,7 +21,7 @@ on:
     inputs:
       packages:
         description: "Packages (pip specs, space separated)"
-        default: "pandas"
+        default: "scipy scikit-learn pandas"
   push:
     branches: [mejoras-editor-ipad]
     paths:
@@ -37,7 +40,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 240
     env:
-      PACKAGES: ${{ github.event.inputs.packages || 'pandas' }}
+      PACKAGES: ${{ github.event.inputs.packages || 'scipy scikit-learn pandas joblib threadpoolctl' }}
       FIND_LINKS: https://github.com/${{ github.repository }}/releases/expanded_assets/ios-wheels
     steps:
       - uses: actions/checkout@v4
@@ -72,10 +75,15 @@ jobs:
             echo "::group::$spec"
             name="${spec%%[<>=!~ ]*}"
             # already there? (PyPI, BeeWare's index, this release)
-            if python -m pip download --quiet --no-deps --only-binary :all: -d /tmp/existing \
+            # already built somewhere? (PyPI, BeeWare, Flet's mobile index, this release):
+            # a copy goes on this release too, so Nyxian does not depend on the others
+            rm -rf mirror && mkdir -p mirror
+            if python -m pip download --quiet --no-deps --only-binary :all: -d mirror \
                  --platform ios_13_0_arm64_iphoneos --python-version 3.14 --implementation cp --abi cp314 \
-                 --extra-index-url https://pypi.anaconda.org/beeware/simple --find-links "$FIND_LINKS" "$spec" 2>/dev/null; then
-              echo "$spec: an iOS wheel already exists, skipped" | tee -a summary.txt
+                 --extra-index-url https://pypi.anaconda.org/beeware/simple --extra-index-url https://pypi.flet.dev \
+                 --find-links "$FIND_LINKS" "$spec"; then
+              cp mirror/*.whl wheelhouse/ 2>/dev/null || true
+              echo "$spec: iOS wheel found, copied: $(ls mirror)" | tee -a summary.txt
               echo "::endgroup::"; continue
             fi
             rm -rf src/* && mkdir -p src/x
@@ -89,7 +97,7 @@ jobs:
             python tools/fork/ios-wheels/patch_numpy_include.py "$project"
             # settings per package
             unset CIBW_CONFIG_SETTINGS_IOS
-            export CIBW_ENVIRONMENT_IOS="PIP_EXTRA_INDEX_URL=https://pypi.anaconda.org/beeware/simple PIP_PREFER_BINARY=1 PIP_FIND_LINKS=$FIND_LINKS"
+            export CIBW_ENVIRONMENT_IOS="PIP_EXTRA_INDEX_URL='https://pypi.anaconda.org/beeware/simple https://pypi.flet.dev' PIP_PREFER_BINARY=1 PIP_FIND_LINKS=$FIND_LINKS"
             case "$name" in
               # scipy also needs a Fortran compiler for iOS, which the runners do not have
               scipy) export CIBW_CONFIG_SETTINGS_IOS="setup-args=-Dblas=accelerate setup-args=-Dlapack=accelerate" ;;
