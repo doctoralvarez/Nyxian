@@ -93,6 +93,8 @@ jobs:
           XCODE_HASH=$(xcodebuild -version | shasum | cut -c1-12)
           MAKE_HASH=$(cat Makefile LLVM-On-iOS/Makefile | shasum | cut -c1-12)
           echo "key=llvm-${RUNNER_OS}-${LLVM_SHA}-${XCODE_HASH}-${MAKE_HASH}" >> "$GITHUB_OUTPUT"
+          # fork: a backup built with another Xcode is good enough (same sources and Makefiles)
+          echo "like=llvm-${RUNNER_OS}-${LLVM_SHA}-*-${MAKE_HASH}.tar.gz" >> "$GITHUB_OUTPUT"
 
       - name: Restore LLVM toolchain cache
         id: llvm-cache
@@ -109,7 +111,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
         run: |
-          ./tools/fork/backup_asset.sh restore toolchain "${{ steps.llvm-key.outputs.key }}.tar.gz"
+          ./tools/fork/backup_asset.sh restore toolchain "${{ steps.llvm-key.outputs.key }}.tar.gz" || \
+            ./tools/fork/backup_asset.sh restore-like toolchain '${{ steps.llvm-key.outputs.like }}'
           test -d Frameworks/CoreCompiler/CoreCompilerSupportLibs
 
       - name: Build LLVM toolchain (cache miss)

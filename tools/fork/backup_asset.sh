@@ -1,6 +1,8 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.0.0
+# Fork doctoralvarez/Nyxian — version 1.1.0
 # Changelog:
+#  - 1.1.0 (2026-11-09): restore-like TAG 'PATTERN': the newest asset matching a
+#    pattern (a toolchain built with another Xcode, when the exact one is missing).
 #  - 1.0.0 (2026-11-09): keeps big build pieces (the LLVM/Swift toolchain, the
 #    Python runtime, the IPA, source bundles) as release assets of your PRIVATE
 #    backup repository, so CI and the app work even if GitHub's cache is gone
@@ -10,6 +12,7 @@
 # usage: backup_asset.sh has     TAG NAME
 #        backup_asset.sh save    TAG NAME PATH…   (a folder or files: tar.gz; one .ipa/.zip/.bundle file: as is)
 #        backup_asset.sh restore TAG NAME          (into the current folder)
+#        backup_asset.sh restore-like TAG 'PATTERN' (the newest asset whose name matches the shell pattern)
 # env:   GH_TOKEN (Contents: read and write on the repository), BACKUP_REPO (owner/repo)
 set -euo pipefail
 
@@ -54,6 +57,21 @@ case "$command" in
     gh release upload "$tag" -R "$repo" "$work"/* --clobber
     echo "backup: saved $name ($size bytes) on $repo ($tag)"
     rm -rf "$work"
+    ;;
+  restore-like)
+    pattern=$name
+    match=""
+    while IFS= read -r asset; do
+      base=${asset%.part[0-9][0-9]}
+      # shellcheck disable=SC2053
+      [[ $base == $pattern ]] && match=$base
+    done < <(gh release view "$tag" -R "$repo" --json assets -q '.assets | sort_by(.createdAt) | .[].name' 2>/dev/null || true)
+    if [ -z "$match" ]; then
+      echo "backup: nothing like $pattern on $repo ($tag)"
+      exit 1
+    fi
+    echo "backup: the closest is $match"
+    exec "$0" restore "$tag" "$match"
     ;;
   restore)
     work=$(mktemp -d)
