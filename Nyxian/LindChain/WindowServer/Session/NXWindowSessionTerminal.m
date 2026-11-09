@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-08): forkIsRunning, forkSendText: (text typed into the
+    program, for Python cells) and forkBringToFront.
   - 1.3.0 (2026-11-08): exitHandler: its text is shown when the process ends.
   - 1.2.0 (2026-11-08): closeOnExit (the window closes when its process
     ends, e.g. Ctrl-D in the Python console), the key bar's ✕ closes the
@@ -304,6 +306,34 @@
             [[NXWindowServer shared] closeWindowWithIdentifier:self.windowIdentifier withCompletion:nil];
         });
     }
+}
+
+/* MARK: fork */
+
+- (BOOL)forkIsRunning
+{
+    return self.process != nil && !self.atExit && _tty != NULL;
+}
+
+- (BOOL)forkSendText:(NSString*)text
+{
+    if(!self.forkIsRunning) return NO;
+    NSData *data = [text dataUsingEncoding:NSUTF8StringEncoding];
+    const char *bytes = data.bytes;
+    size_t left = data.length;
+    while(left > 0)
+    {
+        ssize_t written = write(_tty->userspacefd[MASTERFD], bytes, left);
+        if(written <= 0) return NO;
+        bytes += written;
+        left -= (size_t)written;
+    }
+    return YES;
+}
+
+- (void)forkBringToFront
+{
+    [[NXWindowServer shared] activateWindowForIdentifier:self.windowIdentifier animated:YES withCompletion:nil];
 }
 
 - (void)dealloc

@@ -4,6 +4,22 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.29.0 — 2026-11-08
+
+- **Python cells, like a notebook**: in a `.py` file, `# %%` lines split it
+  into cells. **Run Cell** (⌘↩, the ▶︎□ key, or the edit menu) runs the cell
+  the caret is in — or the selection — in the project's **cell console**, a
+  Python console that stays open: variables, imports and data stay from one
+  cell to the next; the caret goes on to the next cell. **Run File in
+  Console** (⇧⌘↩) runs the whole file there. Plots open as with `plt.show()`.
+- **Python packages** (`</>` › Packages…): what is installed, with version and
+  summary, search; swipe (or tap) to upgrade or uninstall; + installs a
+  package or a requirements.txt. A `requirements*.txt` open in the editor
+  has **Install with pip** in its edit menu.
+- **iOS wheels CI**: one run builds several packages (pandas, scipy…),
+  skips those that already have an iOS wheel for CPython 3.14, and goes on
+  when one fails.
+
 ## 1.28.0 — 2026-11-08
 
 - **Faster Swift builds** (as fast as Nyxian's own again): the cross-import

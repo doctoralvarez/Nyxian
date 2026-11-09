@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-08): forkIsRunning, forkSendText:, forkBringToFront.
   - 1.2.0 (2026-11-08): exitHandler (text shown when the process exits).
   - 1.1.0 (2026-11-08): closeOnExit, fontSize and fontSizeDefaultsKey.
   - 1.0.0 (2026-11-07): optional arguments, extra environment, working
@@ -56,6 +57,12 @@
 @property (nonatomic,copy) NSString *fontSizeDefaultsKey;
 /* fork: runs when the process exits (on a background thread); its text, if any, is shown before "[process exited]" */
 @property (nonatomic,copy) NSString * (^exitHandler)(int code);
+/* fork: its program still runs (Python cells go to an open console) */
+@property (nonatomic,readonly) BOOL forkIsRunning;
+/* fork: text typed into the program, as from the keyboard; NO when it has ended */
+- (BOOL)forkSendText:(NSString*)text;
+/* fork: brings the window to the front */
+- (void)forkBringToFront;
 
 @end
 

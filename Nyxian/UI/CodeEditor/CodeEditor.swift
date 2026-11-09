@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.13.1
+ Fork doctoralvarez/Nyxian — version 1.14.0
  Changelog:
+  - 1.14.0 (2026-11-08): Python cells — Run Cell (⌘↩, the cell (# %%) or
+    selection at the caret, then on to the next cell) and Run File in Console
+    (⇧⌘↩) in the project's console, whose variables stay; "Install with pip"
+    in requirements*.txt.
   - 1.13.1 (2026-11-08): setting a breakpoint with the debugger off says
     where to turn it on.
   - 1.13.0 (2026-11-08): Python completion from jedi (members after "." too,
@@ -593,7 +597,17 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             })
             items.append(runPython)
             items.append(spawnSeparator())
+            /* cells (# %%): the current one runs in the project's console */
+            if self.textView.text.contains("# %%") || self.textView.text.contains("#%%") {
+                if compactBar {
+                    moreActions.append(UIAction(title: "Run Cell", image: UIImage(systemName: "play.square")) { [weak self] _ in self?.forkRunPythonCell() })
+                } else {
+                    items.append(UIBarButtonItem(customView: SymbolButton(symbolName: "play.square", width: 35.0) { [weak self] in self?.forkRunPythonCell() }))
+                    items.append(spawnSeparator())
+                }
+            }
             if compactBar {
+                moreActions.append(UIAction(title: "Run File in Console", image: UIImage(systemName: "terminal")) { [weak self] _ in self?.forkRunPythonFileInConsole() })
                 moreActions.append(UIAction(title: "Copy Python Output to Project", image: UIImage(systemName: "square.and.arrow.down.on.square")) { [weak self] _ in self?.forkCopyPythonOutput() })
             }
         }
@@ -844,6 +858,8 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         if self.file.fileURL?.pathExtension.lowercased() == "py" {
             commands.append(command("Run Python File", #selector(forkRunPythonFile), "r"))
             commands.append(command("Copy Python Output to Project", #selector(forkCopyPythonOutput), "r", [.command, .shift]))
+            commands.append(command("Run Cell", #selector(forkRunPythonCell), "\r"))
+            commands.append(command("Run File in Console", #selector(forkRunPythonFileInConsole), "\r", [.command, .shift]))
         }
         /* fork: navigation by meaning */
         if self.languageServer != nil {
@@ -1023,7 +1039,13 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             if self.file.fileURL?.pathExtension.lowercased() == "py" {
                 builder.insertChild(UIMenu(options: .displayInline, children: [
                     UIAction(title: "Run Python File", image: UIImage(systemName: "play.fill")) { _ in self.forkRunPythonFile() },
+                    UIAction(title: "Run Cell (# %%)", image: UIImage(systemName: "play.square")) { _ in self.forkRunPythonCell() },
+                    UIAction(title: "Run File in Console", image: UIImage(systemName: "terminal")) { _ in self.forkRunPythonFileInConsole() },
                     UIAction(title: "Copy Python Output to Project", image: UIImage(systemName: "square.and.arrow.down.on.square")) { _ in self.forkCopyPythonOutput() }
+                ]), atEndOfMenu: .standardEdit)
+            } else if let url = self.file.fileURL, url.pathExtension.lowercased() == "txt", url.lastPathComponent.lowercased().hasPrefix("requirements") {
+                builder.insertChild(UIMenu(options: .displayInline, children: [
+                    UIAction(title: "Install with pip", image: UIImage(systemName: "shippingbox")) { _ in ForkPython.installRequirements(url, from: self) }
                 ]), atEndOfMenu: .standardEdit)
             }
             return
@@ -3393,6 +3415,51 @@ extension CodeEditorViewController {
     @objc func forkRunPythonFile() {
         guard let url = self.file.fileURL else { return }
         ForkPython.run(script: url, project: self.project, from: self)
+    }
+    
+    /// ⌘↩: the selection, or the cell (# %%) the caret is in, runs in the
+    /// project's Python console; the caret then goes to the next cell.
+    @objc func forkRunPythonCell() {
+        guard let url = self.file.fileURL else { return }
+        let text = self.textView.text as NSString
+        let selection = self.textView.selectedRange
+        if selection.length > 0 {
+            ForkPython.runCell(text.substring(with: selection), script: url, project: self.project, from: self)
+            return
+        }
+        let lines = (text as String).components(separatedBy: "\n")
+        func isMarker(_ line: String) -> Bool {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.hasPrefix("# %%") || trimmed.hasPrefix("#%%")
+        }
+        guard lines.contains(where: isMarker) else {
+            forkRunPythonFileInConsole()
+            return
+        }
+        let caretLine = min(lines.count - 1, text.substring(to: min(selection.location, text.length)).reduce(0) { $1 == "\n" ? $0 + 1 : $0 })
+        var start = caretLine
+        if isMarker(lines[start]) {
+            start += 1
+        } else {
+            while start > 0 && !isMarker(lines[start - 1]) { start -= 1 }
+        }
+        var end = start
+        while end < lines.count && !isMarker(lines[end]) { end += 1 }
+        let code = lines[min(start, lines.count)..<end].joined(separator: "\n").trimmingCharacters(in: .newlines)
+        if !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            ForkPython.runCell(code, script: url, project: self.project, from: self)
+        }
+        /* like Shift-Enter in a notebook: on to the next cell */
+        if end < lines.count {
+            let offset = lines[0...end].reduce(0) { $0 + ($1 as NSString).length + 1 }
+            self.textView.selectedRange = NSRange(location: min(offset, text.length), length: 0)
+        }
+    }
+    
+    /// The whole file in the project's Python console (its variables stay for the cells).
+    @objc func forkRunPythonFileInConsole() {
+        guard let url = self.file.fileURL else { return }
+        ForkPython.runCell(self.textView.text, script: url, project: self.project, from: self)
     }
     
     /// Plots and files the script wrote next to it come back into the project.

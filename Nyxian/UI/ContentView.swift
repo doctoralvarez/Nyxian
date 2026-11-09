@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.17.0
+ Fork doctoralvarez/Nyxian — version 1.18.0
  Changelog:
+  - 1.18.0 (2026-11-08): Python cells (# %%) run in a console that stays open
+    per project (runCell); Packages… (installed list, upgrade, uninstall,
+    install, requirements.txt); installRequirements.
   - 1.17.0 (2026-11-08): plt.show() previews its figures (nyxian_mplbackend);
     ForkPythonJedi (python3 with nyxian_jedi, no window: completion with jedi,
     syntax checks); a run that ends with an error marks its line in the editor
@@ -207,6 +210,12 @@ import UniformTypeIdentifiers
                 UIAction(title: "Python Keyboard Test", image: UIImage(systemName: "keyboard")) { [weak self] _ in
                     guard let self else { return }
                     ForkPython.openKeyboardTest(from: self)
+                },
+                UIAction(title: "Packages…", image: UIImage(systemName: "shippingbox.circle")) { [weak self] _ in
+                    guard let self else { return }
+                    let manager = UINavigationController(rootViewController: ForkPythonPackagesViewController())
+                    manager.modalPresentationStyle = .formSheet
+                    self.present(manager, animated: true)
                 },
                 UIAction(title: "Install Package (pip)…", image: UIImage(systemName: "shippingbox")) { [weak self] _ in
                     guard let self else { return }
@@ -1921,6 +1930,116 @@ final class ForkPythonJedi {
     }
 }
 
+/// Python packages: what is installed, upgrade, uninstall, install (also from a requirements file).
+final class ForkPythonPackagesViewController: UITableViewController, UISearchResultsUpdating, UIDocumentPickerDelegate {
+    private var all: [ForkPython.InstalledPackage] = []
+    private var shown: [ForkPython.InstalledPackage] = []
+    private let search = UISearchController(searchResultsController: nil)
+    
+    init() { super.init(style: .insetGrouped) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Python Packages"
+        navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        navigationItem.rightBarButtonItems = [
+            UIBarButtonItem(image: UIImage(systemName: "plus"), menu: UIMenu(children: [
+                UIAction(title: "Install Package…", image: UIImage(systemName: "shippingbox")) { [weak self] _ in
+                    guard let self else { return }
+                    ForkPython.promptInstallPackage(from: self)
+                },
+                UIAction(title: "Install from requirements.txt…", image: UIImage(systemName: "doc.text")) { [weak self] _ in
+                    guard let self else { return }
+                    let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.plainText, .text, .data], asCopy: true)
+                    picker.delegate = self
+                    self.present(picker, animated: true)
+                }
+            ])),
+            UIBarButtonItem(systemItem: .refresh, primaryAction: UIAction { [weak self] _ in self?.reload() })
+        ]
+        search.searchResultsUpdater = self
+        search.obscuresBackgroundDuringPresentation = false
+        search.searchBar.placeholder = "Search installed packages"
+        navigationItem.searchController = search
+        navigationItem.hidesSearchBarWhenScrolling = false
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "package")
+        reload()
+    }
+    
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        reload()
+    }
+    
+    private func reload() {
+        all = ForkPython.installedPackages()
+        updateSearchResults(for: search)
+    }
+    
+    func updateSearchResults(for searchController: UISearchController) {
+        let text = (searchController.searchBar.text ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        shown = text.isEmpty ? all : all.filter { $0.name.lowercased().contains(text) || $0.summary.lowercased().contains(text) }
+        tableView.reloadData()
+    }
+    
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { shown.count }
+    
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        all.isEmpty ? "No packages yet — + installs one" : "\(all.count) installed · swipe to upgrade or uninstall"
+    }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        let package = shown[indexPath.row]
+        var content = UIListContentConfiguration.subtitleCell()
+        content.text = "\(package.name)  \(package.version)"
+        content.secondaryText = package.summary.isEmpty ? nil : package.summary
+        content.secondaryTextProperties.numberOfLines = 2
+        content.secondaryTextProperties.color = .secondaryLabel
+        cell.contentConfiguration = content
+        return cell
+    }
+    
+    override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        let package = shown[indexPath.row]
+        let uninstall = UIContextualAction(style: .destructive, title: "Uninstall") { [weak self] _, _, done in
+            guard let self else { return done(false) }
+            ForkPython.pip(["uninstall", "-y", package.name], title: "pip uninstall \(package.name)", from: self)
+            done(true)
+        }
+        let upgrade = UIContextualAction(style: .normal, title: "Upgrade") { [weak self] _, _, done in
+            guard let self else { return done(false) }
+            ForkPython.pip(["install", "-U", package.name], title: "pip install -U \(package.name)", from: self)
+            done(true)
+        }
+        upgrade.backgroundColor = .systemBlue
+        return UISwipeActionsConfiguration(actions: [uninstall, upgrade])
+    }
+    
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        let package = shown[indexPath.row]
+        let sheet = UIAlertController(title: "\(package.name) \(package.version)", message: package.summary, preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "Upgrade", style: .default) { [weak self] _ in
+            guard let self else { return }
+            ForkPython.pip(["install", "-U", package.name], title: "pip install -U \(package.name)", from: self)
+        })
+        sheet.addAction(UIAlertAction(title: "Uninstall", style: .destructive) { [weak self] _ in
+            guard let self else { return }
+            ForkPython.pip(["uninstall", "-y", package.name], title: "pip uninstall \(package.name)", from: self)
+        })
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        sheet.popoverPresentationController?.sourceView = tableView.cellForRow(at: indexPath)
+        present(sheet, animated: true)
+    }
+    
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let file = urls.first else { return }
+        ForkPython.installRequirements(file, from: self)
+    }
+}
+
 /// The error a Python run ended with, by file: the editor marks its line.
 enum ForkPythonIssues {
     static let changed = Notification.Name("ForkPythonIssuesChanged")
@@ -2260,6 +2379,8 @@ final class KeyboardShortcutsHUD {
         "Toggle Breakpoint": "Poner/quitar breakpoint",
         "Pause or Continue": "Pausar o continuar",
         "Run Python File": "Ejecutar archivo Python",
+        "Run Cell": "Ejecutar celda (# %%)",
+        "Run File in Console": "Ejecutar archivo en la consola",
         "Copy Python Output to Project": "Traer resultados de Python al proyecto"
     ]
     
@@ -2946,7 +3067,25 @@ def main():
         "Type help(), copyright(), credits() or license(). Ctrl-D or exit() quits."
         % (sys.version.split()[0], sys.platform)
     )
-    NyxianConsole(locals={"__name__": "__main__", "__doc__": None}).interact(banner=banner, exitmsg="")
+    console = NyxianConsole(locals={"__name__": "__main__", "__doc__": None})
+    args = sys.argv[1:]
+    if "--cell" in args and args.index("--cell") + 1 < len(args):
+        # cells of a .py file (# %%), sent by Nyxian's editor: the first one
+        # comes as a file, the next ones are pasted into this console
+        path = args[args.index("--cell") + 1]
+        _write("Python %s · cells (# %%%%) of the editor run here; their variables stay.\n" % sys.version.split()[0])
+        try:
+            with open(path, encoding="utf-8") as handle:
+                source = handle.read()
+            if source.strip():
+                lines = source.rstrip("\n").split("\n")
+                _write(">>> " + lines[0] + "".join("\n... " + line for line in lines[1:]) + "\n")
+                console.run_block(source)
+        except OSError as error:
+            _write("Could not read the cell: %s\n" % error, 2)
+        console.interact(banner="", exitmsg="")
+        return
+    console.interact(banner=banner, exitmsg="")
 
 
 if __name__ == "__main__":
@@ -3645,7 +3784,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         return launcher
     }
     
-    static func launch(from presenter: UIViewController, arguments: [String], workingDirectory: URL?, title: String, closeOnExit: Bool = false, extraEnvironment: [String: String] = [:], beforeLaunch: (() throws -> Void)? = nil, onExit: ((Int32) -> String?)? = nil) {
+    static func launch(from presenter: UIViewController, arguments: [String], workingDirectory: URL?, title: String, closeOnExit: Bool = false, extraEnvironment: [String: String] = [:], beforeLaunch: (() throws -> Void)? = nil, onExit: ((Int32) -> String?)? = nil, onSession: ((NXWindowSessionTerminal) -> Void)? = nil) {
         let progress = UIAlertController(title: "Python \(version)", message: "Preparing…", preferredStyle: .alert)
         let host = host(for: presenter)
         host.present(progress, animated: true)
@@ -3673,6 +3812,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                         session.fontSizeDefaultsKey = fontSizeKey
                         if let onExit { session.exitHandler = { code in onExit(code) } }
                         NXWindowServer.shared().openWindow(with: session, withCompletion: nil)
+                        onSession?(session)
                     }
                 }
             } catch {
@@ -3763,6 +3903,91 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             let list = copied.prefix(10).joined(separator: ", ") + (copied.count > 10 ? " … (+\(copied.count - 10))" : "")
             return "[copied to the project: \(list) — tap it in the file list to see it]"
         })
+    }
+    
+    // MARK: cells (# %%) in a console that stays open, one per project
+    
+    private static var cellConsoles: [String: NXWindowSessionTerminal] = [:]
+    
+    /// Runs code of the editor (a cell, a selection, the whole file) in the
+    /// project's cell console: its variables stay from one cell to the next.
+    static func runCell(_ code: String, script: URL, project: NXProject?, from presenter: UIViewController) {
+        let root: URL = project.map { $0.url as URL } ?? script.deletingLastPathComponent()
+        let key = root.resolvingSymlinksInPath().standardizedFileURL.path
+        let runFolder = mirrorFolder(project: root)
+        let openTexts = LiveEditorRegistry.openTexts()
+        if let console = cellConsoles[key], console.forkIsRunning {
+            DispatchQueue.global(qos: .userInitiated).async {
+                _ = try? mirror(project: root, openTexts: openTexts)
+                DispatchQueue.main.async {
+                    /* pasted (bracketed paste): Nyxian's REPL runs the block whole */
+                    if console.forkSendText("\u{1b}[200~" + code + "\n\u{1b}[201~") {
+                        console.forkBringToFront()
+                    } else {
+                        cellConsoles[key] = nil
+                        runCell(code, script: script, project: project, from: presenter)
+                    }
+                }
+            }
+            return
+        }
+        cellConsoles[key] = nil
+        let cellFile = runFolder.appendingPathComponent(".nyxian-cell.py")
+        presenter.view.window?.endEditing(true)
+        launch(from: presenter, arguments: ["-q", "-m", "nyxian_repl", "--cell", cellFile.path], workingDirectory: runFolder, title: "Cells · \(script.lastPathComponent)", closeOnExit: true, beforeLaunch: {
+            _ = try mirror(project: root, openTexts: openTexts)
+            try code.write(to: cellFile, atomically: true, encoding: .utf8)
+        }, onExit: { _ in
+            copyOutput(project: root)
+            DispatchQueue.main.async { NotificationCenter.default.post(name: Notification.Name("FileListRefresh"), object: nil) }
+            return nil
+        }, onSession: { session in
+            cellConsoles[key] = session
+        })
+    }
+    
+    // MARK: packages
+    
+    struct InstalledPackage {
+        let name: String
+        let version: String
+        let summary: String
+    }
+    
+    /// What pip installed, read from the .dist-info folders (no Python needed).
+    static func installedPackages() -> [InstalledPackage] {
+        let fm = FileManager.default
+        guard let folders = try? fm.contentsOfDirectory(at: sitePackages, includingPropertiesForKeys: nil) else { return [] }
+        var packages: [InstalledPackage] = []
+        for folder in folders where folder.pathExtension == "dist-info" {
+            guard let text = try? String(contentsOf: folder.appendingPathComponent("METADATA"), encoding: .utf8) else { continue }
+            var name = "", version = "", summary = ""
+            for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+                if line.isEmpty { break }
+                if line.hasPrefix("Name: ") { name = String(line.dropFirst(6)) }
+                else if line.hasPrefix("Version: ") { version = String(line.dropFirst(9)) }
+                else if line.hasPrefix("Summary: ") { summary = String(line.dropFirst(9)) }
+            }
+            if !name.isEmpty { packages.append(InstalledPackage(name: name, version: version, summary: summary)) }
+        }
+        return packages.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+    
+    static func pip(_ arguments: [String], title: String, from presenter: UIViewController) {
+        launch(from: presenter, arguments: ["-m", "nyxian_pip"] + arguments, workingDirectory: nil, title: title)
+    }
+    
+    /// pip install -r of a requirements file (copied where Python may read it).
+    static func installRequirements(_ file: URL, from presenter: UIViewController) {
+        let folder = rootfs.appendingPathComponent("var/mobile/Python/.requirements")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let copy = folder.appendingPathComponent(UUID().uuidString + "-" + file.lastPathComponent)
+        let text = LiveEditorRegistry.openTexts()[file.resolvingSymlinksInPath().standardizedFileURL.path] ?? (try? Data(contentsOf: file))
+        guard let text, (try? text.write(to: copy)) != nil else {
+            presenter.forkGitHubAlert("pip", "Could not read \(file.lastPathComponent).")
+            return
+        }
+        pip(["install", "-r", copy.path], title: "pip install -r \(file.lastPathComponent)", from: presenter)
     }
     
     static func promptInstallPackage(from presenter: UIViewController) {

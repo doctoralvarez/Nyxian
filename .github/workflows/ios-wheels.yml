@@ -1,5 +1,9 @@
-# Fork doctoralvarez/Nyxian — version 1.0.1
+# Fork doctoralvarez/Nyxian — version 1.1.0
 # Changelog:
+#  - 1.1.0 (2026-11-08): several packages per run (default: pandas scipy);
+#    a package that already has an iOS wheel for CPython 3.14 (PyPI, BeeWare,
+#    this release) is skipped; one that fails does not stop the others; per
+#    package settings (scipy: Accelerate for BLAS/LAPACK); summary at the end.
 #  - 1.0.1 (2026-11-08): the Mac's ninja runs the build (xbuild-tools).
 #  - 1.0.0 (2026-11-08): builds iOS wheels (CPython 3.14, arm64 iphoneos)
 #    of packages that have none on PyPI or BeeWare's index (matplotlib) and
@@ -11,7 +15,7 @@ on:
     inputs:
       packages:
         description: "Packages (pip specs, space separated)"
-        default: "matplotlib"
+        default: "pandas scipy"
   push:
     branches: [mejoras-editor-ipad]
     paths:
@@ -28,9 +32,10 @@ concurrency:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 120
+    timeout-minutes: 240
     env:
-      PACKAGES: ${{ github.event.inputs.packages || 'matplotlib' }}
+      PACKAGES: ${{ github.event.inputs.packages || 'pandas scipy' }}
+      FIND_LINKS: https://github.com/${{ github.repository }}/releases/expanded_assets/ios-wheels
     steps:
       - uses: actions/checkout@v4
 
@@ -43,6 +48,7 @@ jobs:
           python -m pip install --upgrade pip cibuildwheel
           python -m pip show cibuildwheel | head -2
           brew list ninja >/dev/null 2>&1 || brew install ninja
+          brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
           ninja --version
           xcrun --sdk iphoneos --show-sdk-version
 
@@ -54,28 +60,53 @@ jobs:
           CIBW_TEST_SKIP: "*"
           CIBW_BUILD_VERBOSITY: 1
           # build tools of the Mac that may run during the iOS build (else pip tries to build them for iOS)
-          CIBW_XBUILD_TOOLS_IOS: "ninja"
-          CIBW_ENVIRONMENT_IOS: PIP_EXTRA_INDEX_URL=https://pypi.anaconda.org/beeware/simple PIP_PREFER_BINARY=1
+          CIBW_XBUILD_TOOLS_IOS: "ninja pkg-config"
           PIP_EXTRA_INDEX_URL: https://pypi.anaconda.org/beeware/simple
         run: |
           mkdir -p wheelhouse src
+          : > summary.txt
           for spec in $PACKAGES; do
-            rm -rf src/* && pip download --no-deps --no-binary :all: -d src "$spec"
-            archive=$(ls src/*)
-            echo "::group::$spec ($archive)"
-            mkdir -p src/x && tar -xf "$archive" -C src/x
+            echo "::group::$spec"
+            name="${spec%%[<>=!~ ]*}"
+            # already there? (PyPI, BeeWare's index, this release)
+            if python -m pip download --quiet --no-deps --only-binary :all: -d /tmp/existing \
+                 --platform ios_13_0_arm64_iphoneos --python-version 3.14 --implementation cp --abi cp314 \
+                 --extra-index-url https://pypi.anaconda.org/beeware/simple --find-links "$FIND_LINKS" "$spec" 2>/dev/null; then
+              echo "$spec: an iOS wheel already exists, skipped" | tee -a summary.txt
+              echo "::endgroup::"; continue
+            fi
+            rm -rf src/* && mkdir -p src/x
+            if ! python -m pip download --no-deps --no-binary :all: -d src "$spec"; then
+              echo "$spec: no source package" | tee -a summary.txt; echo "::endgroup::"; continue
+            fi
+            archive=$( (ls src/*.tar.gz src/*.zip 2>/dev/null || true) | head -1)
+            case "$archive" in *.zip) unzip -q "$archive" -d src/x ;; *) tar -xf "$archive" -C src/x ;; esac
             project=$(ls -d src/x/*/ | head -1)
-            cibuildwheel --output-dir wheelhouse "$project"
+            # settings per package
+            unset CIBW_CONFIG_SETTINGS_IOS
+            export CIBW_ENVIRONMENT_IOS="PIP_EXTRA_INDEX_URL=https://pypi.anaconda.org/beeware/simple PIP_PREFER_BINARY=1 PIP_FIND_LINKS=$FIND_LINKS"
+            case "$name" in
+              scipy) export CIBW_CONFIG_SETTINGS_IOS="setup-args=-Dblas=accelerate setup-args=-Dlapack=accelerate" ;;
+            esac
+            if cibuildwheel --output-dir wheelhouse "$project"; then
+              echo "$spec: built $(ls -t wheelhouse | head -1)" | tee -a summary.txt
+            else
+              echo "$spec: FAILED to build (see its log group)" | tee -a summary.txt
+            fi
             echo "::endgroup::"
           done
+          echo "---- summary"; cat summary.txt
+          cat summary.txt >> "$GITHUB_STEP_SUMMARY"
           ls -la wheelhouse
 
       - uses: actions/upload-artifact@v4
+        if: hashFiles('wheelhouse/*.whl') != ''
         with:
           name: ios-wheels
           path: wheelhouse/*.whl
 
       - name: Publish on the ios-wheels release
+        if: hashFiles('wheelhouse/*.whl') != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
