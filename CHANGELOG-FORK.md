@@ -4,6 +4,23 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.34.0 — 2026-11-09
+
+- **Variable inspector** (⌥⌘V, Show Variables): the variables of the
+  project's cell console — name, type, size/shape, dtype and value — updated
+  after every cell; tap one to see it whole (DataFrames and arrays keep their
+  columns and scroll both ways; share the text). The sheet can stay half open
+  next to the code.
+- **Python linter**: pyflakes (bundled) marks unused imports and variables,
+  misspelled or undefined names, `return` outside a function… while you type
+  (undefined names in red, the rest in orange).
+- **Run Tests** (⌘U): pytest (bundled; unittest otherwise) on a `test_*.py`
+  file or on the whole project, in a terminal; each failed test marks its line
+  in the editor and a notice gives the count.
+- **Run with Arguments** (⌥⌘R): arguments as in a shell, remembered per file
+  (⌘R / ▶ use them too, shown in the window title); "Add a File of the
+  Project…" puts a project file's path in them.
+
 ## 1.33.1 — 2026-11-09
 
 - **Crash with a template named "ObservableObject"**: the class inherited from

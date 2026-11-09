@@ -1,6 +1,8 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.3.1
+# Fork doctoralvarez/Nyxian — version 1.4.0
 # Changelog:
+#  - 1.4.0 (2026-11-09): pyflakes (the editor's Python linter) and pytest
+#    (Run Tests) come bundled too.
 #  - 1.3.1 (2026-11-08): the support package download retries (GitHub 504s)
 #    and falls back to gh release download.
 #  - 1.3.0 (2026-11-08): the runtime comes with numpy, scipy, pandas,
@@ -112,7 +114,7 @@ python3 -m pip download --quiet --only-binary :all: -d "$WORK/wheels" \
   --find-links https://github.com/doctoralvarez/Nyxian/releases/expanded_assets/ios-wheels \
   --extra-index-url https://pypi.anaconda.org/beeware/simple \
   --extra-index-url https://pypi.flet.dev \
-  numpy scipy pandas matplotlib scikit-learn
+  numpy scipy pandas matplotlib scikit-learn pyflakes pytest
 for wheel in "$WORK"/wheels/*.whl; do
   echo "  $(basename "$wheel")"
   unzip -q -o "$wheel" -d "$SITE"

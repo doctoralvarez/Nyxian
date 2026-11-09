@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-# Fork doctoralvarez/Nyxian — version 1.0.0
+# Fork doctoralvarez/Nyxian — version 1.1.0
 # Changelog:
+#  - 1.1.0 (2026-11-09): pyflakes lint and the test runner.
 #  - 1.0.0 (2026-11-08): CI test of nyxian_jedi (completion, diagnostics),
 #    nyxian_mplbackend (plt.show) and the error file of runs.
 """Runs Nyxian's Python helpers the way the app does and checks the answers."""
@@ -12,7 +13,7 @@ import sys
 import tempfile
 
 SOURCE = os.path.join(os.path.dirname(__file__), "..", "..", "Nyxian", "UI", "ContentView.swift")
-NAMES = ["nyxian_jedi.py", "nyxian_mplbackend.py", "nyxian_lineedit.py", "sitecustomize.py"]
+NAMES = ["nyxian_jedi.py", "nyxian_mplbackend.py", "nyxian_lineedit.py", "nyxian_tests.py", "nyxian_repl.py", "sitecustomize.py"]
 
 
 def extract(folder):
@@ -41,6 +42,7 @@ def main():
         {"id": 3, "op": "complete", "source": "import os\nos.", "line": 2, "column": 3},
         {"id": 4, "op": "diagnose", "source": "for i in range(3)\n    print(i)\n"},
         {"id": 5, "op": "diagnose", "source": "print('fine')\n"},
+        {"id": 6, "op": "diagnose", "source": "import os\nprint(undefined_name)\n"},
     ]
     run = subprocess.run([sys.executable, "-q", "-m", "nyxian_jedi"], input="\n".join(json.dumps(r) for r in requests) + "\n",
                          capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=helpers), timeout=180)
@@ -55,6 +57,18 @@ def main():
     problems = answers.get(4, {}).get("problems", [])
     check("syntax error", bool(problems) and problems[0]["line"] == 1 and "':'" in problems[0]["message"], problems)
     check("no problems", answers.get(5, {}).get("problems") == [], answers.get(5))
+    lint = answers.get(6, {}).get("problems", [])
+    check("pyflakes: unused import (warning)", any(p["line"] == 1 and p["level"] == "warning" and "os" in p["message"] for p in lint), lint)
+    check("pyflakes: undefined name (error)", any(p["line"] == 2 and p["level"] == "error" for p in lint), lint)
+
+    tests = tempfile.mkdtemp()
+    with open(os.path.join(tests, "test_demo.py"), "w") as handle:
+        handle.write("def test_ok():\n    assert 1 + 1 == 2\n\n\ndef test_bad():\n    assert 2 + 2 == 5\n")
+    result_file = os.path.join(tests, ".nyxian-tests.json")
+    run = subprocess.run([sys.executable, "-m", "nyxian_tests", "."], cwd=tests, capture_output=True, env=dict(os.environ, PYTHONPATH=helpers, NYXIAN_TEST_FILE=result_file), timeout=180)
+    result = json.load(open(result_file)) if os.path.exists(result_file) else {}
+    check("tests: counts", result.get("passed") == 1 and result.get("failed") == 1, result)
+    check("tests: failing line", any(f.get("line") == 6 for f in result.get("failures", [])), result.get("failures"))
     if run.stderr.strip():
         print(run.stderr[-800:])
 

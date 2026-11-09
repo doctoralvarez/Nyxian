@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.3.1
  Changelog:
+  - 1.3.1 (2026-11-09): every issue of the last run (failed tests) is marked.
   - 1.3.0 (2026-11-09): ForkSwiftCrashGuard — the Swift compiler runs inside
     Nyxian, so code that crashes it closed the app, again at every launch (the
     tabs reopen). A type that inherits from itself (e.g. "class
@@ -99,7 +100,7 @@ class CodeEditorCoordinator: NSObject, TextViewDelegate {
             for problem in ForkPythonJedi.shared.problems(source: text, path: url.path) ?? [] {
                 found.append(diagnostic(problem.0, problem.1, problem.2 ? .error : .warning, problem.3))
             }
-            if let issue = ForkPythonIssues.runtimeIssue(for: url) {
+            for issue in ForkPythonIssues.runtimeIssues(for: url) {
                 found.append(diagnostic(issue.line, 1, .error, issue.message + " (last run)"))
             }
             DispatchQueue.main.async {

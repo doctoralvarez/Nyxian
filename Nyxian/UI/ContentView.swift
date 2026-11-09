@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.19.0
+ Fork doctoralvarez/Nyxian — version 1.20.0
  Changelog:
+  - 1.20.0 (2026-11-09): Python — variable inspector of the cell console
+    (nyxian_repl snapshot, ForkPythonVariablesViewController: type, shape,
+    dtype, value; DataFrames and arrays as tables); pyflakes linting in
+    nyxian_jedi; Run Tests (nyxian_tests: pytest or unittest, failures marked
+    on their lines; ForkPythonIssues holds several issues per file); Run with
+    Arguments (remembered per file, files of the project offered).
   - 1.19.0 (2026-11-08): the runtime comes with numpy, scipy, pandas,
     matplotlib and scikit-learn; on an update they join the kept packages
     once (never over your own versions); bundled binaries are signed once;
@@ -2054,29 +2060,151 @@ final class ForkPythonPackagesViewController: UITableViewController, UISearchRes
 enum ForkPythonIssues {
     static let changed = Notification.Name("ForkPythonIssuesChanged")
     private static let lock = NSLock()
-    private static var runtime: [String: (line: Int, message: String)] = [:]
+    /// by file: the error a run ended with, or the failed tests (line, message)
+    private static var runtime: [String: [(line: Int, message: String)]] = [:]
     
     private static func key(_ url: URL) -> String { url.resolvingSymlinksInPath().standardizedFileURL.path }
     
-    static func setRuntime(file: URL, line: Int, message: String) {
-        lock.lock(); runtime[key(file)] = (line, message); lock.unlock()
+    private static func posted() {
         DispatchQueue.main.async { NotificationCenter.default.post(name: changed, object: nil) }
     }
     
+    static func setRuntime(file: URL, line: Int, message: String) {
+        lock.lock(); runtime[key(file)] = [(line, message)]; lock.unlock()
+        posted()
+    }
+    
+    static func addRuntime(file: URL, line: Int, message: String) {
+        lock.lock(); runtime[key(file), default: []].append((line, message)); lock.unlock()
+        posted()
+    }
+    
     static func runtimeIssue(for file: URL) -> (line: Int, message: String)? {
+        runtimeIssues(for: file).first
+    }
+    
+    static func runtimeIssues(for file: URL) -> [(line: Int, message: String)] {
         lock.lock(); defer { lock.unlock() }
-        return runtime[key(file)]
+        return runtime[key(file)] ?? []
     }
     
     static func clearRuntime(for file: URL) {
         lock.lock(); let removed = runtime.removeValue(forKey: key(file)) != nil; lock.unlock()
-        if removed { DispatchQueue.main.async { NotificationCenter.default.post(name: changed, object: nil) } }
+        if removed { posted() }
     }
     
     static func clearRuntime(under root: URL) {
         let prefix = key(root)
         lock.lock(); let before = runtime.count; runtime = runtime.filter { !$0.key.hasPrefix(prefix) }; let removed = before != runtime.count; lock.unlock()
-        if removed { DispatchQueue.main.async { NotificationCenter.default.post(name: changed, object: nil) } }
+        if removed { posted() }
+    }
+}
+
+/// The variables of a project's cell console (snapshot written by nyxian_repl after each command).
+final class ForkPythonVariablesViewController: UITableViewController, UISearchResultsUpdating {
+    private let file: URL
+    private var rows: [[String: Any]] = []
+    private var shown: [[String: Any]] = []
+    private var stamp: Date?
+    private var timer: Timer?
+    private let search = UISearchController(searchResultsController: nil)
+    
+    init(file: URL) {
+        self.file = file
+        super.init(style: .insetGrouped)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Variables"
+        navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        search.searchResultsUpdater = self
+        search.obscuresBackgroundDuringPresentation = false
+        search.searchBar.placeholder = "Search variables"
+        navigationItem.searchController = search
+        navigationItem.hidesSearchBarWhenScrolling = false
+        reload()
+        /* follows the console: a new snapshot after every command */
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in self?.reload() }
+    }
+    
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if isBeingDismissed || navigationController?.isBeingDismissed == true { timer?.invalidate() }
+    }
+    
+    private func reload() {
+        let date = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        guard date != stamp || stamp == nil else { return }
+        stamp = date
+        if let data = try? Data(contentsOf: file),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let variables = object["variables"] as? [[String: Any]] {
+            rows = variables
+        }
+        updateSearchResults(for: search)
+    }
+    
+    func updateSearchResults(for searchController: UISearchController) {
+        let text = (searchController.searchBar.text ?? "").lowercased()
+        shown = text.isEmpty ? rows : rows.filter { (($0["name"] as? String) ?? "").lowercased().contains(text) || (($0["type"] as? String) ?? "").lowercased().contains(text) }
+        tableView.reloadData()
+    }
+    
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { shown.count }
+    
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        rows.isEmpty ? "Run a cell (⌘↩) to see its variables here" : "\(rows.count) variables · they follow the cell console"
+    }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let row = shown[indexPath.row]
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        var content = UIListContentConfiguration.subtitleCell()
+        let name = row["name"] as? String ?? "?"
+        var kind = row["type"] as? String ?? ""
+        if let shape = row["shape"] as? String { kind += "  [\(shape)]" }
+        if let dtype = row["dtype"] as? String, !dtype.isEmpty { kind += "  \(dtype)" }
+        content.attributedText = {
+            let text = NSMutableAttributedString(string: name, attributes: [.font: UIFont.monospacedSystemFont(ofSize: 16, weight: .semibold)])
+            text.append(NSAttributedString(string: "   " + kind, attributes: [.font: UIFont.systemFont(ofSize: 13), .foregroundColor: UIColor.secondaryLabel]))
+            return text
+        }()
+        content.secondaryText = row["summary"] as? String
+        content.secondaryTextProperties.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        content.secondaryTextProperties.numberOfLines = 2
+        cell.contentConfiguration = content
+        cell.accessoryType = .disclosureIndicator
+        return cell
+    }
+    
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        let row = shown[indexPath.row]
+        let detail = UIViewController()
+        detail.title = row["name"] as? String
+        /* a table (DataFrame, array) keeps its columns: no wrapping, scrolls both ways */
+        let scroll = UIScrollView()
+        scroll.backgroundColor = .systemBackground
+        let label = UILabel()
+        label.numberOfLines = 0
+        label.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        label.text = row["value"] as? String
+        label.translatesAutoresizingMaskIntoConstraints = false
+        scroll.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 16),
+            label.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -16),
+            label.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 16),
+            label.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -16)
+        ])
+        detail.view = scroll
+        detail.navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .action, primaryAction: UIAction { [weak detail] _ in
+            let share = UIActivityViewController(activityItems: [row["value"] as? String ?? ""], applicationActivities: nil)
+            share.popoverPresentationController?.barButtonItem = detail?.navigationItem.rightBarButtonItem
+            detail?.present(share, animated: true)
+        })
+        navigationController?.pushViewController(detail, animated: true)
     }
 }
 
@@ -2390,6 +2518,9 @@ final class KeyboardShortcutsHUD {
         "Pause or Continue": "Pausar o continuar",
         "Run Python File": "Ejecutar archivo Python",
         "Run Cell": "Ejecutar celda (# %%)",
+        "Run with Arguments…": "Ejecutar con argumentos…",
+        "Run Tests": "Ejecutar pruebas",
+        "Show Variables": "Ver variables",
         "Stop Live Preview": "Detener vista previa en vivo",
         "Run File in Console": "Ejecutar archivo en la consola",
         "Copy Python Output to Project": "Traer resultados de Python al proyecto"
@@ -2983,6 +3114,68 @@ import traceback
 from nyxian_lineedit import Pasted, _flush, _write, read_line
 
 
+def _describe(value):
+    import types
+    kind = type(value)
+    module = kind.__module__ or ""
+    name = kind.__name__ if module in ("builtins", "__main__") else "%s.%s" % (module.split(".")[0], kind.__name__)
+    entry = {"type": name}
+    shape = getattr(value, "shape", None)
+    if isinstance(shape, tuple):
+        entry["shape"] = " × ".join(str(n) for n in shape)
+    elif isinstance(value, (list, tuple, dict, set, frozenset, str, bytes)):
+        entry["shape"] = "%d" % len(value)
+    try:
+        if isinstance(value, (types.FunctionType, types.BuiltinFunctionType, type)):
+            import inspect
+            try:
+                text = "%s%s" % (value.__name__, inspect.signature(value))
+            except (TypeError, ValueError):
+                text = value.__name__
+            entry["type"] = "class" if isinstance(value, type) else "function"
+        elif module.startswith("pandas") and hasattr(value, "to_string"):
+            text = value.to_string(max_rows=80, max_cols=30)
+        elif module.startswith("numpy"):
+            import numpy
+            with numpy.printoptions(threshold=400, edgeitems=6, linewidth=160):
+                text = repr(value)
+            entry["dtype"] = str(getattr(value, "dtype", ""))
+        else:
+            text = repr(value)
+    except Exception as error:
+        text = "<cannot show: %s>" % error
+    entry["summary"] = " ".join(text.split())[:140]
+    entry["value"] = text[:40000]
+    return entry
+
+
+def snapshot(namespace):
+    """The variables of the console, for Nyxian's variable inspector (NYXIAN_VARS_FILE)."""
+    path = os.environ.get("NYXIAN_VARS_FILE")
+    if not path:
+        return
+    try:
+        import json
+        import time
+        import types
+        rows = []
+        for name, value in list(namespace.items()):
+            if name.startswith("_") or name in ("exit", "quit", "help", "copyright", "credits", "license"):
+                continue
+            if isinstance(value, types.ModuleType):
+                continue
+            entry = _describe(value)
+            entry["name"] = name
+            rows.append(entry)
+        rows.sort(key=lambda row: row["name"].lower())
+        temporary = path + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump({"time": time.time(), "variables": rows}, handle)
+        os.replace(temporary, path)
+    except Exception:
+        pass
+
+
 class NyxianConsole(code.InteractiveConsole):
     _last = ""
 
@@ -3032,6 +3225,7 @@ class NyxianConsole(code.InteractiveConsole):
                 return
             finally:
                 _flush()
+                snapshot(self.locals)
 
     def write(self, data):
         _flush()
@@ -3048,6 +3242,8 @@ class NyxianConsole(code.InteractiveConsole):
             return False
         finally:
             _flush()
+            if not self.buffer:
+                snapshot(self.locals)
 
 
 def _warm_pip():
@@ -3328,7 +3524,38 @@ def diagnose(request):
             if issubclass(warning.category, SyntaxWarning):
                 problems.append({"line": warning.lineno or 1, "column": 1, "level": "warning",
                                  "message": "SyntaxWarning: %s" % warning.message})
+    if not problems:
+        problems.extend(lint(source, path))
     return problems
+
+
+# names that are errors when used (the rest of pyflakes' messages are warnings)
+_LINT_ERRORS = ("UndefinedName", "UndefinedLocal", "UndefinedExport", "DuplicateArgument", "ReturnOutsideFunction",
+                "YieldOutsideFunction", "ContinueOutsideLoop", "BreakOutsideLoop")
+
+
+def lint(source, path):
+    """pyflakes: unused imports and variables, misspelled names, … (without running the code)."""
+    try:
+        import ast
+        from pyflakes import checker
+    except Exception:
+        return []
+    try:
+        tree = ast.parse(source, filename=path)
+        found = checker.Checker(tree, filename=path)
+    except Exception:
+        return []
+    problems = []
+    for message in sorted(found.messages, key=lambda m: (m.lineno, getattr(m, "col", 0))):
+        kind = type(message).__name__
+        try:
+            text = message.message % message.message_args
+        except Exception:
+            text = str(message)
+        problems.append({"line": message.lineno or 1, "column": (getattr(message, "col", 0) or 0) + 1,
+                         "level": "error" if kind in _LINT_ERRORS else "warning", "message": text})
+    return problems[:200]
 
 
 def main():
@@ -3353,6 +3580,98 @@ def main():
         data = (json.dumps(answer) + "\n").encode("utf-8")
         while data:
             data = data[os.write(1, data):]
+
+
+if __name__ == "__main__":
+    main()
+"""#,
+        "nyxian_tests.py": #"""
+# Run Tests in Nyxian: pytest when it is there (it comes with Nyxian),
+# unittest otherwise. The failures, with file and line, go to
+# NYXIAN_TEST_FILE so the editor marks their lines.
+import json
+import os
+import sys
+import traceback
+
+
+def _inside(path):
+    return path and os.path.abspath(path).startswith(os.getcwd())
+
+
+def _write(failures, passed, failed):
+    path = os.environ.get("NYXIAN_TEST_FILE")
+    if path:
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"failures": failures, "passed": passed, "failed": failed}, handle)
+
+
+def with_pytest(target):
+    import pytest
+    failures = []
+    counts = {"passed": 0, "failed": 0}
+
+    class Collector:
+        def pytest_runtest_logreport(self, report):
+            if report.when == "call" and report.passed:
+                counts["passed"] += 1
+            if report.failed and report.when in ("setup", "call", "teardown"):
+                counts["failed"] += 1
+                where_file, where_line = report.location[0], (report.location[1] or 0) + 1
+                message = report.head_line or report.nodeid
+                try:
+                    entries = report.longrepr.reprtraceback.reprentries
+                    for entry in reversed(entries):
+                        location = getattr(entry, "reprfileloc", None)
+                        if location and _inside(location.path):
+                            where_file, where_line = location.path, location.lineno
+                            message = "%s: %s" % (report.nodeid.split("::")[-1], location.message)
+                            break
+                except Exception:
+                    pass
+                failures.append({"test": report.nodeid, "file": os.path.abspath(where_file), "line": where_line, "message": message})
+
+    code = pytest.main(["-q", "-rfE", "--color=yes", "-p", "no:cacheprovider", target], plugins=[Collector()])
+    _write(failures, counts["passed"], counts["failed"])
+    return int(code)
+
+
+def with_unittest(target):
+    import unittest
+    loader = unittest.TestLoader()
+    if os.path.isdir(target):
+        suite = loader.discover(target, pattern="test*.py")
+    else:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(target)))
+        suite = loader.loadTestsFromName(os.path.splitext(os.path.basename(target))[0])
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    failures = []
+    for test, text in result.failures + result.errors:
+        line, file = 1, None
+        for chunk in text.splitlines():
+            chunk = chunk.strip()
+            if chunk.startswith('File "'):
+                name = chunk.split('"')[1]
+                if _inside(name):
+                    file = name
+                    try:
+                        line = int(chunk.split("line ")[1].split(",")[0])
+                    except Exception:
+                        pass
+        message = text.strip().splitlines()[-1] if text.strip() else str(test)
+        failures.append({"test": str(test), "file": os.path.abspath(file) if file else None, "line": line, "message": message})
+    _write(failures, result.testsRun - len(failures), len(failures))
+    return 0 if result.wasSuccessful() else 1
+
+
+def main():
+    target = sys.argv[1] if len(sys.argv) > 1 else "."
+    try:
+        import pytest  # noqa: F401
+        has_pytest = True
+    except Exception:
+        has_pytest = False
+    sys.exit(with_pytest(target) if has_pytest else with_unittest(target))
 
 
 if __name__ == "__main__":
@@ -3903,6 +4222,109 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     }
     
     /// Runs a .py file from a copy of its project (or of its folder).
+    // MARK: arguments of a script (remembered per file)
+    
+    private static func argumentsKey(_ script: URL) -> String { "fork.python.args." + script.resolvingSymlinksInPath().path }
+    
+    static func savedArguments(for script: URL) -> String {
+        UserDefaults.standard.string(forKey: argumentsKey(script)) ?? ""
+    }
+    
+    /// Shell-like split: spaces separate, quotes keep spaces, backslash escapes.
+    static func splitArguments(_ text: String) -> [String] {
+        var result: [String] = [], current = "", quote: Character? = nil, escaped = false, started = false
+        for character in text {
+            if escaped { current.append(character); escaped = false; started = true; continue }
+            if character == "\\" && quote != "'" { escaped = true; continue }
+            if let open = quote {
+                if character == open { quote = nil } else { current.append(character) }
+                continue
+            }
+            if character == "\"" || character == "'" { quote = character; started = true; continue }
+            if character == " " || character == "\t" {
+                if started { result.append(current); current = ""; started = false }
+                continue
+            }
+            current.append(character)
+            started = true
+        }
+        if started { result.append(current) }
+        return result
+    }
+    
+    /// ⌥⌘R: asks for the arguments (and offers the project's files), remembers them and runs.
+    static func promptArguments(script: URL, project: NXProject?, from presenter: UIViewController, initial: String? = nil) {
+        let alert = UIAlertController(title: "Run \(script.lastPathComponent) with Arguments", message: "As in a shell: spaces separate, quotes keep spaces. The script runs in a copy of the project, so files of the project can be named by their path. Remembered for this file.", preferredStyle: .alert)
+        alert.addTextField { field in
+            field.text = initial ?? savedArguments(for: script)
+            field.placeholder = "--size 10 data/input.csv"
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+            field.clearButtonMode = .whileEditing
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Add a File of the Project…", style: .default) { [weak alert] _ in
+            let typed = alert?.textFields?.first?.text ?? ""
+            let root: URL = project.map { $0.url as URL } ?? script.deletingLastPathComponent()
+            let files = ProjectFileIndex.files(in: root).filter { $0.pathExtension.lowercased() != "py" && !$0.path.contains("/Config/") }.prefix(40)
+            let sheet = UIAlertController(title: "File of the Project", message: files.isEmpty ? "No data files in this project yet." : nil, preferredStyle: .actionSheet)
+            for file in files {
+                let relative = ProjectFileIndex.relativePath(file, root: root)
+                sheet.addAction(UIAlertAction(title: relative, style: .default) { _ in
+                    let quoted = relative.contains(" ") ? "\"\(relative)\"" : relative
+                    promptArguments(script: script, project: project, from: presenter, initial: typed.isEmpty ? quoted : typed + " " + quoted)
+                })
+            }
+            sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
+                promptArguments(script: script, project: project, from: presenter, initial: typed)
+            })
+            sheet.popoverPresentationController?.sourceView = presenter.view
+            sheet.popoverPresentationController?.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 1, height: 1)
+            presenter.present(sheet, animated: true)
+        })
+        alert.addAction(UIAlertAction(title: "Run", style: .default) { [weak alert] _ in
+            let text = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespaces)
+            UserDefaults.standard.set(text, forKey: argumentsKey(script))
+            run(script: script, project: project, from: presenter)
+        })
+        presenter.present(alert, animated: true)
+    }
+    
+    // MARK: tests
+    
+    /// ⌘U: pytest (or unittest) on this file when it is a test file, else on the whole project.
+    static func runTests(for script: URL?, project: NXProject?, from presenter: UIViewController) {
+        presenter.view.window?.endEditing(true)
+        guard let root: URL = project.map({ $0.url as URL }) ?? script?.deletingLastPathComponent() else { return }
+        let runFolder = mirrorFolder(project: root)
+        let resultFile = runFolder.appendingPathComponent(".nyxian-tests.json")
+        var target = "."
+        if let script {
+            let name = script.deletingPathExtension().lastPathComponent
+            if name.hasPrefix("test_") || name.hasSuffix("_test") { target = ProjectFileIndex.relativePath(script, root: root) }
+        }
+        let openTexts = LiveEditorRegistry.openTexts()
+        ForkPythonIssues.clearRuntime(under: root)
+        launch(from: presenter, arguments: ["-m", "nyxian_tests", target], workingDirectory: runFolder, title: "Tests · \(target == "." ? root.lastPathComponent : URL(fileURLWithPath: target).lastPathComponent)", extraEnvironment: ["NYXIAN_TEST_FILE": resultFile.path], beforeLaunch: {
+            _ = try mirror(project: root, openTexts: openTexts)
+            try? FileManager.default.removeItem(at: resultFile)
+        }, onExit: { _ in
+            guard let data = try? Data(contentsOf: resultFile),
+                  let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return "[no test results — is there a test_*.py?]" }
+            let failures = result["failures"] as? [[String: Any]] ?? []
+            for failure in failures {
+                guard let file = failure["file"] as? String, let line = failure["line"] as? Int else { continue }
+                let source = root.appendingPathComponent(ProjectFileIndex.relativePath(URL(fileURLWithPath: file), root: runFolder))
+                ForkPythonIssues.addRuntime(file: source, line: line, message: "test failed: " + (failure["message"] as? String ?? (failure["test"] as? String ?? "")))
+            }
+            let passed = result["passed"] as? Int ?? 0, failed = result["failed"] as? Int ?? failures.count
+            DispatchQueue.main.async {
+                NXAlertDiagnosticPresenter.notifyUser(with: failed == 0 ? .note : .error, withMessage: failed == 0 ? "Tests passed: \(passed)" : "\(failed) test\(failed == 1 ? "" : "s") failed, \(passed) passed — lines marked in the editor", withDelay: 0.0)
+            }
+            return failed == 0 ? "[\(passed) passed]" : "[\(failed) failed · \(passed) passed — the failing lines are marked in the editor]"
+        })
+    }
+    
     static func run(script: URL, project: NXProject?, from presenter: UIViewController) {
         /* the editor's keyboard goes away before the terminal takes over */
         presenter.view.window?.endEditing(true)
@@ -3912,7 +4334,9 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         let runFolder = mirrorFolder(project: root)
         let errorFile = runFolder.appendingPathComponent(".nyxian-error.json")
         ForkPythonIssues.clearRuntime(under: root)
-        launch(from: presenter, arguments: [relative], workingDirectory: runFolder, title: "python3 \(script.lastPathComponent)", extraEnvironment: ["NYXIAN_ERROR_FILE": errorFile.path], beforeLaunch: {
+        let scriptArguments = splitArguments(savedArguments(for: script))
+        let title = "python3 \(script.lastPathComponent)" + (scriptArguments.isEmpty ? "" : " " + scriptArguments.joined(separator: " "))
+        launch(from: presenter, arguments: [relative] + scriptArguments, workingDirectory: runFolder, title: title, extraEnvironment: ["NYXIAN_ERROR_FILE": errorFile.path], beforeLaunch: {
             _ = try mirror(project: root, openTexts: openTexts)
             try? FileManager.default.removeItem(at: errorFile)
         }, onExit: { _ in
@@ -3938,6 +4362,11 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             let list = copied.prefix(10).joined(separator: ", ") + (copied.count > 10 ? " … (+\(copied.count - 10))" : "")
             return "[copied to the project: \(list) — tap it in the file list to see it]"
         })
+    }
+    
+    /// Where the project's cell console writes its variables (the inspector reads it).
+    static func variablesFile(project root: URL) -> URL {
+        mirrorFolder(project: root).appendingPathComponent(".nyxian-vars.json")
     }
     
     // MARK: cells (# %%) in a console that stays open, one per project
@@ -3969,7 +4398,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         cellConsoles[key] = nil
         let cellFile = runFolder.appendingPathComponent(".nyxian-cell.py")
         presenter.view.window?.endEditing(true)
-        launch(from: presenter, arguments: ["-q", "-m", "nyxian_repl", "--cell", cellFile.path], workingDirectory: runFolder, title: "Cells · \(script.lastPathComponent)", closeOnExit: true, beforeLaunch: {
+        launch(from: presenter, arguments: ["-q", "-m", "nyxian_repl", "--cell", cellFile.path], workingDirectory: runFolder, title: "Cells · \(script.lastPathComponent)", closeOnExit: true, extraEnvironment: ["NYXIAN_VARS_FILE": variablesFile(project: root).path], beforeLaunch: {
             _ = try mirror(project: root, openTexts: openTexts)
             try code.write(to: cellFile, atomically: true, encoding: .utf8)
         }, onExit: { _ in

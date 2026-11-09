@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.15.1
+ Fork doctoralvarez/Nyxian — version 1.16.0
  Changelog:
+  - 1.16.0 (2026-11-09): Python — Run with Arguments (⌥⌘R), Run Tests (⌘U),
+    Show Variables (⌥⌘V: the cell console's variables, the sheet stays half
+    open next to the code), in the edit menu and the iPhone ⋯ menu.
   - 1.15.1 (2026-11-09): Swift completion does not ask the compiler while the
     project's code would crash it (ForkSwiftCrashGuard).
   - 1.15.0 (2026-11-08): Rename Symbol (⌃⌘E) in Swift renames only what the
@@ -615,6 +618,9 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
                 }
             }
             if compactBar {
+                moreActions.append(UIAction(title: "Run with Arguments…", image: UIImage(systemName: "text.badge.plus")) { [weak self] _ in self?.forkRunPythonWithArguments() })
+                moreActions.append(UIAction(title: "Run Tests", image: UIImage(systemName: "checkmark.diamond")) { [weak self] _ in self?.forkRunPythonTests() })
+                moreActions.append(UIAction(title: "Show Variables", image: UIImage(systemName: "tablecells")) { [weak self] _ in self?.forkShowPythonVariables() })
                 moreActions.append(UIAction(title: "Run File in Console", image: UIImage(systemName: "terminal")) { [weak self] _ in self?.forkRunPythonFileInConsole() })
                 moreActions.append(UIAction(title: "Copy Python Output to Project", image: UIImage(systemName: "square.and.arrow.down.on.square")) { [weak self] _ in self?.forkCopyPythonOutput() })
             }
@@ -868,6 +874,9 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         if self.file.fileURL?.pathExtension.lowercased() == "py" {
             commands.append(command("Run Python File", #selector(forkRunPythonFile), "r"))
             commands.append(command("Copy Python Output to Project", #selector(forkCopyPythonOutput), "r", [.command, .shift]))
+            commands.append(command("Run with Arguments…", #selector(forkRunPythonWithArguments), "r", [.command, .alternate]))
+            commands.append(command("Run Tests", #selector(forkRunPythonTests), "u"))
+            commands.append(command("Show Variables", #selector(forkShowPythonVariables), "v", [.command, .alternate]))
             commands.append(command("Run Cell", #selector(forkRunPythonCell), "\r"))
             commands.append(command("Run File in Console", #selector(forkRunPythonFileInConsole), "\r", [.command, .shift]))
         }
@@ -1050,7 +1059,10 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             if self.file.fileURL?.pathExtension.lowercased() == "py" {
                 builder.insertChild(UIMenu(options: .displayInline, children: [
                     UIAction(title: "Run Python File", image: UIImage(systemName: "play.fill")) { _ in self.forkRunPythonFile() },
+                    UIAction(title: "Run with Arguments…", image: UIImage(systemName: "text.badge.plus")) { _ in self.forkRunPythonWithArguments() },
+                    UIAction(title: "Run Tests", image: UIImage(systemName: "checkmark.diamond")) { _ in self.forkRunPythonTests() },
                     UIAction(title: "Run Cell (# %%)", image: UIImage(systemName: "play.square")) { _ in self.forkRunPythonCell() },
+                    UIAction(title: "Show Variables", image: UIImage(systemName: "tablecells")) { _ in self.forkShowPythonVariables() },
                     UIAction(title: "Run File in Console", image: UIImage(systemName: "terminal")) { _ in self.forkRunPythonFileInConsole() },
                     UIAction(title: "Copy Python Output to Project", image: UIImage(systemName: "square.and.arrow.down.on.square")) { _ in self.forkCopyPythonOutput() },
                     UIAction(title: "Format Document", image: UIImage(systemName: "text.alignleft")) { _ in self.formatDocument() }
@@ -3600,6 +3612,38 @@ extension CodeEditorViewController {
             let offset = lines[0...end].reduce(0) { $0 + ($1 as NSString).length + 1 }
             self.textView.selectedRange = NSRange(location: min(offset, text.length), length: 0)
         }
+    }
+    
+    /// ⌥⌘R: arguments for this script (remembered), then run.
+    @objc func forkRunPythonWithArguments() {
+        guard let url = self.file.fileURL else { return }
+        NXDocumentManager.shared().saveAll { [weak self] in
+            guard let self else { return }
+            ForkPython.promptArguments(script: url, project: self.project, from: self)
+        }
+    }
+    
+    /// ⌘U: the tests of this file (test_*.py) or of the whole project.
+    @objc func forkRunPythonTests() {
+        let url = self.file.fileURL
+        NXDocumentManager.shared().saveAll { [weak self] in
+            guard let self else { return }
+            ForkPython.runTests(for: url, project: self.project, from: self)
+        }
+    }
+    
+    /// ⌥⌘V: the variables of the project's cell console.
+    @objc func forkShowPythonVariables() {
+        guard let url = self.file.fileURL else { return }
+        let root: URL = self.project.map { $0.url as URL } ?? url.deletingLastPathComponent()
+        let inspector = UINavigationController(rootViewController: ForkPythonVariablesViewController(file: ForkPython.variablesFile(project: root)))
+        inspector.modalPresentationStyle = .pageSheet
+        if let sheet = inspector.sheetPresentationController {
+            sheet.detents = [.medium(), .large()]
+            sheet.prefersGrabberVisible = true
+            sheet.largestUndimmedDetentIdentifier = .medium
+        }
+        present(inspector, animated: true)
     }
     
     /// The whole file in the project's Python console (its variables stay for the cells).
