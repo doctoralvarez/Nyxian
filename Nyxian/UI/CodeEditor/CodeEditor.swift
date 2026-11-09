@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.14.0
+ Fork doctoralvarez/Nyxian — version 1.15.0
  Changelog:
+  - 1.15.0 (2026-11-08): Rename Symbol (⌃⌘E) in Swift renames only what the
+    compiler says is the same symbol (other matches, comments and strings stay;
+    "Rename Every Match" remains); Format Document (⌃I) uses
+    ForkSwiftFormatter (spacing, SwiftUI chains, blank lines, the file's
+    indentation) and formats Python files too; live SwiftUI preview — after
+    ⌥⌘P, every save (⌘S) builds and shows it again (⇧⌥⌘P stops).
   - 1.14.0 (2026-11-08): Python cells — Run Cell (⌘↩, the cell (# %%) or
     selection at the caret, then on to the next cell) and Run File in Console
     (⇧⌘↩) in the project's console, whose variables stay; "Install with pip"
@@ -731,6 +737,8 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         if !self.isReadOnly {
             defer {
                 self.document?.autosave()
+                /* fork: live SwiftUI preview */
+                DispatchQueue.main.async { [weak self] in self?.forkRefreshLivePreview() }
             }
             
             showSaveAnimation()
@@ -868,6 +876,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         }
         if self.file.isSwift, self.project != nil {
             commands.append(command("Run Preview", #selector(forkRunPreview), "p", [.command, .alternate]))
+            commands.append(command("Stop Live Preview", #selector(forkStopLivePreview), "p", [.command, .alternate, .shift]))
         }
 
         if !self.isReadOnly {
@@ -1041,7 +1050,8 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
                     UIAction(title: "Run Python File", image: UIImage(systemName: "play.fill")) { _ in self.forkRunPythonFile() },
                     UIAction(title: "Run Cell (# %%)", image: UIImage(systemName: "play.square")) { _ in self.forkRunPythonCell() },
                     UIAction(title: "Run File in Console", image: UIImage(systemName: "terminal")) { _ in self.forkRunPythonFileInConsole() },
-                    UIAction(title: "Copy Python Output to Project", image: UIImage(systemName: "square.and.arrow.down.on.square")) { _ in self.forkCopyPythonOutput() }
+                    UIAction(title: "Copy Python Output to Project", image: UIImage(systemName: "square.and.arrow.down.on.square")) { _ in self.forkCopyPythonOutput() },
+                    UIAction(title: "Format Document", image: UIImage(systemName: "text.alignleft")) { _ in self.formatDocument() }
                 ]), atEndOfMenu: .standardEdit)
             } else if let url = self.file.fileURL, url.pathExtension.lowercased() == "txt", url.lastPathComponent.lowercased().hasPrefix("requirements") {
                 builder.insertChild(UIMenu(options: .displayInline, children: [
@@ -2054,7 +2064,10 @@ extension CodeEditorViewController {
         if self.file.isClang {
             formatted = MDKASTUnit.formattedSource(original, fileName: self.file.fileURL.lastPathComponent)
         } else if self.file.isSwift {
-            formatted = SwiftReindenter.reindent(original)
+            /* fork 1.15: spacing, SwiftUI modifier chains, blank lines, the file's own indentation */
+            formatted = ForkSwiftFormatter.formatSwift(original)
+        } else if self.file.fileURL?.pathExtension.lowercased() == "py" {
+            formatted = ForkSwiftFormatter.formatPython(original)
         }
         guard let result = formatted else { return }
         self.replaceWholeText(result)
@@ -2113,6 +2126,15 @@ extension CodeEditorViewController {
     }
     
     private func confirmRename(_ symbol: String, to newName: String) {
+        /* fork 1.15: Swift asks the compiler which matches are this very symbol */
+        if self.file.isSwift, let server = self.languageServer {
+            confirmSemanticRename(symbol, to: newName, server: server)
+            return
+        }
+        confirmTextRename(symbol, to: newName)
+    }
+    
+    private func confirmTextRename(_ symbol: String, to newName: String) {
         let plan = SymbolRenamer.plan(renaming: symbol, to: newName, in: self.project, currentEditor: self)
         guard plan.occurrences > 0 else { return }
         
@@ -2130,6 +2152,96 @@ extension CodeEditorViewController {
             }
         })
         self.present(alert, animated: true)
+    }
+}
+
+extension CodeEditorViewController {
+    /// Renames only the matches the Swift compiler says are the symbol under the caret.
+    fileprivate func confirmSemanticRename(_ symbol: String, to newName: String, server: NXLanguageServer) {
+        let text = self.textView.text
+        let caretRange: NSRange = ForkTextPosition.identifier(in: text, at: self.textView.selectedRange.location) ?? self.textView.selectedRange
+        let (caretLine, caretColumn) = ForkTextPosition.lineAndUTF8Column(in: text, utf16Offset: caretRange.location)
+        let currentURL: URL? = self.file.fileURL
+        var files: [URL] = self.project.map { ProjectFileIndex.files(in: $0.url as URL) } ?? []
+        if let currentURL, !files.contains(where: { $0.resolvingSymlinksInPath().path == currentURL.resolvingSymlinksInPath().path }) {
+            files.append(currentURL)
+        }
+        files = files.filter { $0.pathExtension.lowercased() == "swift" }
+        var texts: [URL: String] = [:]
+        for url in files {
+            texts[url] = LiveEditorRegistry.editor(forPath: url.path)?.textView.text ?? (try? String(contentsOf: url, encoding: .utf8))
+        }
+        if let currentURL { texts[currentURL] = text }
+        
+        let progress = UIAlertController(title: "Rename \"\(symbol)\"", message: "Asking the compiler which matches are this symbol…", preferredStyle: .alert)
+        var cancelled = false
+        progress.addAction(UIAlertAction(title: "Stop", style: .cancel) { _ in cancelled = true })
+        present(progress, animated: true)
+        
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let pattern = "(?<![A-Za-z0-9_])" + NSRegularExpression.escapedPattern(for: symbol) + "(?![A-Za-z0-9_])"
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
+            let usr = server.swiftSymbol(line: caretLine, utf8Column: caretColumn, content: text, inFile: nil)?["usr"] as? String
+            var verified: [URL: [NSRange]] = [:]
+            var textual = 0
+            var checked = 0
+            for url in files {
+                guard !cancelled, let content = texts[url] else { continue }
+                let isCurrent = url.resolvingSymlinksInPath().path == currentURL?.resolvingSymlinksInPath().path
+                for match in regex.matches(in: content, range: NSRange(location: 0, length: (content as NSString).length)) {
+                    if cancelled { break }
+                    textual += 1
+                    guard let usr else { continue }
+                    checked += 1
+                    let (line, column) = ForkTextPosition.lineAndUTF8Column(in: content, utf16Offset: match.range.location)
+                    if (server.swiftSymbol(line: line, utf8Column: column, content: content, inFile: isCurrent ? nil : url.path)?["usr"] as? String) == usr {
+                        verified[url, default: []].append(match.range)
+                    }
+                    if checked % 20 == 0 {
+                        DispatchQueue.main.async { progress.message = "Asking the compiler… \(checked) checked" }
+                    }
+                }
+            }
+            let count = verified.values.reduce(0) { $0 + $1.count }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                progress.dismiss(animated: true) {
+                    guard !cancelled else { return }
+                    guard usr != nil, count > 0 else {
+                        /* the compiler could not tell: offer the whole-word rename */
+                        self.confirmTextRename(symbol, to: newName)
+                        return
+                    }
+                    let others = textual - count
+                    let alert = UIAlertController(
+                        title: "Rename to \"\(newName)\"?",
+                        message: "\(count) reference\(count == 1 ? "" : "s") to this symbol in \(verified.count) file\(verified.count == 1 ? "" : "s")." + (others > 0 ? " \(others) other match\(others == 1 ? "" : "es") of \"\(symbol)\" (another symbol, a comment or a string) stay as they are." : "") + " Open files can be undone with ⌘Z.",
+                        preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+                    if others > 0 {
+                        alert.addAction(UIAlertAction(title: "Rename Every Match (\(textual))", style: .default) { _ in
+                            self.confirmTextRename(symbol, to: newName)
+                        })
+                    }
+                    alert.addAction(UIAlertAction(title: "Rename", style: .destructive) { _ in
+                        var changes: [SymbolRenamer.Change] = []
+                        for (url, ranges) in verified {
+                            guard let content = texts[url] else { continue }
+                            let mutable = NSMutableString(string: content)
+                            for range in ranges.sorted(by: { $0.location > $1.location }) {
+                                mutable.replaceCharacters(in: range, with: newName)
+                            }
+                            changes.append(SymbolRenamer.Change(url: url, newText: mutable as String, count: ranges.count))
+                        }
+                        let failures = SymbolRenamer.apply(SymbolRenamer.Plan(changes: changes))
+                        if !failures.isEmpty {
+                            NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Could not write: \(failures.joined(separator: ", "))", withDelay: 0.0)
+                        }
+                    })
+                    self.present(alert, animated: true)
+                }
+            }
+        }
     }
 }
 
@@ -3337,6 +3449,27 @@ extension CodeEditorViewController {
         present(sheet, animated: true)
     }
     
+    /// Files with a live preview: file path -> name of the preview.
+    static var forkLivePreviews: [String: String] = [:]
+    
+    /// After a save: the live preview of this file is built again.
+    func forkRefreshLivePreview() {
+        guard self.file.isSwift, let project = self.project, let path = self.file.fileURL?.path,
+              let name = CodeEditorViewController.forkLivePreviews[path], !NXBuilder.builds else { return }
+        let text = self.textView.text
+        let previews = ForkSwiftUIPreview.previews(in: text)
+        guard let preview = previews.first(where: { $0.name == name }) ?? previews.first else {
+            CodeEditorViewController.forkLivePreviews[path] = nil
+            return
+        }
+        forkBuildPreview(preview, project: project, text: text)
+    }
+    
+    @objc func forkStopLivePreview() {
+        guard let path = self.file.fileURL?.path, CodeEditorViewController.forkLivePreviews.removeValue(forKey: path) != nil else { return }
+        NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Live preview off", withDelay: 0.0)
+    }
+    
     private func forkBuildPreview(_ preview: ForkSwiftUIPreview.Preview, project: NXProject, text: String) {
         let previewProject: NXProject
         do {
@@ -3346,8 +3479,17 @@ extension CodeEditorViewController {
             return
         }
         let name = (previewProject.projectConfig.displayName ?? "Preview")
+        let filePath = self.file.fileURL?.path
         buildProjectWithArgumentUI(targetViewController: self, project: previewProject, buildType: .run) { result, _ in
             guard result else { return }
+            /* fork: live — saving this file (⌘S) builds and shows the preview again */
+            if let filePath {
+                let wasLive = CodeEditorViewController.forkLivePreviews[filePath] != nil
+                CodeEditorViewController.forkLivePreviews[filePath] = preview.name
+                if !wasLive {
+                    NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Live preview: saving this file (⌘S) updates it", withDelay: 0.0)
+                }
+            }
             let pid = PEProcessManager.shared().spawnProcess(withBundleIdentifier: previewProject.projectConfig.bundleid, withItems: ForkPhoneConsole.shared.itemsForNewRun(name: name), withKernelSurfaceProcess: nil, doRestartIfRunning: true)
             ForkPhoneConsole.shared.attach(processIdentifier: pid)
             ForkDebugSession.shared.start(processIdentifier: pid, project: previewProject)

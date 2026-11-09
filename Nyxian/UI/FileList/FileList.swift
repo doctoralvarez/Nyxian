@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.6.1
+ Fork doctoralvarez/Nyxian — version 1.7.0
  Changelog:
+  - 1.7.0 (2026-11-08): New › From Template (SwiftUI View, List and Detail,
+    Observable Model, Codable Model, Python Script / Notebook / Module).
   - 1.6.1 (2026-11-08): the debugger is off by default (Settings ›
     Customization › Debugger); it attaches only when it is on.
   - 1.6.0 (2026-11-08): pictures, PDFs and media open in a Quick Look preview
@@ -366,6 +368,31 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
         self.present(alert, animated: true)
     }
     
+    /// Asks for a name and writes the template's file into this folder.
+    func forkCreateFromTemplate(_ template: ForkFileTemplate) {
+        let alert = UIAlertController(title: template.title, message: template.subtitle, preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = template.placeholder
+            field.autocapitalizationType = template.fileExtension == "py" ? .none : .words
+            field.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Create", style: .default) { [weak self, weak alert] _ in
+            guard let self else { return }
+            let typed = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespaces)
+            let name = ForkFileTemplate.identifier(from: typed.isEmpty ? template.placeholder : typed, type: template.fileExtension != "py")
+            let destination = URL(fileURLWithPath: self.path).appendingPathComponent("\(name).\(template.fileExtension)")
+            guard !FileManager.default.fileExists(atPath: destination.path) else {
+                NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "\(destination.lastPathComponent) already exists", withDelay: 0.0)
+                return
+            }
+            let header = String(NXUser.shared().generateFileCreationContent(forName: destination.lastPathComponent))
+            try? (header + template.body(name)).write(to: destination, atomically: true, encoding: .utf8)
+            self.addFile(destination: destination)
+        })
+        present(alert, animated: true)
+    }
+    
     func generateMenu() -> UIMenu {
         var rootMenuChildren: [UIMenu] = []
         
@@ -516,6 +543,12 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             createMenuElements.append(UIAction(title: "Folder", image: UIImage(systemName: "folder.fill"), handler: { [weak self] _ in
                 guard let self = self else { return }
                 self.createEntry(mode: .dir)
+            }))
+            /* fork: files that start with useful code */
+            createMenuElements.append(UIMenu(title: "From Template", image: UIImage(systemName: "doc.badge.plus"), children: ForkFileTemplate.all.map { template in
+                UIAction(title: template.title, subtitle: template.subtitle, image: UIImage(systemName: template.symbol)) { [weak self] _ in
+                    self?.forkCreateFromTemplate(template)
+                }
             }))
             fileMenuElements.append(UIMenu(title: "New", image: UIImage(systemName: "plus.circle.fill"), children: createMenuElements))
             fileMenuElements.append(UIAction(title: "Paste", image: UIImage(systemName: "list.bullet.clipboard.fill"), handler: { [weak self] _ in
@@ -3339,4 +3372,199 @@ final class ForkQuickLook: NSObject, QLPreviewControllerDataSource {
     func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
         urls[index] as NSURL
     }
+}
+
+// MARK: - Fork: file templates
+
+/// Files that start with working code. (No @Observable / #Preview: those macros
+/// need plugins that only ship with Xcode, so ObservableObject and PreviewProvider.)
+struct ForkFileTemplate {
+    let title: String
+    let subtitle: String
+    let symbol: String
+    let fileExtension: String
+    let placeholder: String
+    let body: (String) -> String
+    
+    /// "my view" -> "MyView" (types) or "my_view" (Python modules).
+    static func identifier(from text: String, type: Bool) -> String {
+        let words = text.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+        guard !words.isEmpty else { return type ? "NewFile" : "new_file" }
+        var name = type ? words.map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined() : words.map { $0.lowercased() }.joined(separator: "_")
+        if let first = name.first, first.isNumber { name = (type ? "T" : "m_") + name }
+        return name
+    }
+    
+    static let all: [ForkFileTemplate] = [
+        ForkFileTemplate(title: "SwiftUI View", subtitle: "A view with its preview", symbol: "rectangle.on.rectangle", fileExtension: "swift", placeholder: "ContentView") { name in
+            """
+            import SwiftUI
+
+            struct \(name): View {
+                var body: some View {
+                    VStack(spacing: 12) {
+                        Image(systemName: "sparkles")
+                            .font(.largeTitle)
+                        Text("\(name)")
+                            .font(.title2)
+                    }
+                    .padding()
+                }
+            }
+
+            struct \(name)_Previews: PreviewProvider {
+                static var previews: some View {
+                    \(name)()
+                }
+            }
+
+            """
+        },
+        ForkFileTemplate(title: "List and Detail", subtitle: "NavigationStack, a list and a detail view", symbol: "list.bullet.rectangle", fileExtension: "swift", placeholder: "ItemsView") { name in
+            """
+            import SwiftUI
+
+            struct \(name): View {
+                @State private var items: [String] = ["Primero", "Segundo", "Tercero"]
+                @State private var search = ""
+
+                private var shown: [String] {
+                    search.isEmpty ? items : items.filter { $0.localizedCaseInsensitiveContains(search) }
+                }
+
+                var body: some View {
+                    NavigationStack {
+                        List {
+                            ForEach(shown, id: \\.self) { item in
+                                NavigationLink(item) {
+                                    Text(item)
+                                        .font(.largeTitle)
+                                        .navigationTitle(item)
+                                }
+                            }
+                            .onDelete { offsets in items.remove(atOffsets: offsets) }
+                        }
+                        .searchable(text: $search)
+                        .navigationTitle("\(name)")
+                        .toolbar {
+                            Button("Add", systemImage: "plus") {
+                                items.append("Item \\(items.count + 1)")
+                            }
+                        }
+                    }
+                }
+            }
+
+            struct \(name)_Previews: PreviewProvider {
+                static var previews: some View {
+                    \(name)()
+                }
+            }
+
+            """
+        },
+        ForkFileTemplate(title: "Observable Model", subtitle: "ObservableObject with @Published, for @StateObject", symbol: "cube.box", fileExtension: "swift", placeholder: "Model") { name in
+            """
+            import Foundation
+            import Combine
+
+            final class \(name): ObservableObject {
+                @Published var items: [String] = []
+                @Published var isLoading = false
+
+                func add(_ item: String) {
+                    items.append(item)
+                }
+
+                func remove(at offsets: IndexSet) {
+                    items.remove(atOffsets: offsets)
+                }
+            }
+
+            """
+        },
+        ForkFileTemplate(title: "Codable Model", subtitle: "Struct that reads and writes JSON", symbol: "curlybraces", fileExtension: "swift", placeholder: "Record") { name in
+            """
+            import Foundation
+
+            struct \(name): Codable, Identifiable, Hashable {
+                var id = UUID()
+                var name: String
+                var date: Date = .now
+
+                static func load(from url: URL) throws -> [\(name)] {
+                    let decoder = JSONDecoder()
+                    decoder.dateDecodingStrategy = .iso8601
+                    return try decoder.decode([\(name)].self, from: Data(contentsOf: url))
+                }
+
+                static func save(_ records: [\(name)], to url: URL) throws {
+                    let encoder = JSONEncoder()
+                    encoder.dateEncodingStrategy = .iso8601
+                    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                    try encoder.encode(records).write(to: url, options: .atomic)
+                }
+            }
+
+            """
+        },
+        ForkFileTemplate(title: "Python Script", subtitle: "With main() and arguments", symbol: "chevron.left.forwardslash.chevron.right", fileExtension: "py", placeholder: "script") { name in
+            """
+            import sys
+
+
+            def main(args):
+                print("Hola desde \(name).py", args)
+                return 0
+
+
+            if __name__ == "__main__":
+                sys.exit(main(sys.argv[1:]))
+
+            """
+        },
+        ForkFileTemplate(title: "Python Notebook", subtitle: "Cells (# %%) to run one by one with ⌘↩", symbol: "square.grid.3x1.below.line.grid.1x2", fileExtension: "py", placeholder: "analysis") { name in
+            """
+            # %% Datos
+            import numpy as np
+            import pandas as pd
+
+            datos = pd.DataFrame({"x": np.arange(10), "y": np.random.default_rng(0).normal(size=10)})
+            datos.describe()
+
+            # %% Cálculo
+            datos["y2"] = datos["y"] ** 2
+            datos.head()
+
+            # %% Gráfica
+            import matplotlib.pyplot as plt
+
+            plt.plot(datos["x"], datos["y"], marker="o")
+            plt.title("\(name)")
+            plt.show()
+
+            """
+        },
+        ForkFileTemplate(title: "Python Module", subtitle: "A class with a test at the end", symbol: "shippingbox", fileExtension: "py", placeholder: "module") { name in
+            """
+            from dataclasses import dataclass, field
+
+
+            @dataclass
+            class Registro:
+                nombre: str
+                valores: list[float] = field(default_factory=list)
+
+                def promedio(self) -> float:
+                    return sum(self.valores) / len(self.valores) if self.valores else 0.0
+
+
+            if __name__ == "__main__":
+                r = Registro("\(name)", [1.0, 2.0, 3.0])
+                assert r.promedio() == 2.0
+                print(r, r.promedio())
+
+            """
+        },
+    ]
 }

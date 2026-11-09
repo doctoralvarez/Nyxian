@@ -4,6 +4,25 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.32.0 — 2026-11-08
+
+- **Rename Symbol (⌃⌘E) by meaning in Swift**: every match of the name in the
+  project is checked with the compiler, and only the references to the very
+  symbol under the caret are renamed — another symbol with the same name, a
+  comment or a string stays as it is (the dialog says how many; "Rename Every
+  Match" is still there). C, Objective-C and Python keep the whole-word rename.
+- **Format Document (⌃I)** for Swift: the file's own indentation (spaces or
+  tabs), SwiftUI modifier chains one level in, `case` aligned with `switch`,
+  spaces in `if(`, `){`, `}else`, `else{` and after commas, no trailing
+  spaces, at most one blank line in a row; strings and comments untouched.
+  Python files: trailing spaces, tabs in indentation and blank-line runs.
+  Tested by CI.
+- **New › From Template**: SwiftUI View, List and Detail, Observable Model
+  (ObservableObject), Codable Model (JSON load/save), Python Script, Python
+  Notebook (# %% cells), Python Module.
+- **Live SwiftUI preview**: after ⌥⌘P, saving the file (⌘S) builds and shows
+  the preview again by itself; ⇧⌥⌘P stops it.
+
 ## 1.31.0 — 2026-11-08
 
 - **Python comes with the science pack installed**: numpy, scipy, pandas,

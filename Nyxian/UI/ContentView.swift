@@ -2390,6 +2390,7 @@ final class KeyboardShortcutsHUD {
         "Pause or Continue": "Pausar o continuar",
         "Run Python File": "Ejecutar archivo Python",
         "Run Cell": "Ejecutar celda (# %%)",
+        "Stop Live Preview": "Detener vista previa en vivo",
         "Run File in Console": "Ejecutar archivo en la consola",
         "Copy Python Output to Project": "Traer resultados de Python al proyecto"
     ]
