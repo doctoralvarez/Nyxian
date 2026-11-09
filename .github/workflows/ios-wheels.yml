@@ -1,5 +1,8 @@
-# Fork doctoralvarez/Nyxian — version 1.1.0
+# Fork doctoralvarez/Nyxian — version 1.2.0
 # Changelog:
+#  - 1.2.0 (2026-11-08): meson builds that import numpy for its headers
+#    (pandas) find them without importing it (patch_numpy_include.py);
+#    default package: pandas (scipy needs a Fortran compiler for iOS).
 #  - 1.1.0 (2026-11-08): several packages per run (default: pandas scipy);
 #    a package that already has an iOS wheel for CPython 3.14 (PyPI, BeeWare,
 #    this release) is skipped; one that fails does not stop the others; per
@@ -15,7 +18,7 @@ on:
     inputs:
       packages:
         description: "Packages (pip specs, space separated)"
-        default: "pandas scipy"
+        default: "pandas"
   push:
     branches: [mejoras-editor-ipad]
     paths:
@@ -34,7 +37,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 240
     env:
-      PACKAGES: ${{ github.event.inputs.packages || 'pandas scipy' }}
+      PACKAGES: ${{ github.event.inputs.packages || 'pandas' }}
       FIND_LINKS: https://github.com/${{ github.repository }}/releases/expanded_assets/ios-wheels
     steps:
       - uses: actions/checkout@v4
@@ -82,10 +85,13 @@ jobs:
             archive=$( (ls src/*.tar.gz src/*.zip 2>/dev/null || true) | head -1)
             case "$archive" in *.zip) unzip -q "$archive" -d src/x ;; *) tar -xf "$archive" -C src/x ;; esac
             project=$(ls -d src/x/*/ | head -1)
+            # meson builds that import numpy for its headers (pandas…): found without importing it
+            python tools/fork/ios-wheels/patch_numpy_include.py "$project"
             # settings per package
             unset CIBW_CONFIG_SETTINGS_IOS
             export CIBW_ENVIRONMENT_IOS="PIP_EXTRA_INDEX_URL=https://pypi.anaconda.org/beeware/simple PIP_PREFER_BINARY=1 PIP_FIND_LINKS=$FIND_LINKS"
             case "$name" in
+              # scipy also needs a Fortran compiler for iOS, which the runners do not have
               scipy) export CIBW_CONFIG_SETTINGS_IOS="setup-args=-Dblas=accelerate setup-args=-Dlapack=accelerate" ;;
             esac
             if cibuildwheel --output-dir wheelhouse "$project"; then
