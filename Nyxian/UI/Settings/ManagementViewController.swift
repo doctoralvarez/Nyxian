@@ -389,7 +389,7 @@ final class ForkProcessMonitorViewController: UITableViewController, UISearchRes
     
     private func reload() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let list = PEProcessManager.shared().forkProcessSnapshot()
+            let list = PEProcessManager.shared().forkProcessSnapshot() ?? []
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.all = list
