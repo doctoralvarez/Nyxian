@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.16.0
+ Fork doctoralvarez/Nyxian — version 1.17.0
  Changelog:
+  - 1.17.0 (2026-11-09): quicker SwiftUI previews: only the Swift files the
+    previewed file needs are compiled (found by the names it uses), the whole
+    project when that is not enough (remembered). Python — Shell in This Project, Debug (⌥⌘D: stops at the breakpoints set
+    with ⌘\, the stop line in green) and Cell Outputs (⌥⌘O), in the edit
+    menu and the iPhone ⋯ menu; Python breakpoints need no Swift debugger.
   - 1.16.0 (2026-11-09): Python — Run with Arguments (⌥⌘R), Run Tests (⌘U),
     Show Variables (⌥⌘V: the cell console's variables, the sheet stays half
     open next to the code), in the edit menu and the iPhone ⋯ menu.
@@ -620,8 +625,13 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             if compactBar {
                 moreActions.append(UIAction(title: "Run with Arguments…", image: UIImage(systemName: "text.badge.plus")) { [weak self] _ in self?.forkRunPythonWithArguments() })
                 moreActions.append(UIAction(title: "Run Tests", image: UIImage(systemName: "checkmark.diamond")) { [weak self] _ in self?.forkRunPythonTests() })
+                moreActions.append(UIAction(title: "Debug", image: UIImage(systemName: "ladybug")) { [weak self] _ in self?.forkDebugPythonFile() })
                 moreActions.append(UIAction(title: "Show Variables", image: UIImage(systemName: "tablecells")) { [weak self] _ in self?.forkShowPythonVariables() })
                 moreActions.append(UIAction(title: "Cell Outputs", image: UIImage(systemName: "rectangle.stack")) { [weak self] _ in self?.forkShowPythonCellOutputs() })
+                moreActions.append(UIAction(title: "Shell in This Project", image: UIImage(systemName: "apple.terminal")) { [weak self] _ in
+                    guard let self else { return }
+                    ForkPython.openShell(from: self, project: self.project, script: self.file.fileURL)
+                })
                 moreActions.append(UIAction(title: "Run File in Console", image: UIImage(systemName: "terminal")) { [weak self] _ in self?.forkRunPythonFileInConsole() })
                 moreActions.append(UIAction(title: "Copy Python Output to Project", image: UIImage(systemName: "square.and.arrow.down.on.square")) { [weak self] _ in self?.forkCopyPythonOutput() })
             }
@@ -877,6 +887,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             commands.append(command("Copy Python Output to Project", #selector(forkCopyPythonOutput), "r", [.command, .shift]))
             commands.append(command("Run with Arguments…", #selector(forkRunPythonWithArguments), "r", [.command, .alternate]))
             commands.append(command("Run Tests", #selector(forkRunPythonTests), "u"))
+            commands.append(command("Debug Python File", #selector(forkDebugPythonFile), "d", [.command, .alternate]))
             commands.append(command("Show Variables", #selector(forkShowPythonVariables), "v", [.command, .alternate]))
             commands.append(command("Cell Outputs", #selector(forkShowPythonCellOutputs), "o", [.command, .alternate]))
             commands.append(command("Run Cell", #selector(forkRunPythonCell), "\r"))
@@ -1063,9 +1074,12 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
                     UIAction(title: "Run Python File", image: UIImage(systemName: "play.fill")) { _ in self.forkRunPythonFile() },
                     UIAction(title: "Run with Arguments…", image: UIImage(systemName: "text.badge.plus")) { _ in self.forkRunPythonWithArguments() },
                     UIAction(title: "Run Tests", image: UIImage(systemName: "checkmark.diamond")) { _ in self.forkRunPythonTests() },
+                    UIAction(title: "Debug (stops at breakpoints)", image: UIImage(systemName: "ladybug")) { _ in self.forkDebugPythonFile() },
+                    UIAction(title: "Toggle Breakpoint", image: UIImage(systemName: "smallcircle.filled.circle")) { _ in self.forkToggleBreakpoint() },
                     UIAction(title: "Run Cell (# %%)", image: UIImage(systemName: "play.square")) { _ in self.forkRunPythonCell() },
                     UIAction(title: "Show Variables", image: UIImage(systemName: "tablecells")) { _ in self.forkShowPythonVariables() },
                     UIAction(title: "Cell Outputs", image: UIImage(systemName: "rectangle.stack")) { _ in self.forkShowPythonCellOutputs() },
+                    UIAction(title: "Shell in This Project", image: UIImage(systemName: "apple.terminal")) { _ in ForkPython.openShell(from: self, project: self.project, script: self.file.fileURL) },
                     UIAction(title: "Run File in Console", image: UIImage(systemName: "terminal")) { _ in self.forkRunPythonFileInConsole() },
                     UIAction(title: "Copy Python Output to Project", image: UIImage(systemName: "square.and.arrow.down.on.square")) { _ in self.forkCopyPythonOutput() },
                     UIAction(title: "Format Document", image: UIImage(systemName: "text.alignleft")) { _ in self.formatDocument() }
@@ -3370,30 +3384,95 @@ enum ForkSwiftUIPreview {
     
     static let generatedFileName = "__NyxianPreviewApp.swift"
     
+    // MARK: quick previews: only the Swift files the previewed file needs
+    
+    /// Projects whose quick preview failed once: they are always previewed whole.
+    static var needsWholeProject: Set<String> = []
+    
+    private static let declarationRegex = try! NSRegularExpression(pattern: #"\b(?:struct|class|enum|protocol|actor|typealias)\s+([A-Za-z_][A-Za-z0-9_]*)"#)
+    private static let topLevelRegex = try! NSRegularExpression(pattern: #"(?m)^(?:(?:public|internal|fileprivate|private|nonisolated|@MainActor|@[A-Za-z]+)\s+)*(?:func|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)"#)
+    private static let extensionRegex = try! NSRegularExpression(pattern: #"\bextension\s+([A-Za-z_][A-Za-z0-9_]*)"#)
+    private static let identifierRegex = try! NSRegularExpression(pattern: #"\b[A-Za-z_][A-Za-z0-9_]*\b"#)
+    
+    private static func matches(_ regex: NSRegularExpression, in text: String, group: Int) -> Set<String> {
+        let ns = text as NSString
+        var found = Set<String>()
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            found.insert(ns.substring(with: match.range(at: group)))
+        }
+        return found
+    }
+    
+    /// The Swift files `start` needs: those declaring a type, function or global it names, the
+    /// extensions of those types, and again for each of them. A guess by names, so a failed
+    /// quick build is retried with the whole project.
+    static func swiftClosure(start: String, sources: [String: String]) -> Set<String> {
+        var declares: [String: Set<String>] = [:]   /* name -> files */
+        var extends: [String: Set<String>] = [:]    /* type -> files with an extension of it */
+        var names: [String: Set<String>] = [:]      /* file -> identifiers it uses */
+        for (path, text) in sources {
+            for name in matches(declarationRegex, in: text, group: 1).union(matches(topLevelRegex, in: text, group: 1)) {
+                declares[name, default: []].insert(path)
+            }
+            for name in matches(extensionRegex, in: text, group: 1) {
+                extends[name, default: []].insert(path)
+            }
+            names[path] = matches(identifierRegex, in: text, group: 0)
+        }
+        var included: Set<String> = [start]
+        var queue = [start]
+        while let path = queue.popLast() {
+            for name in names[path] ?? [] {
+                for other in (declares[name] ?? []).union(extends[name] ?? []) where !included.contains(other) {
+                    included.insert(other)
+                    queue.append(other)
+                }
+            }
+        }
+        return included
+    }
+    
     /// Creates or refreshes the preview copy of `project` showing `preview`.
-    static func makeProject(for project: NXProject, preview: Preview, overriding livePath: String?, liveText: String?) throws -> NXProject {
+    /// quick: only the Swift files the previewed file needs (much less to compile).
+    static func makeProject(for project: NXProject, preview: Preview, overriding livePath: String?, liveText: String?, quick: Bool = false) throws -> NXProject {
         let fm = FileManager.default
         let source: URL = project.url
         let destination = NXBootstrap.shared().rootURL.appendingPathComponent("Previews").appendingPathComponent(source.lastPathComponent + "-Preview")
         try fm.createDirectory(at: destination, withIntermediateDirectories: true)
         
         var keep: Set<String> = ["Config/Project.plist", generatedFileName]
+        var files: [(url: URL, relative: String)] = []
+        var swiftTexts: [String: String] = [:]
         if let enumerator = fm.enumerator(at: source, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
             for case let url as URL in enumerator {
                 guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
                 let relative = ProjectFileIndex.relativePath(url, root: source)
                 if relative == "Config/Project.plist" || relative == "Config/GitHub.plist" { continue }
-                keep.insert(relative)
-                var data = (try? Data(contentsOf: url)) ?? Data()
+                files.append((url, relative))
                 if url.pathExtension == "swift" {
-                    var text = (livePath == url.path ? liveText : nil) ?? LiveEditorRegistry.editor(forPath: url.path)?.textView.text ?? String(data: data, encoding: .utf8) ?? ""
-                    /* the copy's only entry point is the preview app */
-                    text = text.replacingOccurrences(of: #"@main\b"#, with: "", options: .regularExpression)
-                    text = strippingPreviews(text)
-                    data = Data(text.utf8)
+                    let data = (try? Data(contentsOf: url)) ?? Data()
+                    swiftTexts[url.path] = (livePath == url.path ? liveText : nil) ?? LiveEditorRegistry.editor(forPath: url.path)?.textView.text ?? String(data: data, encoding: .utf8) ?? ""
                 }
-                try write(data, to: destination.appendingPathComponent(relative))
             }
+        }
+        /* quick: the previewed file and what it needs; every other file of the project stays */
+        var neededSwift: Set<String>? = nil
+        if quick, let livePath, swiftTexts[livePath] != nil {
+            neededSwift = swiftClosure(start: livePath, sources: swiftTexts)
+        }
+        for (url, relative) in files {
+            var data: Data
+            if let text = swiftTexts[url.path] {
+                if let neededSwift, !neededSwift.contains(url.path) { continue }
+                /* the copy's only entry point is the preview app */
+                var copy = text.replacingOccurrences(of: #"@main\b"#, with: "", options: .regularExpression)
+                copy = strippingPreviews(copy)
+                data = Data(copy.utf8)
+            } else {
+                data = (try? Data(contentsOf: url)) ?? Data()
+            }
+            keep.insert(relative)
+            try write(data, to: destination.appendingPathComponent(relative))
         }
         /* files deleted from the project leave the copy too */
         if let enumerator = fm.enumerator(at: destination, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
@@ -3489,17 +3568,27 @@ extension CodeEditorViewController {
         NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Live preview off", withDelay: 0.0)
     }
     
-    private func forkBuildPreview(_ preview: ForkSwiftUIPreview.Preview, project: NXProject, text: String) {
+    private func forkBuildPreview(_ preview: ForkSwiftUIPreview.Preview, project: NXProject, text: String, quick: Bool? = nil) {
+        let projectKey = (project.url as URL).path
+        /* fork: first only the Swift files this one needs; the whole project if that is not enough */
+        let tryQuick = quick ?? !ForkSwiftUIPreview.needsWholeProject.contains(projectKey)
         let previewProject: NXProject
         do {
-            previewProject = try ForkSwiftUIPreview.makeProject(for: project, preview: preview, overriding: self.file.fileURL?.path, liveText: text)
+            previewProject = try ForkSwiftUIPreview.makeProject(for: project, preview: preview, overriding: self.file.fileURL?.path, liveText: text, quick: tryQuick)
         } catch {
             NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Preview: \(error.localizedDescription)", withDelay: 0.0)
             return
         }
         let name = (previewProject.projectConfig.displayName ?? "Preview")
         let filePath = self.file.fileURL?.path
-        buildProjectWithArgumentUI(targetViewController: self, project: previewProject, buildType: .run) { result, _ in
+        NXBuilder.forkQuietFailure = tryQuick
+        buildProjectWithArgumentUI(targetViewController: self, project: previewProject, buildType: .run) { [weak self] result, _ in
+            if !result && tryQuick && !NXBuilder.forkLastBuildCancelled {
+                ForkSwiftUIPreview.needsWholeProject.insert(projectKey)
+                NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Preview: building the whole project (the quick build missed something)", withDelay: 0.0)
+                self?.forkBuildPreview(preview, project: project, text: text, quick: false)
+                return
+            }
             guard result else { return }
             /* fork: live — saving this file (⌘S) builds and shows the preview again */
             if let filePath {
@@ -3533,7 +3622,7 @@ extension CodeEditorViewController {
         let caret = min(self.textView.selectedRange.location, text.length)
         let line = text.substring(to: caret).reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
         ForkBreakpoints.toggle(project: project, url: url, line: line)
-        if !UserDefaults.standard.bool(forKey: "fork.debugger") {
+        if url.pathExtension.lowercased() != "py", !UserDefaults.standard.bool(forKey: "fork.debugger") {
             NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Breakpoints stop the app once the debugger is on: Settings › Customization › Debugger", withDelay: 0.0)
         }
     }
@@ -3565,6 +3654,12 @@ extension CodeEditorViewController {
            URL(fileURLWithPath: file).lastPathComponent == url.lastPathComponent,
            let r = range(of: line) {
             ranges.append(HighlightedRange(id: "fork.stop", range: r, color: UIColor.systemGreen.withAlphaComponent(0.3), cornerRadius: 3))
+        }
+        /* fork: the Python debugger's stop */
+        if let stop = ForkPython.debugStop,
+           stop.file.resolvingSymlinksInPath().path == url.resolvingSymlinksInPath().path,
+           let r = range(of: stop.line) {
+            ranges.append(HighlightedRange(id: "fork.pystop", range: r, color: UIColor.systemGreen.withAlphaComponent(0.3), cornerRadius: 3))
         }
         self.textView.highlightedRanges = ranges
     }
@@ -3647,6 +3742,15 @@ extension CodeEditorViewController {
             sheet.largestUndimmedDetentIdentifier = .medium
         }
         present(inspector, animated: true)
+    }
+    
+    /// ⌥⌘D: the script under Nyxian's Python debugger, stopping at the breakpoints (⌘\\).
+    @objc func forkDebugPythonFile() {
+        guard let url = self.file.fileURL else { return }
+        NXDocumentManager.shared().saveAll { [weak self] in
+            guard let self else { return }
+            ForkPython.debug(script: url, project: self.project, from: self)
+        }
     }
     
     /// ⌥⌘O: each cell's output and figures, one under another (like a notebook).

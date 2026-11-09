@@ -4,6 +4,32 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.39.0 — 2026-11-09
+
+- **Nyxian Shell** (</> › Shell, or ⋯ › Shell in This Project in a `.py`):
+  a shell written in Python for Nyxian's terminal (iOS has no `/bin/sh`).
+  Built-in `ls -la`, `cd`, `pwd`, `cat`, `head`/`tail`, `wc`, `grep -inrvlc`,
+  `find -name -type`, `tree`, `sort`, `mkdir -p`, `rm -r`, `cp -r`, `mv`,
+  `touch`, `echo`, `env`, `export`, `which`, `history`, `clear`, `help`;
+  pipes `|`, redirection `> >> < 2> 2>&1`, `;` `&&` `||`, `$VARIABLES`,
+  `~`, `*.globs`, quotes. Programs (`python3 file.py`, `pip …`, your command
+  line tools) run as processes of their own joined by real pipes, with job
+  control: **^Z** stops the program in front, `jobs`, `fg`, `bg`,
+  `kill [-9] %n`, `cmd &`. In a project it works in its run copy; new files
+  come back when it closes. python3 may now start processes (signed once
+  more on its next start).
+- **Python debugger** (⌥⌘D, or Debug in the edit/⋯ menu): runs the script
+  and stops at the breakpoints set with ⌘\ (no Swift debugger needed); the
+  stop line turns green in the editor and Show Variables (⌥⌘V) shows that
+  frame's variables. In the terminal: `c` continue, `n` next, `s` step into,
+  `r` return, `p`/`pp` expression, `l` list, `w` where, `u`/`d`, `b`,
+  `locals`, `q`. An error that ends the script stops there too.
+- **Quicker SwiftUI previews**: a preview first compiles only the Swift files
+  the previewed file needs (the files that declare the types and functions it
+  names, their extensions, and so on); if that build misses something, the
+  whole project is built and that project is always previewed whole from
+  then on.
+
 ## 1.38.0 — 2026-11-09
 
 - **Two-finger selection in the file list**: slide two fingers down the

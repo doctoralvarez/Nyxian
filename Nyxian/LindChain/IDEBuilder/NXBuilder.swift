@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-09): forkQuietFailure: a failed build that will be tried
+    again another way (the preview's quick build) shows no issue list.
   - 1.2.0 (2026-11-08): Cancel button (top left) while a project builds: the
     screen is usable at once, the build stops before its next stage, nothing
     is installed or run, and what was compiled is kept.
@@ -54,6 +56,10 @@ final class NXBuilder: NSObject {
     static var builds: Bool = false
     /* fork: Cancel during a build — the build stops before its next stage and nothing is installed or run */
     static var forkCancelRequested: Bool = false
+    /* fork: the next failed build shows no issue list (it is retried at once) */
+    static var forkQuietFailure: Bool = false
+    /* fork: whether the last build ended by Cancel */
+    static var forkLastBuildCancelled: Bool = false
     
     init?(project: NXProject) {
         self.project = project
@@ -413,12 +419,15 @@ func buildProjectWithArgumentUI(targetViewController: UIViewController,
                 DispatchQueue.main.async {
                     let cancelled = NXBuilder.forkCancelRequested
                     NXBuilder.forkCancelRequested = false
+                    NXBuilder.forkLastBuildCancelled = cancelled
                     restoreUI()
                     
                     NXBuilder.builds = false
                     
                     if cancelled {
                         NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Build cancelled", withDelay: 0.0)
+                    } else if !result && NXBuilder.forkQuietFailure {
+                        /* fork: retried by the caller */
                     } else if !result {
                         let loggerView = UINavigationController(rootViewController: UIDebugViewController(project: project))
                         loggerView.modalPresentationStyle = .formSheet
@@ -427,6 +436,7 @@ func buildProjectWithArgumentUI(targetViewController: UIViewController,
                         share(url: project.packageURL, remove: true)
                     }
                     
+                    NXBuilder.forkQuietFailure = false
                     completion(result, fastPath)
                 }
             }

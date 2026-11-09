@@ -23,7 +23,15 @@
 /*
  Fork doctoralvarez/Nyxian — version 1.22.0
  Changelog:
-  - 1.22.0 (2026-11-09): cell outputs, like a notebook: every cell run in the
+  - 1.22.0 (2026-11-09): Nyxian Shell (nyxian_shell: built-in ls, cd, grep,
+    cat, cp, mv, rm, find…, pipes, redirection, ; && ||, variables, globs,
+    programs as processes with ^Z / jobs / fg / bg / kill), in the </> menu
+    and per project; python3 may start processes.
+    Python debugger (nyxian_pdb, ForkPython.debug):
+    runs a script stopping at the editor's breakpoints (⌘\), shows the
+    stop line in green, the frame's variables in Show Variables; pdb's
+    commands in the terminal.
+    Cell outputs, like a notebook: every cell run in the
     cell console keeps its code, output, errors and new figures
     (NYXIAN_CELLS_FILE), shown one under another in Cell Outputs (⌥⌘O); with
     that sheet open the console stays behind the editor.
@@ -225,6 +233,10 @@ import UniformTypeIdentifiers
                 UIAction(title: "Python Console", image: UIImage(systemName: "terminal")) { [weak self] _ in
                     guard let self else { return }
                     ForkPython.openConsole(from: self)
+                },
+                UIAction(title: "Shell", image: UIImage(systemName: "apple.terminal")) { [weak self] _ in
+                    guard let self else { return }
+                    ForkPython.openShell(from: self)
                 },
                 UIAction(title: "Python Keyboard Test", image: UIImage(systemName: "keyboard")) { [weak self] _ in
                     guard let self else { return }
@@ -2954,7 +2966,7 @@ enum ForkPython {
     private static let stampKey = "fork.python.stamp"
     private static let launcherKey = "fork.python.launcher"
     private static let signedKey = "fork.python.signedPackageBinaries"
-    private static let signingRevision = 3  /* 3: pip may write all of opt/python */
+    private static let signingRevision = 4  /* 3: pip may write all of opt/python; 4: may start processes (Nyxian Shell) */
 
     /// Python files Nyxian adds to site-packages: the line editor, the REPL, input() with echo.
     private static let helperFiles: [String: String] = [
@@ -3918,6 +3930,1268 @@ def main():
 if __name__ == "__main__":
     main()
 """#,
+        "nyxian_shell.py": #"""
+# Nyxian Shell: a small shell for Nyxian's terminal, written in Python (iOS
+# has no /bin/sh for apps). Built-in commands (ls, cd, cat, grep, cp, mv, rm,
+# mkdir, find, head, tail, wc, …), pipes (|), redirection (> >> < 2> 2>&1),
+# ; && ||, $VARIABLES, ~, *.globs, and programs (python3, your command line
+# tools) started as processes of their own with job control: ^Z stops the
+# one in front, jobs / fg / bg / kill, "&" starts one in the background.
+# Run as: python3 -m nyxian_shell
+import ctypes
+import fnmatch
+import glob
+import io
+import os
+import re
+import shutil
+import signal
+import stat
+import sys
+import threading
+import time
+
+VERSION = "1.0"
+_status = [0]
+_jobs = {}          # number -> {"pids": [...], "pgid": n, "command": text, "state": "Running"/"Stopped"}
+_history = []
+
+
+def _out(text, stream=None):
+    stream = stream or sys.stdout
+    stream.write(text)
+    stream.flush()
+
+
+# ---------------------------------------------------------------- processes
+
+class _Spawner:
+    """posix_spawn through ctypes (CPython on iOS has no fork, and Nyxian's
+    kernel runs every program as a process of its own)."""
+    SETPGROUP = 0x02
+    SETSIGDEF = 0x04
+
+    def __init__(self):
+        self.libc = ctypes.CDLL(None, use_errno=True)
+        self.libc.posix_spawn.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p,
+                                          ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_char_p)]
+
+    def spawn(self, path, argv, env, fds, pgid=0):
+        """fds: {0: fd, 1: fd, 2: fd}; pgid 0 = a new process group led by the child."""
+        actions = ctypes.create_string_buffer(512)
+        attributes = ctypes.create_string_buffer(512)
+        libc = self.libc
+        libc.posix_spawn_file_actions_init(actions)
+        libc.posix_spawnattr_init(attributes)
+        try:
+            for target, fd in sorted(fds.items()):
+                if fd != target:
+                    libc.posix_spawn_file_actions_adddup2(actions, fd, target)
+            # the shell ignores ^Z for itself; its programs must not inherit that
+            defaults = ctypes.create_string_buffer(256)
+            libc.sigemptyset(defaults)
+            for name in ("SIGTSTP", "SIGTTIN", "SIGTTOU", "SIGINT", "SIGQUIT", "SIGPIPE"):
+                if hasattr(signal, name):
+                    libc.sigaddset(defaults, int(getattr(signal, name)))
+            libc.posix_spawnattr_setsigdefault(attributes, defaults)
+            libc.posix_spawnattr_setflags(attributes, ctypes.c_short(self.SETPGROUP | self.SETSIGDEF))
+            libc.posix_spawnattr_setpgroup(attributes, pgid)
+            c_argv = (ctypes.c_char_p * (len(argv) + 1))(*[os.fsencode(a) for a in argv], None)
+            items = ["%s=%s" % pair for pair in env.items()]
+            c_env = (ctypes.c_char_p * (len(items) + 1))(*[os.fsencode(e) for e in items], None)
+            pid = ctypes.c_int(0)
+            error = libc.posix_spawn(ctypes.byref(pid), os.fsencode(path), actions, attributes, c_argv, c_env)
+            if error:
+                raise OSError(error, os.strerror(error))
+            return pid.value
+        finally:
+            libc.posix_spawn_file_actions_destroy(actions)
+            libc.posix_spawnattr_destroy(attributes)
+
+
+_spawner = None
+
+
+def spawner():
+    global _spawner
+    if _spawner is None:
+        _spawner = _Spawner()
+    return _spawner
+
+
+def _terminal_group(pgid):
+    """Gives the terminal to a process group (^C / ^Z go to it)."""
+    try:
+        if os.isatty(0):
+            old = signal.signal(signal.SIGTTOU, signal.SIG_IGN) if hasattr(signal, "SIGTTOU") else None
+            try:
+                os.tcsetpgrp(0, pgid)
+            finally:
+                if old is not None:
+                    signal.signal(signal.SIGTTOU, old)
+    except (OSError, AttributeError):
+        pass
+
+
+def _wait_job(number):
+    """Waits for the job in front; returns its status. ^Z: it becomes Stopped."""
+    job = _jobs[number]
+    _terminal_group(job["pgid"])
+    status = 0
+    try:
+        while job["pids"]:
+            try:
+                pid, code = os.waitpid(-job["pgid"] if job["pgid"] else job["pids"][0], os.WUNTRACED)
+            except ChildProcessError:
+                job["pids"] = []
+                break
+            except InterruptedError:
+                continue
+            if os.WIFSTOPPED(code):
+                job["state"] = "Stopped"
+                _out("\n[%d]+  Stopped                 %s\n" % (number, job["command"]))
+                return 148
+            if pid in job["pids"]:
+                job["pids"].remove(pid)
+            if pid == job["last"]:
+                status = os.waitstatus_to_exitcode(code)
+                if status < 0:
+                    status = 128 - status
+    finally:
+        _terminal_group(os.getpgrp())
+    _jobs.pop(number, None)
+    return status
+
+
+def _reap():
+    """Background jobs that ended: told once, like bash."""
+    for number, job in list(_jobs.items()):
+        if job.get("thread") is not None:
+            if not job["thread"].is_alive():
+                _out("[%d]+  Done                    %s\n" % (number, job["command"]))
+                _jobs.pop(number, None)
+            continue
+        for pid in list(job["pids"]):
+            try:
+                done, code = os.waitpid(pid, os.WNOHANG | os.WUNTRACED)
+            except ChildProcessError:
+                job["pids"].remove(pid)
+                continue
+            if done == 0:
+                continue
+            if os.WIFSTOPPED(code):
+                job["state"] = "Stopped"
+            else:
+                job["pids"].remove(pid)
+        if not job["pids"]:
+            _out("[%d]+  Done                    %s\n" % (number, job["command"]))
+            _jobs.pop(number, None)
+
+
+def _new_job(command):
+    number = 1
+    while number in _jobs:
+        number += 1
+    _jobs[number] = {"pids": [], "pgid": 0, "last": 0, "command": command, "state": "Running", "thread": None}
+    return number
+
+
+def _which(name):
+    if "/" in name:
+        return name if os.path.exists(name) else None
+    if name in ("python", "python3", "python3." + str(sys.version_info[1])):
+        return sys.executable
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = os.path.join(folder, name)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+# ---------------------------------------------------------------- built-in commands
+
+class Exit(Exception):
+    pass
+
+
+def _err(name, message, err):
+    err.write("%s: %s\n" % (name, message))
+    return 1
+
+
+def _flags(args, known):
+    flags, rest = set(), []
+    for arg in args:
+        if arg.startswith("-") and len(arg) > 1 and not rest and all(c in known for c in arg[1:]):
+            flags.update(arg[1:])
+        else:
+            rest.append(arg)
+    return flags, rest
+
+
+def _size(n):
+    for unit in ("B", "K", "M", "G"):
+        if n < 1024 or unit == "G":
+            return ("%d%s" % (n, unit)) if unit == "B" else ("%.1f%s" % (n, unit))
+        n /= 1024.0
+
+
+def b_ls(args, inp, out, err):
+    flags, paths = _flags(args, "laF1h")
+    paths = paths or ["."]
+    status = 0
+    for index, path in enumerate(paths):
+        if not os.path.exists(path):
+            status = _err("ls", "%s: No such file or directory" % path, err)
+            continue
+        if os.path.isdir(path):
+            names = sorted(os.listdir(path), key=str.lower)
+            if "a" not in flags:
+                names = [n for n in names if not n.startswith(".")]
+            if len(paths) > 1:
+                out.write("%s%s:\n" % ("\n" if index else "", path))
+            entries = [(n, os.path.join(path, n)) for n in names]
+        else:
+            entries = [(path, path)]
+        if "l" in flags:
+            for name, full in entries:
+                try:
+                    info = os.lstat(full)
+                except OSError:
+                    continue
+                kind = "d" if stat.S_ISDIR(info.st_mode) else ("l" if stat.S_ISLNK(info.st_mode) else "-")
+                size = _size(info.st_size) if "h" in flags else str(info.st_size)
+                when = time.strftime("%d %b %H:%M", time.localtime(info.st_mtime))
+                out.write("%s%s %8s %s %s%s\n" % (kind, stat.filemode(info.st_mode)[1:], size, when, name, "/" if kind == "d" else ""))
+        else:
+            shown = [n + ("/" if os.path.isdir(f) else "") for n, f in entries]
+            if "1" in flags or not out.isatty():
+                out.write("".join(s + "\n" for s in shown))
+            elif shown:
+                width = max(len(s) for s in shown) + 2
+                columns = max(1, shutil.get_terminal_size((80, 24)).columns // width)
+                for row in range(0, len(shown), columns):
+                    out.write("".join(s.ljust(width) for s in shown[row:row + columns]).rstrip() + "\n")
+    return status
+
+
+def b_cd(args, inp, out, err):
+    target = args[0] if args else os.environ.get("HOME", "/")
+    if target == "-":
+        target = os.environ.get("OLDPWD", os.getcwd())
+    try:
+        previous = os.getcwd()
+        os.chdir(os.path.expanduser(target))
+        os.environ["OLDPWD"] = previous
+        os.environ["PWD"] = os.getcwd()
+        return 0
+    except OSError as error:
+        return _err("cd", "%s: %s" % (target, error.strerror), err)
+
+
+def b_pwd(args, inp, out, err):
+    out.write(os.getcwd() + "\n")
+    return 0
+
+
+def _read_inputs(paths, inp, err, name):
+    if not paths or paths == ["-"]:
+        yield "<stdin>", inp.read()
+        return
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                yield path, handle.read()
+        except OSError as error:
+            _err(name, "%s: %s" % (path, error.strerror), err)
+
+
+def b_cat(args, inp, out, err):
+    flags, paths = _flags(args, "n")
+    number = 1
+    for _, text in _read_inputs(paths, inp, err, "cat"):
+        if "n" in flags:
+            for line in text.splitlines(True):
+                out.write("%6d  %s" % (number, line))
+                number += 1
+        else:
+            out.write(text)
+    return 0
+
+
+def b_echo(args, inp, out, err):
+    newline = True
+    if args and args[0] == "-n":
+        newline, args = False, args[1:]
+    out.write(" ".join(args) + ("\n" if newline else ""))
+    return 0
+
+
+def b_mkdir(args, inp, out, err):
+    flags, paths = _flags(args, "p")
+    status = 0
+    for path in paths:
+        try:
+            os.makedirs(path, exist_ok=True) if "p" in flags else os.mkdir(path)
+        except OSError as error:
+            status = _err("mkdir", "%s: %s" % (path, error.strerror), err)
+    return status
+
+
+def b_rm(args, inp, out, err):
+    flags, paths = _flags(args, "rfR")
+    status = 0
+    for path in paths:
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                if not flags & {"r", "R"}:
+                    status = _err("rm", "%s: is a directory (use rm -r)" % path, err)
+                    continue
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        except OSError as error:
+            if "f" not in flags:
+                status = _err("rm", "%s: %s" % (path, error.strerror), err)
+    return status
+
+
+def b_rmdir(args, inp, out, err):
+    status = 0
+    for path in args:
+        try:
+            os.rmdir(path)
+        except OSError as error:
+            status = _err("rmdir", "%s: %s" % (path, error.strerror), err)
+    return status
+
+
+def _copy_or_move(args, err, name, move):
+    flags, paths = _flags(args, "rRf")
+    if len(paths) < 2:
+        return _err(name, "usage: %s SOURCE… DESTINATION" % name, err)
+    *sources, target = paths
+    status = 0
+    for source in sources:
+        destination = os.path.join(target, os.path.basename(source.rstrip("/"))) if os.path.isdir(target) else target
+        try:
+            if move:
+                shutil.move(source, destination)
+            elif os.path.isdir(source):
+                if not flags & {"r", "R"}:
+                    status = _err(name, "%s: is a directory (use cp -r)" % source, err)
+                    continue
+                shutil.copytree(source, destination, dirs_exist_ok=True)
+            else:
+                shutil.copy2(source, destination)
+        except OSError as error:
+            status = _err(name, "%s: %s" % (source, error.strerror or error), err)
+    return status
+
+
+def b_cp(args, inp, out, err):
+    return _copy_or_move(args, err, "cp", False)
+
+
+def b_mv(args, inp, out, err):
+    return _copy_or_move(args, err, "mv", True)
+
+
+def b_touch(args, inp, out, err):
+    for path in args:
+        with open(path, "a"):
+            os.utime(path, None)
+    return 0
+
+
+def _count_arg(args, default=10):
+    count, rest = default, []
+    i = 0
+    while i < len(args):
+        if args[i] == "-n" and i + 1 < len(args):
+            count = int(args[i + 1])
+            i += 2
+            continue
+        if re.fullmatch(r"-\d+", args[i]):
+            count = int(args[i][1:])
+        else:
+            rest.append(args[i])
+        i += 1
+    return count, rest
+
+
+def b_head(args, inp, out, err):
+    count, paths = _count_arg(args)
+    for _, text in _read_inputs(paths, inp, err, "head"):
+        out.write("".join(text.splitlines(True)[:count]))
+    return 0
+
+
+def b_tail(args, inp, out, err):
+    count, paths = _count_arg(args)
+    for _, text in _read_inputs(paths, inp, err, "tail"):
+        lines = text.splitlines(True)
+        out.write("".join(lines[-count:] if count else []))
+    return 0
+
+
+def b_wc(args, inp, out, err):
+    flags, paths = _flags(args, "lwc")
+    flags = flags or {"l", "w", "c"}
+    for name, text in _read_inputs(paths, inp, err, "wc"):
+        numbers = []
+        if "l" in flags:
+            numbers.append(text.count("\n"))
+        if "w" in flags:
+            numbers.append(len(text.split()))
+        if "c" in flags:
+            numbers.append(len(text.encode("utf-8")))
+        out.write(" ".join("%7d" % n for n in numbers) + ("" if name == "<stdin>" else " " + name) + "\n")
+    return 0
+
+
+def b_grep(args, inp, out, err):
+    flags, rest = _flags(args, "invrlcE")
+    if not rest:
+        return _err("grep", "usage: grep [-i -n -v -r -l -c] PATTERN [FILE…]", err)
+    pattern, paths = rest[0], rest[1:]
+    try:
+        regex = re.compile(pattern, re.IGNORECASE if "i" in flags else 0)
+    except re.error as error:
+        return _err("grep", "bad pattern: %s" % error, err)
+    if "r" in flags:
+        expanded = []
+        for path in paths or ["."]:
+            if os.path.isdir(path):
+                for folder, _, names in os.walk(path):
+                    expanded.extend(os.path.join(folder, n) for n in sorted(names))
+            else:
+                expanded.append(path)
+        paths = expanded
+    found = False
+    several = len(paths) > 1
+    for name, text in _read_inputs(paths, inp, err, "grep"):
+        hits = 0
+        for number, line in enumerate(text.splitlines(), 1):
+            if bool(regex.search(line)) != ("v" in flags):
+                hits += 1
+                found = True
+                if "l" in flags or "c" in flags:
+                    continue
+                prefix = (name + ":" if several else "") + ("%d:" % number if "n" in flags else "")
+                out.write(prefix + line + "\n")
+        if "l" in flags and hits:
+            out.write(name + "\n")
+        if "c" in flags:
+            out.write(((name + ":") if several else "") + str(hits) + "\n")
+    return 0 if found else 1
+
+
+def b_find(args, inp, out, err):
+    root = args[0] if args and not args[0].startswith("-") else "."
+    pattern = None
+    kind = None
+    if "-name" in args:
+        pattern = args[args.index("-name") + 1]
+    if "-type" in args:
+        kind = args[args.index("-type") + 1]
+    for folder, folders, names in os.walk(root):
+        folders.sort()
+        for name in ([os.path.basename(folder)] if folder == root else []) + sorted(folders) + sorted(names):
+            path = folder if (folder == root and name == os.path.basename(folder)) else os.path.join(folder, name)
+            if kind == "f" and not os.path.isfile(path):
+                continue
+            if kind == "d" and not os.path.isdir(path):
+                continue
+            if pattern and not fnmatch.fnmatch(os.path.basename(path), pattern):
+                continue
+            out.write(path + "\n")
+    return 0
+
+
+def b_tree(args, inp, out, err):
+    root = args[0] if args else "."
+
+    def walk(folder, prefix):
+        try:
+            names = sorted((n for n in os.listdir(folder) if not n.startswith(".")), key=str.lower)
+        except OSError:
+            return
+        for index, name in enumerate(names):
+            last = index == len(names) - 1
+            path = os.path.join(folder, name)
+            out.write(prefix + ("└── " if last else "├── ") + name + ("/" if os.path.isdir(path) else "") + "\n")
+            if os.path.isdir(path) and not os.path.islink(path):
+                walk(path, prefix + ("    " if last else "│   "))
+    out.write(root + "\n")
+    walk(root, "")
+    return 0
+
+
+def b_sort(args, inp, out, err):
+    flags, paths = _flags(args, "rnu")
+    lines = []
+    for _, text in _read_inputs(paths, inp, err, "sort"):
+        lines.extend(text.splitlines())
+    key = (lambda s: float(re.match(r"\s*(-?\d+(\.\d+)?)", s).group(1)) if re.match(r"\s*-?\d", s) else 0.0) if "n" in flags else None
+    lines.sort(key=key, reverse="r" in flags)
+    if "u" in flags:
+        lines = list(dict.fromkeys(lines))
+    out.write("".join(line + "\n" for line in lines))
+    return 0
+
+
+def b_env(args, inp, out, err):
+    for key in sorted(os.environ):
+        out.write("%s=%s\n" % (key, os.environ[key]))
+    return 0
+
+
+def b_export(args, inp, out, err):
+    for item in args:
+        if "=" in item:
+            key, value = item.split("=", 1)
+            os.environ[key] = value
+    return 0
+
+
+def b_unset(args, inp, out, err):
+    for key in args:
+        os.environ.pop(key, None)
+    return 0
+
+
+def b_which(args, inp, out, err):
+    status = 0
+    for name in args:
+        if name in BUILTINS:
+            out.write("%s: built-in command of Nyxian Shell\n" % name)
+        elif _which(name):
+            out.write(_which(name) + "\n")
+        else:
+            status = _err("which", "%s not found" % name, err)
+    return status
+
+
+def b_clear(args, inp, out, err):
+    out.write("\033[2J\033[H")
+    return 0
+
+
+def b_history(args, inp, out, err):
+    for number, line in enumerate(_history[-200:], max(1, len(_history) - 199)):
+        out.write("%5d  %s\n" % (number, line))
+    return 0
+
+
+def b_sleep(args, inp, out, err):
+    time.sleep(float(args[0]) if args else 1)
+    return 0
+
+
+def b_true(args, inp, out, err):
+    return 0
+
+
+def b_false(args, inp, out, err):
+    return 1
+
+
+def b_exit(args, inp, out, err):
+    raise Exit(int(args[0]) if args else _status[0])
+
+
+def b_jobs(args, inp, out, err):
+    _reap()
+    for number, job in sorted(_jobs.items()):
+        pids = " ".join(str(p) for p in job["pids"])
+        out.write("[%d]  %-8s %s%s\n" % (number, job["state"], job["command"], ("   (PID %s)" % pids) if pids else ""))
+    return 0
+
+
+def _job_number(args):
+    if args:
+        try:
+            return int(args[0].lstrip("%"))
+        except ValueError:
+            return None
+    return max(_jobs) if _jobs else None
+
+
+def b_fg(args, inp, out, err):
+    number = _job_number(args)
+    if number not in _jobs:
+        return _err("fg", "no such job", err)
+    job = _jobs[number]
+    out.write(job["command"] + "\n")
+    out.flush()
+    if job.get("thread") is not None:
+        job["thread"].join()
+        _jobs.pop(number, None)
+        return 0
+    job["state"] = "Running"
+    try:
+        os.killpg(job["pgid"], signal.SIGCONT)
+    except OSError:
+        for pid in job["pids"]:
+            os.kill(pid, signal.SIGCONT)
+    return _wait_job(number)
+
+
+def b_bg(args, inp, out, err):
+    number = _job_number(args)
+    if number not in _jobs:
+        return _err("bg", "no such job", err)
+    job = _jobs[number]
+    job["state"] = "Running"
+    try:
+        os.killpg(job["pgid"], signal.SIGCONT)
+    except OSError:
+        for pid in job["pids"]:
+            os.kill(pid, signal.SIGCONT)
+    out.write("[%d]+ %s &\n" % (number, job["command"]))
+    return 0
+
+
+def b_kill(args, inp, out, err):
+    sig = signal.SIGTERM
+    targets = []
+    for arg in args:
+        if arg.startswith("-") and len(arg) > 1:
+            name = arg[1:].upper()
+            sig = int(name) if name.isdigit() else getattr(signal, name if name.startswith("SIG") else "SIG" + name, signal.SIGTERM)
+        else:
+            targets.append(arg)
+    status = 0
+    for target in targets:
+        try:
+            if target.startswith("%"):
+                job = _jobs[int(target[1:])]
+                for pid in job["pids"]:
+                    os.kill(pid, sig)
+                    if job["state"] == "Stopped" and sig not in (signal.SIGKILL, signal.SIGCONT):
+                        os.kill(pid, signal.SIGCONT)
+            else:
+                os.kill(int(target), sig)
+        except (KeyError, ValueError, OSError) as error:
+            status = _err("kill", "%s: %s" % (target, error), err)
+    return status
+
+
+def b_help(args, inp, out, err):
+    out.write(
+        "Nyxian Shell %s — built-in commands:\n"
+        "  files    ls [-la] · cd · pwd · cat [-n] · head/tail [-n N] · wc · grep [-inrvlc] · find [-name -type]\n"
+        "           tree · sort [-rnu] · mkdir [-p] · rm [-r] · rmdir · cp [-r] · mv · touch\n"
+        "  shell    echo · env · export A=b · unset · which · history · clear · sleep · true · false · exit\n"
+        "  jobs     jobs · fg [%%n] · bg [%%n] · kill [-9|-STOP|-CONT] PID|%%n · ^Z stops the program in front\n"
+        "  programs python3 FILE.py · pip install NAME · your command line tools (by path or PATH)\n"
+        "  syntax   a | b · > file · >> file · < file · 2> file · 2>&1 · a ; b · a && b · a || b · cmd & · $VAR ~ *.py\n" % VERSION)
+    return 0
+
+
+def b_pip(args, inp, out, err):
+    python = sys.executable
+    return None, [python, "-m", "nyxian_pip"] + args
+
+
+BUILTINS = {
+    "ls": b_ls, "cd": b_cd, "pwd": b_pwd, "cat": b_cat, "echo": b_echo, "mkdir": b_mkdir, "rm": b_rm,
+    "rmdir": b_rmdir, "cp": b_cp, "mv": b_mv, "touch": b_touch, "head": b_head, "tail": b_tail, "wc": b_wc,
+    "grep": b_grep, "find": b_find, "tree": b_tree, "sort": b_sort, "env": b_env, "export": b_export,
+    "unset": b_unset, "which": b_which, "clear": b_clear, "history": b_history, "sleep": b_sleep,
+    "true": b_true, "false": b_false, "exit": b_exit, "jobs": b_jobs, "fg": b_fg, "bg": b_bg,
+    "kill": b_kill, "help": b_help,
+}
+# changing the shell itself: never in a pipe's thread or the background
+_SHELL_STATE = {"cd", "export", "unset", "exit", "fg", "bg", "jobs", "kill", "history", "clear"}
+
+
+# ---------------------------------------------------------------- parsing
+
+_OPERATORS = ("2>&1", "2>>", "&&", "||", ">>", "2>", ">", "<", "|", ";", "&")
+
+
+class Word(list):
+    """A word as typed: parts (text, how) with how = "raw", "single" or "double";
+    variables, ~ and globs are expanded when its command runs."""
+
+
+def tokenize(line):
+    tokens, word, i, n = [], None, 0, len(line)
+
+    def add(text, how):
+        nonlocal word
+        if word is None:
+            word = Word()
+        if word and word[-1][1] == how and how != "single":
+            word[-1] = (word[-1][0] + text, how)
+        else:
+            word.append((text, how))
+
+    def end_word():
+        nonlocal word
+        if word is not None:
+            tokens.append(word)
+            word = None
+
+    while i < n:
+        c = line[i]
+        if c in " \t\r\n":
+            end_word()
+            i += 1
+        elif c == "#" and word is None:
+            break
+        elif c == "'":
+            close = line.find("'", i + 1)
+            if close < 0:
+                raise ValueError("missing closing '")
+            add(line[i + 1:close], "single")
+            i = close + 1
+        elif c == '"':
+            j, text = i + 1, []
+            while j < n and line[j] != '"':
+                if line[j] == "\\" and j + 1 < n and line[j + 1] in '"\\$`':
+                    text.append(line[j + 1])
+                    j += 2
+                    continue
+                text.append(line[j])
+                j += 1
+            if j >= n:
+                raise ValueError('missing closing "')
+            add("".join(text), "double")
+            i = j + 1
+        elif c == "\\" and i + 1 < n:
+            add(line[i + 1], "single")
+            i += 2
+        else:
+            operator = next((op for op in _OPERATORS if line.startswith(op, i)), None)
+            if operator and (operator[0] != "2" or word is None):
+                end_word()
+                tokens.append(operator)
+                i += len(operator)
+            else:
+                add(c, "raw")
+                i += 1
+    end_word()
+    return tokens
+
+
+def _expand_text(text, home_ok):
+    def variable(match):
+        name = match.group(1).strip("{}")
+        return str(_status[0]) if name == "?" else os.environ.get(name, "")
+    text = re.sub(r"\$(\?|\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)", variable, text)
+    if home_ok and (text == "~" or text.startswith("~/")):
+        text = os.environ.get("HOME", "~") + text[1:]
+    return text
+
+
+def expand(word):
+    """A Word into its argument(s): variables (not in '…'), ~ at the start, globs (unquoted)."""
+    if isinstance(word, str):
+        return [word]
+    text, pattern, globbing = [], [], False
+    for index, (part, how) in enumerate(word):
+        value = part if how == "single" else _expand_text(part, how == "raw" and index == 0)
+        text.append(value)
+        if how == "raw" and any(c in value for c in "*?["):
+            globbing = True
+            pattern.append(value)
+        else:
+            pattern.append(glob.escape(value))
+    joined = "".join(text)
+    if globbing:
+        matches = sorted(glob.glob("".join(pattern)))
+        if matches:
+            return matches
+    return [joined]
+
+
+def split_list(tokens):
+    """[(connector, tokens of one pipeline, background)] — expanded later, one by one."""
+    items, current, connector = [], [], None
+    for token in tokens:
+        if token in (";", "&&", "||", "&"):
+            if current:
+                items.append((connector, current, token == "&"))
+            current = []
+            connector = token if token in ("&&", "||") else None
+        else:
+            current.append(token)
+    if current:
+        items.append((connector, current, False))
+    return items
+
+
+def parse_pipeline(tokens):
+    """[command]: {"argv": [...], "in": path, "out": (path, append), "err": (path, append) or "out"}."""
+    pipeline, command = [], {"argv": []}
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token in (">", ">>", "<", "2>", "2>>"):
+            if i + 1 >= len(tokens) or isinstance(tokens[i + 1], str):
+                raise ValueError("a file name is missing after %s" % token)
+            target = expand(tokens[i + 1])[0]
+            if token == "<":
+                command["in"] = target
+            elif token.startswith("2"):
+                command["err"] = (target, token == "2>>")
+            else:
+                command["out"] = (target, token == ">>")
+            i += 2
+            continue
+        if token == "2>&1":
+            command["err"] = "out"
+        elif token == "|":
+            pipeline.append(command)
+            command = {"argv": []}
+        else:
+            command["argv"].extend(expand(token))
+        i += 1
+    pipeline.append(command)
+    return [c for c in pipeline if c["argv"] or len(c) > 1]
+
+
+def _display(tokens):
+    parts = []
+    for token in tokens:
+        parts.append(token if isinstance(token, str) else "".join(
+            ("'%s'" % t) if how == "single" and (" " in t or not t) else (('"%s"' % t) if how == "double" else t) for t, how in token))
+    return " ".join(parts)
+
+
+# ---------------------------------------------------------------- running
+
+class _FdWriter(io.TextIOWrapper):
+    pass
+
+
+def _open_redirects(command, default_in, default_out, default_err):
+    inp, out, err, opened = default_in, default_out, default_err, []
+    if "in" in command:
+        inp = open(command["in"], encoding="utf-8", errors="replace")
+        opened.append(inp)
+    if "out" in command:
+        path, append = command["out"]
+        out = open(path, "a" if append else "w", encoding="utf-8")
+        opened.append(out)
+    if command.get("err") == "out":
+        err = out
+    elif "err" in command:
+        path, append = command["err"]
+        err = open(path, "a" if append else "w", encoding="utf-8")
+        opened.append(err)
+    return inp, out, err, opened
+
+
+def _run_builtin(command, inp, out, err):
+    name = command["argv"][0]
+    local_in, local_out, local_err, opened = _open_redirects(command, inp, out, err)
+    try:
+        result = BUILTINS[name](command["argv"][1:], local_in, local_out, local_err)
+        local_out.flush()
+        local_err.flush()
+        return result
+    except Exit:
+        raise
+    except KeyboardInterrupt:
+        local_err.write("^C\n")
+        return 130
+    except BrokenPipeError:
+        return 141
+    except Exception as error:
+        local_err.write("%s: %s\n" % (name, error))
+        return 1
+    finally:
+        for handle in opened:
+            handle.close()
+
+
+def _fd_of(handle, mode):
+    """A real file descriptor for a stream (programs need one)."""
+    try:
+        return handle.fileno(), None
+    except (AttributeError, io.UnsupportedOperation, ValueError):
+        pass
+    read, write = os.pipe()
+    if mode == "r":
+        data = handle.read().encode("utf-8")
+
+        def feed():
+            with os.fdopen(write, "wb") as pipe:
+                try:
+                    pipe.write(data)
+                except BrokenPipeError:
+                    pass
+        threading.Thread(target=feed, daemon=True).start()
+        return read, read
+    else:
+        def drain():
+            with os.fdopen(read, "rb") as pipe:
+                for chunk in iter(lambda: pipe.read(4096), b""):
+                    handle.write(chunk.decode("utf-8", "replace"))
+                handle.flush()
+        thread = threading.Thread(target=drain, daemon=True)
+        thread.start()
+        return write, (write, thread)
+
+
+def run_pipeline(pipeline, background, text):
+    """Built-in commands run here (text between them); programs run as
+    processes of their own, joined by real pipes."""
+    stages = []
+    for command in pipeline:
+        argv = command["argv"]
+        if not argv:
+            stages.append(("noop", command, None))
+            continue
+        name = argv[0]
+        if name == "pip":
+            stages.append(("program", command, [sys.executable, "-m", "nyxian_pip"] + argv[1:]))
+        elif name in BUILTINS:
+            stages.append(("builtin", command, None))
+        else:
+            path = _which(name)
+            if path is None:
+                sys.stderr.write("%s: command not found (help lists the built-in commands)\n" % name)
+                return 127
+            argv = list(argv)
+            if path == sys.executable:
+                argv[0] = "python3"
+            stages.append(("program", command, [path] + argv[1:]))
+
+    # only built-ins: text flows from one to the next
+    if all(kind != "program" for kind, _, _ in stages):
+        if background:
+            if any(c["argv"] and c["argv"][0] in _SHELL_STATE for _, c, _ in stages):
+                sys.stderr.write("%s: cannot run in the background\n" % text)
+                return 1
+            number = _new_job(text)
+            thread = threading.Thread(target=lambda: _builtin_chain(stages), daemon=True)
+            _jobs[number]["thread"] = thread
+            thread.start()
+            _out("[%d] (built-in)\n" % number)
+            return 0
+        return _builtin_chain(stages)
+
+    # programs: every stage gets real descriptors
+    number = _new_job(text)
+    job = _jobs[number]
+    env = dict(os.environ)
+    previous_read = None
+    waits = []
+    status = 0
+    for index, (kind, command, argv) in enumerate(stages):
+        last = index == len(stages) - 1
+        if last:
+            next_read, next_write = None, None
+        else:
+            next_read, next_write = os.pipe()
+        stdin_handle = os.fdopen(os.dup(previous_read), "r", encoding="utf-8", errors="replace", closefd=True) if previous_read is not None else sys.stdin
+        stdout_handle = os.fdopen(os.dup(next_write), "w", encoding="utf-8", closefd=True) if next_write is not None else sys.stdout
+        local_in, local_out, local_err, opened = _open_redirects(command, stdin_handle, stdout_handle, sys.stderr)
+        try:
+            if kind == "program":
+                fd_in, keep_in = _fd_of(local_in, "r")
+                fd_out, keep_out = _fd_of(local_out, "w")
+                fd_err, keep_err = _fd_of(local_err, "w") if local_err is not local_out else (fd_out, None)
+                try:
+                    pid = spawner().spawn(argv[0], argv, env, {0: fd_in, 1: fd_out, 2: fd_err}, job["pgid"])
+                except OSError as error:
+                    sys.stderr.write("%s: could not start (%s)\n" % (command["argv"][0], error.strerror or error))
+                    status = 126
+                    pid = None
+                if pid:
+                    job["pids"].append(pid)
+                    job["last"] = pid
+                    if not job["pgid"]:
+                        job["pgid"] = pid
+                for keep in (keep_in, keep_out, keep_err):
+                    if isinstance(keep, tuple):
+                        os.close(keep[0])
+                        waits.append(keep[1])
+                    elif isinstance(keep, int):
+                        os.close(keep)
+            else:
+                _run_builtin(command, local_in, local_out, local_err) if kind == "builtin" else 0
+        finally:
+            for handle in opened:
+                handle.close()
+            if stdout_handle is not sys.stdout:
+                stdout_handle.close()
+            if stdin_handle is not sys.stdin:
+                stdin_handle.close()
+            if previous_read is not None:
+                os.close(previous_read)
+            if next_write is not None:
+                os.close(next_write)
+            previous_read = next_read
+    if not job["pids"]:
+        _jobs.pop(number, None)
+        return status or 0
+    if background:
+        _out("[%d] %d\n" % (number, job["pids"][-1]))
+        return 0
+    status = _wait_job(number)
+    for thread in waits:
+        thread.join(2)
+    return status
+
+
+def _builtin_chain(stages):
+    data = None
+    status = 0
+    for index, (kind, command, _) in enumerate(stages):
+        last = index == len(stages) - 1
+        inp = io.StringIO(data) if data is not None else sys.stdin
+        out = sys.stdout if last else io.StringIO()
+        if kind == "builtin":
+            status = _run_builtin(command, inp, out, sys.stderr)
+        if not last:
+            data = out.getvalue()
+    return status
+
+
+def run_line(line):
+    line = line.strip()
+    if not line:
+        return _status[0]
+    try:
+        items = split_list(tokenize(line))
+    except ValueError as error:
+        sys.stderr.write("syntax: %s\n" % error)
+        _status[0] = 2
+        return 2
+    for connector, tokens, background in items:
+        if connector == "&&" and _status[0] != 0:
+            continue
+        if connector == "||" and _status[0] == 0:
+            continue
+        try:
+            pipeline = parse_pipeline(tokens)
+        except ValueError as error:
+            sys.stderr.write("syntax: %s\n" % error)
+            _status[0] = 2
+            continue
+        if not pipeline:
+            continue
+        text = _display(tokens)
+        _status[0] = run_pipeline(pipeline, background, text if not background else text + " &") or 0
+    return _status[0]
+
+
+def _prompt():
+    folder = os.getcwd()
+    home = os.environ.get("HOME", "")
+    if home and (folder == home or folder.startswith(home + "/")):
+        folder = "~" + folder[len(home):]
+    elif len(folder) > 40:
+        folder = "…" + folder[-38:]
+    mark = "\033[31m" if _status[0] else "\033[32m"
+    return "%s❯\033[0m \033[1m%s\033[0m $ " % (mark, folder)
+
+
+def main():
+    from nyxian_lineedit import read_line
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    for name in ("SIGTSTP", "SIGTTOU", "SIGTTIN"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), signal.SIG_IGN)
+    # the shell leads its own group, so ^Z reaches only the program in front
+    try:
+        os.setpgid(0, 0)
+    except OSError:
+        pass
+    _terminal_group(os.getpgrp())
+    os.environ.setdefault("PWD", os.getcwd())
+    os.environ.setdefault("SHELL", "nyxian_shell")
+    if len(sys.argv) > 2 and sys.argv[1] == "-c":
+        try:
+            return run_line(" ".join(sys.argv[2:]))
+        except Exit as code:
+            return code.args[0]
+    _out("Nyxian Shell %s · help lists the commands · ^D or exit quits\n" % VERSION)
+    while True:
+        _reap()
+        try:
+            line = read_line(_prompt())
+        except KeyboardInterrupt:
+            _out("^C\n")
+            continue
+        except EOFError:
+            break
+        if line is None:
+            break
+        text = str(line)
+        if text == "\x04":
+            break
+        if text.strip():
+            _history.append(text.strip())
+        try:
+            run_line(text)
+        except Exit as code:
+            return code.args[0]
+        except KeyboardInterrupt:
+            _out("^C\n")
+            _status[0] = 130
+        finally:
+            for stream in (sys.stdout, sys.stderr):
+                try:
+                    stream.flush()
+                except Exception:
+                    pass
+    _out("exit\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+"""#,
+        "nyxian_pdb.py": #"""
+# Python debugger of Nyxian: runs a script with the breakpoints set in the
+# editor (NYXIAN_BREAKPOINTS: JSON [{"file": path relative to the run folder,
+# "line": n}]) and goes straight to the first one. At each stop it tells the
+# editor where (NYXIAN_DEBUG_STATE) and writes the frame's variables for the
+# variable inspector (NYXIAN_VARS_FILE). Commands are pdb's.
+# Run as: python3 -m nyxian_pdb script.py [arguments…]
+import json
+import os
+import pdb
+import sys
+
+HELP = ("Debugger · c continue · n next line · s step into · r until return · "
+        "p EXPR / pp EXPR show · l list · w where · u / d up / down · "
+        "b LINE breakpoint · cl clear · locals · q quit")
+
+
+def _state(payload):
+    path = os.environ.get("NYXIAN_DEBUG_STATE")
+    if not path:
+        return
+    try:
+        temporary = path + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+        os.replace(temporary, path)
+    except Exception:
+        pass
+
+
+class NyxianPdb(pdb.Pdb):
+    def __init__(self, script, breakpoints):
+        super().__init__(readrc=False)
+        self.prompt = "(debug) "
+        self._script = os.path.abspath(script)
+        self._started = False
+        self._wanted = []
+        for item in breakpoints:
+            path = os.path.abspath(item.get("file", ""))
+            line = int(item.get("line", 0))
+            if path and line > 0:
+                self._wanted.append((path, line))
+
+    def arm(self):
+        armed = 0
+        for path, line in self._wanted:
+            error = self.set_break(self.canonic(path), line)
+            if error:
+                self.message("breakpoint %s:%d not set: %s" % (os.path.basename(path), line, error))
+            else:
+                armed += 1
+        return armed
+
+    def user_line(self, frame):
+        if not self._started:
+            # the script's first line: on to the first breakpoint (if any)
+            if self.canonic(frame.f_code.co_filename) != self.canonic(self._script):
+                return
+            self._started = True
+            if self.breaks and not self.break_here(frame):
+                self.set_continue()
+                return
+        super().user_line(frame)
+
+    def interaction(self, frame, tb):
+        if frame is not None:
+            self._report(frame, tb)
+        try:
+            super().interaction(frame, tb)
+        finally:
+            _state({"running": True})
+
+    def _report(self, frame, tb):
+        stack = []
+        current = frame
+        while current is not None and len(stack) < 30:
+            stack.append({"file": current.f_code.co_filename, "line": current.f_lineno, "function": current.f_code.co_name})
+            current = current.f_back
+        _state({"running": False, "file": frame.f_code.co_filename, "line": frame.f_lineno,
+                "function": frame.f_code.co_name, "exception": tb is not None, "stack": stack})
+        try:
+            from nyxian_repl import snapshot
+            snapshot(dict(frame.f_locals))
+        except Exception:
+            pass
+
+    def do_locals(self, arg):
+        """locals: the variables of the current frame."""
+        frame = self.curframe
+        for name, value in sorted(frame.f_locals.items()):
+            if name.startswith("__"):
+                continue
+            try:
+                text = repr(value)
+            except Exception as error:
+                text = "<%s>" % error
+            self.message("  %s = %s" % (name, " ".join(text.split())[:160]))
+
+    def do_help(self, arg):
+        if not arg:
+            self.message(HELP)
+        return super().do_help(arg)
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("usage: python3 -m nyxian_pdb script.py [arguments…]")
+        return 2
+    script = sys.argv[1]
+    try:
+        breakpoints = json.loads(os.environ.get("NYXIAN_BREAKPOINTS") or "[]")
+    except ValueError:
+        breakpoints = []
+    sys.argv = sys.argv[1:]
+    sys.path.insert(0, os.path.dirname(os.path.abspath(script)))
+    debugger = NyxianPdb(script, breakpoints)
+    armed = debugger.arm()
+    print(HELP)
+    print("%d breakpoint%s from the editor%s" % (armed, "" if armed == 1 else "s",
+          "" if armed else " — it stops at the first line (set them with ⌘\\ in the editor)"))
+    with open(script, "rb") as handle:
+        code = compile(handle.read(), os.path.abspath(script), "exec")
+    namespace = {"__name__": "__main__", "__file__": os.path.abspath(script), "__builtins__": __builtins__}
+    _state({"running": True})
+    try:
+        debugger.run(code, namespace, namespace)
+    except SystemExit:
+        pass
+    except BaseException:
+        import traceback
+        traceback.print_exc()
+        frame_tb = sys.exc_info()[2]
+        print("\nThe script ended with an error: the debugger shows where (q quits).")
+        debugger.interaction(None, frame_tb)
+    finally:
+        _state({"running": False, "ended": True})
+    print("[debugging ended]")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+"""#,
         "nyxian_tests.py": #"""
 # Run Tests in Nyxian: pytest when it is there (it comes with Nyxian),
 # unittest otherwise. The failures, with file and line, go to
@@ -4127,6 +5401,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     private static var launcherEntitlements: [String: Any] {
         [
             "org.emexlabs.nyxian.get-task-allow": true,   /* debugger and profiler */
+            "org.emexlabs.nyxian.process.spawn": true,    /* Nyxian Shell starts programs (python3, your tools) */
             "org.emexlabs.nyxian.sandbox.file.read": [
                 "$(NXROOT)/opt/python"
             ],
@@ -4547,6 +5822,28 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         launch(from: presenter, arguments: ["-q", "-m", "nyxian_repl"], workingDirectory: folder, title: "Python \(version)", closeOnExit: true)
     }
     
+    /// Nyxian Shell (nyxian_shell): ls, cd, grep, pipes, redirection, programs and job control.
+    /// In a project: its run folder (a copy of the project); new files come back when it closes.
+    static func openShell(from presenter: UIViewController, project: NXProject? = nil, script: URL? = nil) {
+        let root: URL? = project.map { $0.url as URL } ?? script?.deletingLastPathComponent()
+        if let root {
+            let openTexts = LiveEditorRegistry.openTexts()
+            let runFolder = mirrorFolder(project: root)
+            presenter.view.window?.endEditing(true)
+            launch(from: presenter, arguments: ["-q", "-m", "nyxian_shell"], workingDirectory: runFolder, title: "Shell · \(root.lastPathComponent)", closeOnExit: true,
+                   extraEnvironment: ["HOME": runFolder.path], beforeLaunch: {
+                _ = try mirror(project: root, openTexts: openTexts)
+            }, onExit: { _ in
+                _ = copyOutput(project: root)
+                DispatchQueue.main.async { NotificationCenter.default.post(name: Notification.Name("FileListRefresh"), object: nil) }
+                return nil
+            })
+            return
+        }
+        let folder = rootfs.appendingPathComponent("var/mobile")
+        launch(from: presenter, arguments: ["-q", "-m", "nyxian_shell"], workingDirectory: folder, title: "Shell", closeOnExit: true)
+    }
+    
     /// Shows the code of every key Python receives (for keys that seem to do nothing).
     static func openKeyboardTest(from presenter: UIViewController) {
         let folder = rootfs.appendingPathComponent("var/mobile/Python")
@@ -4695,6 +5992,74 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             let list = copied.prefix(10).joined(separator: ", ") + (copied.count > 10 ? " … (+\(copied.count - 10))" : "")
             return "[copied to the project: \(list) — tap it in the file list to see it]"
         })
+    }
+    
+    // MARK: debugger
+    
+    /// Where the Python debugger stopped, as a file of the project (the editor tints that line green).
+    static var debugStop: (file: URL, line: Int)?
+    private static var debugTimer: Timer?
+    private static var debugStamp: Date?
+    
+    /// ⌥⌘D: runs the script under nyxian_pdb, stopping at the project's breakpoints in .py files.
+    static func debug(script: URL, project: NXProject?, from presenter: UIViewController) {
+        presenter.view.window?.endEditing(true)
+        let root: URL = project.map { $0.url as URL } ?? script.deletingLastPathComponent()
+        let relative = ProjectFileIndex.relativePath(script, root: root)
+        let openTexts = LiveEditorRegistry.openTexts()
+        let runFolder = mirrorFolder(project: root)
+        let stateFile = runFolder.appendingPathComponent(".nyxian-debug.json")
+        var breakpoints: [[String: Any]] = []
+        if let project {
+            for item in ForkBreakpoints.all(project: project) {
+                guard let path = item["path"] as? String, let line = item["line"] as? Int, path.lowercased().hasSuffix(".py") else { continue }
+                breakpoints.append(["file": ProjectFileIndex.relativePath(URL(fileURLWithPath: path), root: root), "line": line])
+            }
+        }
+        let json = (try? JSONSerialization.data(withJSONObject: breakpoints)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        let scriptArguments = splitArguments(savedArguments(for: script))
+        ForkPythonIssues.clearRuntime(under: root)
+        launch(from: presenter, arguments: ["-m", "nyxian_pdb", relative] + scriptArguments, workingDirectory: runFolder,
+               title: "Debug · \(script.lastPathComponent)",
+               extraEnvironment: ["NYXIAN_BREAKPOINTS": json, "NYXIAN_DEBUG_STATE": stateFile.path, "NYXIAN_VARS_FILE": variablesFile(project: root).path],
+               beforeLaunch: {
+            _ = try mirror(project: root, openTexts: openTexts)
+            try? FileManager.default.removeItem(at: stateFile)
+            DispatchQueue.main.async { followDebugger(state: stateFile, runFolder: runFolder, root: root) }
+        }, onExit: { _ in
+            DispatchQueue.main.async { stopFollowingDebugger() }
+            _ = copyOutput(project: root)
+            return nil
+        })
+    }
+    
+    private static func followDebugger(state: URL, runFolder: URL, root: URL) {
+        debugTimer?.invalidate()
+        debugStamp = nil
+        debugTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { _ in
+            let date = (try? state.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            guard let date, date != debugStamp else { return }
+            debugStamp = date
+            guard let data = try? Data(contentsOf: state),
+                  let info = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            var stop: (file: URL, line: Int)?
+            if info["running"] as? Bool == false, let file = info["file"] as? String, let line = info["line"] as? Int {
+                let path = URL(fileURLWithPath: file).resolvingSymlinksInPath().path
+                let folder = runFolder.resolvingSymlinksInPath().path
+                if path.hasPrefix(folder + "/") {
+                    stop = (root.appendingPathComponent(String(path.dropFirst(folder.count + 1))), line)
+                }
+            }
+            debugStop = stop
+            NotificationCenter.default.post(name: ForkDebugSession.stopped, object: nil)
+        }
+    }
+    
+    private static func stopFollowingDebugger() {
+        debugTimer?.invalidate()
+        debugTimer = nil
+        debugStop = nil
+        NotificationCenter.default.post(name: ForkDebugSession.stopped, object: nil)
     }
     
     /// Where the project's cell console writes its variables (the inspector reads it).

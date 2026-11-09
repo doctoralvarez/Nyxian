@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # Fork doctoralvarez/Nyxian — version 1.2.0
 # Changelog:
-#  - 1.2.0 (2026-11-09): cell outputs (output, errors, new figures per cell).
+#  - 1.2.0 (2026-11-09): cell outputs (output, errors, new figures per cell);
+#    the debugger (stops at a breakpoint, state file, variables).
 #  - 1.1.0 (2026-11-09): pyflakes lint and the test runner.
 #  - 1.0.0 (2026-11-08): CI test of nyxian_jedi (completion, diagnostics),
 #    nyxian_mplbackend (plt.show) and the error file of runs.
@@ -14,7 +15,7 @@ import sys
 import tempfile
 
 SOURCE = os.path.join(os.path.dirname(__file__), "..", "..", "Nyxian", "UI", "ContentView.swift")
-NAMES = ["nyxian_jedi.py", "nyxian_mplbackend.py", "nyxian_lineedit.py", "nyxian_tests.py", "nyxian_repl.py", "sitecustomize.py"]
+NAMES = ["nyxian_pdb.py", "nyxian_jedi.py", "nyxian_mplbackend.py", "nyxian_lineedit.py", "nyxian_tests.py", "nyxian_repl.py", "sitecustomize.py"]
 
 
 def extract(folder):
@@ -104,6 +105,24 @@ def main():
         check("cells: error kept", cells[2]["failed"] and "ZeroDivisionError" in cells[2]["output"], cells[2]["output"][-120:])
     if run.stderr.strip() and not cells:
         print(run.stderr[-800:])
+
+    debug_dir = tempfile.mkdtemp()
+    with open(os.path.join(debug_dir, "demo.py"), "w") as handle:
+        handle.write("def f(n):\n    total = 0\n    for i in range(n):\n        total += i\n    return total\n\nx = f(4)\nprint('x =', x)\ny = x * 2\nprint('y =', y)\n")
+    state = os.path.join(debug_dir, ".nyxian-debug.json")
+    variables = os.path.join(debug_dir, ".nyxian-vars.json")
+    env = dict(os.environ, PYTHONPATH=helpers, NYXIAN_BREAKPOINTS=json.dumps([{"file": "demo.py", "line": 9}]),
+               NYXIAN_DEBUG_STATE=state, NYXIAN_VARS_FILE=variables)
+    probe = subprocess.run([sys.executable, "-m", "nyxian_pdb", "demo.py"], cwd=debug_dir, input="p x + 100\nlocals\nc\n",
+                           capture_output=True, text=True, env=env, timeout=120)
+    check("debugger: stops at the breakpoint", "demo.py(9)" in probe.stdout and "106" in probe.stdout, probe.stdout[-400:])
+    check("debugger: runs on after c", "y = 12" in probe.stdout and "[debugging ended]" in probe.stdout, probe.stdout[-200:])
+    names = [row["name"] for row in json.load(open(variables)).get("variables", [])] if os.path.exists(variables) else []
+    check("debugger: variables for the inspector", "x" in names, names)
+    ended = json.load(open(state)) if os.path.exists(state) else {}
+    check("debugger: state file", ended.get("ended") is True, ended)
+    if probe.stderr.strip():
+        print(probe.stderr[-600:])
     sys.exit(1 if failed else 0)
 
 
