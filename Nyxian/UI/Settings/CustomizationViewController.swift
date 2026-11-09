@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.1
+ Fork doctoralvarez/Nyxian — version 1.5.0
  Changelog:
+  - 1.5.0 (2026-11-09): "SDK Backup" (owner/repo) and "GitHub Token" — where
+    the iOS SDK comes from when nyxian.app fails twice.
   - 1.4.1 (2026-11-08): Debugger off by default ("breakpoints; slower builds").
   - 1.4.0 (2026-11-08): "Orientation" picker (Automatic / Portrait /
     Landscape).
@@ -94,7 +96,7 @@ class CustomizationViewController: NXUITableViewController {
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch section {
         case 0:
-            return 2
+            return 4
         case 1:
             return 13
         case 2:
@@ -110,10 +112,19 @@ class CustomizationViewController: NXUITableViewController {
         if indexPath.section == 0 {
             if indexPath.row == 0 {
                 cell = NXTextFieldTableCell(title: "Username", hint: "Anonym", key: "LDEUsername", defaultValue: "Anonym")
-            } else {
+            } else if indexPath.row == 1 {
                 cell = NXTextFieldTableCell(title: "Hostname", hint: "localhost", key: "LDEHostname", defaultValue: "localhost") { newValue in
                     ksurface_sethostname(newValue)
                 }
+            } else if indexPath.row == 2 {
+                /* fork: where the SDK comes from when nyxian.app fails (a release "ios-sdk") */
+                cell = NXTextFieldTableCell(title: "SDK Backup", hint: "owner/repo", key: "fork.sdk.backupRepo", defaultValue: "doctoralvarez/nyxian-sdk")
+            } else {
+                let tokenCell = NXTextFieldTableCell(title: "GitHub Token", hint: "for a private SDK backup", key: "fork.sdk.githubToken", defaultValue: "")
+                tokenCell.textField.isSecureTextEntry = true
+                tokenCell.textField.autocorrectionType = .no
+                tokenCell.textField.autocapitalizationType = .none
+                cell = tokenCell
             }
         } else if indexPath.section == 1 {
             if indexPath.row == 0 {

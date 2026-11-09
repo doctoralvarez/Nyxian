@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-09): fdownloadWithOptions: request headers (a GitHub token
+    for a private release asset; Authorization is dropped when GitHub sends
+    the download to another host) and the number of attempts.
   - 1.0.0 (2026-11-08): downloads survive a bad connection — up to 6
     attempts with growing pauses, resuming where the last one stopped
     (resume data) instead of starting over, waiting for the network to come
@@ -35,9 +38,37 @@
 
 static const int NXForkDownloadAttempts = 6;
 
+/* GitHub answers a private asset with a redirect to a signed URL on another
+   host, which refuses requests that still carry the token */
+@interface NXForkDownloadDelegate : NSObject <NSURLSessionTaskDelegate>
+@end
+
+@implementation NXForkDownloadDelegate
+
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task willPerformHTTPRedirection:(NSHTTPURLResponse *)response newRequest:(NSURLRequest *)request completionHandler:(void (^)(NSURLRequest *))completionHandler
+{
+    NSMutableURLRequest *next = [request mutableCopy];
+    if(![request.URL.host isEqualToString:task.originalRequest.URL.host])
+    {
+        [next setValue:nil forHTTPHeaderField:@"Authorization"];
+    }
+    completionHandler(next);
+}
+
+@end
+
 BOOL fdownloadWithError(NSString *urlString,
                         NSString *destinationPath,
                         NSError **outError)
+{
+    return fdownloadWithOptions(urlString, destinationPath, nil, NXForkDownloadAttempts, outError);
+}
+
+BOOL fdownloadWithOptions(NSString *urlString,
+                          NSString *destinationPath,
+                          NSDictionary<NSString*,NSString*> *headers,
+                          int attempts,
+                          NSError **outError)
 {
     NSURL *url = [NSURL URLWithString:urlString];
     if(url == nil)
@@ -57,13 +88,18 @@ BOOL fdownloadWithError(NSString *urlString,
     configuration.timeoutIntervalForResource = 60 * 60;    /* the SDK is large */
     configuration.waitsForConnectivity = YES;              /* offline for a moment: wait instead of failing */
     configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
-    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration delegate:nil delegateQueue:nil];
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration delegate:[NXForkDownloadDelegate new] delegateQueue:nil];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    [headers enumerateKeysAndObjectsUsingBlock:^(NSString *field, NSString *value, BOOL *stop) {
+        [request setValue:value forHTTPHeaderField:field];
+    }];
+    attempts = MAX(1, attempts);
     
     __block NSError *lastError = nil;
     NSData *resumeData = nil;
     BOOL didDownload = NO;
     
-    for(int attempt = 1; attempt <= NXForkDownloadAttempts && !didDownload; attempt++)
+    for(int attempt = 1; attempt <= attempts && !didDownload; attempt++)
     {
         __block NSData *nextResumeData = nil;
         __block BOOL ok = NO;
@@ -92,13 +128,13 @@ BOOL fdownloadWithError(NSString *urlString,
         
         NSURLSessionDownloadTask *task = resumeData != nil
             ? [session downloadTaskWithResumeData:resumeData completionHandler:completion]
-            : [session downloadTaskWithURL:url completionHandler:completion];
+            : [session downloadTaskWithRequest:request completionHandler:completion];
         [task resume];
         dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
         
         didDownload = ok;
         resumeData = nextResumeData;
-        if(!didDownload && attempt < NXForkDownloadAttempts)
+        if(!didDownload && attempt < attempts)
         {
             NSLog(@"[fdownload] %@ attempt %d failed (%@)%@, trying again", url.lastPathComponent, attempt, lastError.localizedDescription, resumeData ? @", resuming" : @"");
             sleep(attempt < 3 ? 3 * attempt : 15);

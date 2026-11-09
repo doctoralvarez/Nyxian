@@ -1,0 +1,89 @@
+# Fork doctoralvarez/Nyxian — version 1.0.0
+# Changelog:
+#  - 1.0.0 (2026-11-09): your own copy of the iOS SDK for Nyxian's bootstrap.
+#    On GitHub's Xcode 27 runner, the iPhoneOS SDK (27.0 when installed) is
+#    zipped as iPhoneOS27.0.sdk.zip — the layout of nyxian.app's — and put on
+#    the "ios-sdk" release of a PRIVATE repository (the SDK is Apple's: keep
+#    it private, for your own use). Needs the secret SDK_REPO_TOKEN: a
+#    fine-grained token with "Contents: Read and write" on that repository.
+name: iOS SDK backup
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Private repository that keeps the SDK (owner/repo)"
+        default: "doctoralvarez/nyxian-sdk"
+      xcode:
+        description: "Xcode version to take the SDK from (empty: 27.0 if there, else the newest 27.x)"
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  sdk:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - name: Check the token
+        env:
+          GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+          REPO: ${{ github.event.inputs.repository }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Add the secret SDK_REPO_TOKEN (Settings › Secrets and variables › Actions) — a fine-grained token with Contents: Read and write on $REPO"
+            exit 1
+          fi
+          visibility=$(gh api "repos/$REPO" -q .visibility) || { echo "::error::$REPO cannot be read with SDK_REPO_TOKEN"; exit 1; }
+          echo "$REPO is $visibility"
+          if [ "$visibility" != "private" ]; then
+            echo "::error::$REPO is $visibility — the SDK is Apple's, keep it in a private repository"
+            exit 1
+          fi
+
+      - name: Pick Xcode
+        id: xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          wanted="${{ github.event.inputs.xcode }}"
+          if [ -n "$wanted" ]; then
+            app="/Applications/Xcode_${wanted}.app"
+          elif [ -d /Applications/Xcode_27.0.app ]; then
+            app=/Applications/Xcode_27.0.app
+          else
+            app=$(ls -d /Applications/Xcode_27*.app | sort -V | tail -1)
+          fi
+          [ -d "$app" ] || { echo "::error::$app is not installed"; exit 1; }
+          sdk="$app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
+          sdk=$(cd "$sdk" && pwd -P)
+          version=$(/usr/libexec/PlistBuddy -c "Print :Version" "$sdk/SDKSettings.plist")
+          echo "Xcode: $app"; echo "SDK: $sdk ($version)"
+          if [ "$version" != "27.0" ]; then
+            echo "::warning::This SDK is $version, Nyxian's own is 27.0 — it is saved as iPhoneOS27.0.sdk; newer Swift interfaces may not suit Nyxian's compiler"
+          fi
+          echo "sdk=$sdk" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "xcode=$(basename "$app" .app)" >> "$GITHUB_OUTPUT"
+
+      - name: Zip the SDK
+        run: |
+          mkdir -p out
+          ditto "${{ steps.xcode.outputs.sdk }}" out/iPhoneOS27.0.sdk
+          du -sh out/iPhoneOS27.0.sdk
+          (cd out && zip -qry -9 iPhoneOS27.0.sdk.zip iPhoneOS27.0.sdk)
+          ls -la out/iPhoneOS27.0.sdk.zip
+          size=$(stat -f %z out/iPhoneOS27.0.sdk.zip)
+          [ "$size" -lt 2000000000 ] || { echo "::error::$size bytes: over GitHub's 2 GB per file"; exit 1; }
+          shasum -a 256 out/iPhoneOS27.0.sdk.zip | tee out/iPhoneOS27.0.sdk.zip.sha256
+
+      - name: Put it on the private release
+        env:
+          GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+          REPO: ${{ github.event.inputs.repository }}
+        run: |
+          gh release view ios-sdk -R "$REPO" >/dev/null 2>&1 || \
+            gh release create ios-sdk -R "$REPO" --title "iOS SDK for Nyxian" \
+              --notes "iPhoneOS SDK ${{ steps.xcode.outputs.version }} from ${{ steps.xcode.outputs.xcode }}, for Nyxian's bootstrap. Apple's SDK — private, personal use."
+          gh release upload ios-sdk -R "$REPO" out/iPhoneOS27.0.sdk.zip out/iPhoneOS27.0.sdk.zip.sha256 --clobber
+          gh release view ios-sdk -R "$REPO" --json assets -q '.assets[]|"\(.name) \(.size)"'

@@ -34,3 +34,10 @@ BOOL fdownload(NSString *urlString,
 BOOL fdownloadWithError(NSString *urlString,
                         NSString *destinationPath,
                         NSError **outError);
+
+/* fork: with request headers (e.g. a GitHub token) and a number of attempts */
+BOOL fdownloadWithOptions(NSString *urlString,
+                          NSString *destinationPath,
+                          NSDictionary<NSString*,NSString*> *headers,
+                          int attempts,
+                          NSError **outError);

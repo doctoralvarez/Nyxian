@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-09): when nyxian.app fails twice, the SDK comes from your
+    own backup: a GitHub release (Settings › Customization › SDK Backup, a
+    private repository with a token), see .github/workflows/ios-sdk.yml.
   - 1.0.0 (2026-11-08): a failed bootstrap step (e.g. the SDK download) no
     longer deletes what was done and resets to version 0: the steps done stay,
     the error says why the download failed, and the bootstrap tries again by
@@ -46,6 +49,57 @@ extern BOOL PEURLIsContainedIn(NSURL *candidate, NSURL *root);
 @property (readwrite) UInt64 version;
 
 @end
+
+/*
+ * fork: your own copy of the SDK — a release of a (private) GitHub repository
+ * holding iPhoneOS27.0.sdk.zip, made by .github/workflows/ios-sdk.yml.
+ * Settings › Customization: "SDK Backup" (owner/repo, release "ios-sdk")
+ * and "GitHub Token" (read access to it).
+ */
+static BOOL NXForkDownloadSDKBackup(NSString *destination, NSError **outError)
+{
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSString *repository = [[defaults stringForKey:@"fork.sdk.backupRepo"] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+    NSString *token = [[defaults stringForKey:@"fork.sdk.githubToken"] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if(repository.length == 0 || [repository rangeOfString:@"/"].location == NSNotFound)
+    {
+        return NO;
+    }
+    NSString *asset = @"iPhoneOS27.0.sdk.zip";
+    NSLog(@"[bootstrap] nyxian.app failed, trying the SDK backup on %@", repository);
+    
+    NSMutableDictionary<NSString*,NSString*> *headers = [@{ @"Accept": @"application/vnd.github+json", @"X-GitHub-Api-Version": @"2022-11-28" } mutableCopy];
+    if(token.length) headers[@"Authorization"] = [@"Bearer " stringByAppendingString:token];
+    
+    /* the release, then its asset by name */
+    NSString *releaseFile = [NSTemporaryDirectory() stringByAppendingPathComponent:@"sdk-release.json"];
+    NSString *releaseURL = [NSString stringWithFormat:@"https://api.github.com/repos/%@/releases/tags/ios-sdk", repository];
+    NSError *error = nil;
+    if(!fdownloadWithOptions(releaseURL, releaseFile, headers, 3, &error))
+    {
+        if(outError) *outError = [NSError errorWithDomain:@"" code:0 userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"%@ — and the backup %@ could not be read (%@; check the token)", (*outError) ? (*outError).localizedDescription : @"nyxian.app failed", repository, error.localizedDescription] }];
+        return NO;
+    }
+    NSDictionary *release = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:releaseFile] ?: [NSData data] options:0 error:nil];
+    NSString *assetURL = nil;
+    for(NSDictionary *entry in ([release isKindOfClass:NSDictionary.class] ? release[@"assets"] : nil))
+    {
+        if([entry isKindOfClass:NSDictionary.class] && [entry[@"name"] isEqual:asset]) assetURL = entry[@"url"];
+    }
+    if(assetURL == nil)
+    {
+        if(outError) *outError = [NSError errorWithDomain:@"" code:0 userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"the backup %@ has no %@ in its \"ios-sdk\" release", repository, asset] }];
+        return NO;
+    }
+    headers[@"Accept"] = @"application/octet-stream";
+    if(!fdownloadWithOptions(assetURL, destination, headers, 6, &error))
+    {
+        if(outError) *outError = [NSError errorWithDomain:@"" code:0 userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"the SDK backup on %@ failed too: %@", repository, error.localizedDescription] }];
+        return NO;
+    }
+    NSLog(@"[bootstrap] SDK downloaded from the backup on %@", repository);
+    return YES;
+}
 
 @implementation NXBootstrap {
     NSURL *_rootURL;
@@ -356,7 +410,9 @@ extern BOOL PEURLIsContainedIn(NSURL *candidate, NSURL *root);
                 [[NSFileManager defaultManager] removeItemAtURL:self.swiftModuleCacheURL error:nil];    /* clearing module cache */
                 
                 NSError *downloadError = nil;
-                if(!fdownloadWithError(@"https://nyxian.app/bootstrap/iPhoneOS27.0.sdk.zip", @"sdk.zip", &downloadError))
+                /* fork: two tries at nyxian.app, then your own copy on GitHub */
+                if(!fdownloadWithOptions(@"https://nyxian.app/bootstrap/iPhoneOS27.0.sdk.zip", @"sdk.zip", nil, 2, &downloadError) &&
+                   !NXForkDownloadSDKBackup(@"sdk.zip", &downloadError))
                 {
                     error = [NSError errorWithDomain:@"" code:0 userInfo:@{ NSLocalizedDescriptionKey: [NSString stringWithFormat:@"downloading \"https://nyxian.app/bootstrap/iPhoneOS27.0.sdk.zip\" failed: %@", downloadError.localizedDescription ?: @"unknown error"] }];
                     goto report_error;

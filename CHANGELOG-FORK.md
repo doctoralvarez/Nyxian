@@ -4,6 +4,20 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.33.0 — 2026-11-09
+
+- **Your own copy of the iOS SDK as the bootstrap's backup**: after two failed
+  tries at nyxian.app, Nyxian downloads `iPhoneOS27.0.sdk.zip` from the
+  "ios-sdk" release of your (private) GitHub repository — Settings ›
+  Customization › **SDK Backup** (owner/repo, default
+  `doctoralvarez/nyxian-sdk`) and **GitHub Token** (read access to it).
+- **iOS SDK backup** workflow (`.github/workflows/ios-sdk.yml`, run by hand):
+  takes the SDK from GitHub's Xcode 27 runner (27.0 when installed), zips it
+  like nyxian.app's and uploads it to that private release; it refuses a
+  public repository (the SDK is Apple's).
+- Downloads can carry headers (a token) and a number of attempts; the token
+  is dropped when GitHub sends the file to another host.
+
 ## 1.32.1 — 2026-11-08
 
 - **Bootstrap downloads that survive a bad connection** (the iOS SDK after a
