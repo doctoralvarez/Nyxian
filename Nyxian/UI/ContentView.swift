@@ -3136,7 +3136,7 @@ def complete(request):
     script = jedi.Script(code=request["source"], path=request.get("path") or None, project=_project(request.get("root")))
     items = []
     for index, completion in enumerate(script.complete(request["line"], request["column"])):
-        if index >= 150:
+        if index >= 600:
             break
         kind = completion.type
         item = {"text": completion.name, "display": completion.name, "type": kind, "kind": KINDS.get(kind, 0)}
