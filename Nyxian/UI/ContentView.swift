@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.21.0
+ Fork doctoralvarez/Nyxian — version 1.22.0
  Changelog:
+  - 1.22.0 (2026-11-09): cell outputs, like a notebook: every cell run in the
+    cell console keeps its code, output, errors and new figures
+    (NYXIAN_CELLS_FILE), shown one under another in Cell Outputs (⌥⌘O); with
+    that sheet open the console stays behind the editor.
   - 1.21.0 (2026-11-09): Python's line editor reads in raw mode (the
     terminal now edits lines and echoes by itself, canonical mode): it is
     switched off while input() reads and for the whole REPL session.
@@ -2104,6 +2108,180 @@ enum ForkPythonIssues {
 }
 
 /// The variables of a project's cell console (snapshot written by nyxian_repl after each command).
+/// The cells run in the project's cell console, one under another like a notebook:
+/// code, output (errors in red) and the figures each one made. Follows the console live.
+final class ForkPythonCellOutputsViewController: UIViewController {
+    private let file: URL
+    private let scroll = UIScrollView()
+    private let stack = UIStackView()
+    private var stamp: Date?
+    private var timer: Timer?
+    private var count = -1
+    
+    init(file: URL) {
+        self.file = file
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Cell Outputs"
+        view.backgroundColor = .systemGroupedBackground
+        navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        navigationItem.rightBarButtonItem = UIBarButtonItem(image: UIImage(systemName: "trash"), primaryAction: UIAction { [weak self] _ in
+            guard let self else { return }
+            try? FileManager.default.removeItem(at: self.file)
+            self.stamp = nil
+            self.reload()
+        })
+        stack.axis = .vertical
+        stack.spacing = 12
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.alwaysBounceVertical = true
+        scroll.addSubview(stack)
+        view.addSubview(scroll)
+        NSLayoutConstraint.activate([
+            scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 12),
+            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -24),
+            stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 14),
+            stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -14),
+        ])
+        reload()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: true) { [weak self] _ in self?.reload() }
+    }
+    
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        ForkPython.cellOutputsVisible = true
+    }
+    
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        ForkPython.cellOutputsVisible = false
+        if isBeingDismissed || navigationController?.isBeingDismissed == true {
+            timer?.invalidate()
+        }
+    }
+    
+    private func reload() {
+        let date = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        if date != nil, date == stamp { return }
+        stamp = date
+        var cells: [[String: Any]] = []
+        if let data = try? Data(contentsOf: file),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let list = object["cells"] as? [[String: Any]] {
+            cells = list
+        }
+        let grew = cells.count > count
+        count = cells.count
+        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        if cells.isEmpty {
+            let empty = UILabel()
+            empty.text = "Run a cell (⌘↩) and its output and figures show here, one under another, like a notebook.\n\nKeep this sheet half open next to the code: the console stays behind the editor while it is open."
+            empty.numberOfLines = 0
+            empty.textColor = .secondaryLabel
+            empty.font = .preferredFont(forTextStyle: .body)
+            stack.addArrangedSubview(empty)
+            return
+        }
+        for cell in cells {
+            stack.addArrangedSubview(card(cell))
+        }
+        if grew {
+            view.layoutIfNeeded()
+            let bottom = max(0, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+            scroll.setContentOffset(CGPoint(x: 0, y: bottom), animated: true)
+        }
+    }
+    
+    private func card(_ cell: [String: Any]) -> UIView {
+        let box = UIStackView()
+        box.axis = .vertical
+        box.spacing = 8
+        box.isLayoutMarginsRelativeArrangement = true
+        box.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 10, leading: 12, bottom: 12, trailing: 12)
+        box.backgroundColor = .secondarySystemGroupedBackground
+        box.layer.cornerRadius = 12
+        box.layer.cornerCurve = .continuous
+        
+        let n = cell["n"] as? Int ?? 0
+        let seconds = cell["seconds"] as? Double ?? 0
+        let failed = cell["failed"] as? Bool ?? false
+        let header = UILabel()
+        header.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
+        header.textColor = failed ? .systemRed : .secondaryLabel
+        header.text = "In [\(n)]" + String(format: "  ·  %.2f s", seconds) + (failed ? "  ·  error" : "")
+        box.addArrangedSubview(header)
+        
+        let size: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 14 : 12
+        let source = (cell["source"] as? String ?? "").trimmingCharacters(in: .newlines)
+        let lines = source.components(separatedBy: "\n")
+        let code = UILabel()
+        code.numberOfLines = 0
+        code.font = .monospacedSystemFont(ofSize: size, weight: .regular)
+        code.text = lines.count > 14 ? lines.prefix(12).joined(separator: "\n") + "\n… (\(lines.count - 12) more lines)" : source
+        let codeBack = UIView()
+        codeBack.backgroundColor = .tertiarySystemFill
+        codeBack.layer.cornerRadius = 8
+        code.translatesAutoresizingMaskIntoConstraints = false
+        codeBack.addSubview(code)
+        NSLayoutConstraint.activate([
+            code.topAnchor.constraint(equalTo: codeBack.topAnchor, constant: 8),
+            code.bottomAnchor.constraint(equalTo: codeBack.bottomAnchor, constant: -8),
+            code.leadingAnchor.constraint(equalTo: codeBack.leadingAnchor, constant: 8),
+            code.trailingAnchor.constraint(equalTo: codeBack.trailingAnchor, constant: -8),
+        ])
+        box.addArrangedSubview(codeBack)
+        
+        let output = (cell["output"] as? String ?? "").trimmingCharacters(in: .newlines)
+        if !output.isEmpty {
+            let text = UILabel()
+            text.numberOfLines = 0
+            text.font = .monospacedSystemFont(ofSize: size, weight: .regular)
+            text.textColor = failed ? .systemRed : .label
+            let outLines = output.components(separatedBy: "\n")
+            text.text = outLines.count > 200 ? outLines.prefix(200).joined(separator: "\n") + "\n… (\(outLines.count - 200) more lines in the console)" : output
+            box.addArrangedSubview(text)
+        }
+        for path in cell["figures"] as? [String] ?? [] {
+            guard let image = UIImage(contentsOfFile: path) else { continue }
+            let picture = UIImageView(image: image)
+            picture.contentMode = .scaleAspectFit
+            picture.backgroundColor = .white
+            picture.layer.cornerRadius = 8
+            picture.clipsToBounds = true
+            picture.isUserInteractionEnabled = true
+            let ratio = image.size.width > 0 ? image.size.height / image.size.width : 0.75
+            picture.heightAnchor.constraint(equalTo: picture.widthAnchor, multiplier: min(max(ratio, 0.2), 2.0)).isActive = true
+            let url = URL(fileURLWithPath: path)
+            picture.addGestureRecognizer(ForkTapGesture { [weak self] in
+                guard let self else { return }
+                ForkQuickLook.present(url, from: self)
+            })
+            box.addArrangedSubview(picture)
+        }
+        return box
+    }
+}
+
+/// A tap gesture with a closure.
+final class ForkTapGesture: UITapGestureRecognizer {
+    private let handler: () -> Void
+    init(_ handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(target: nil, action: nil)
+        addTarget(self, action: #selector(fire))
+    }
+    @objc private func fire() { handler() }
+}
+
 final class ForkPythonVariablesViewController: UITableViewController, UISearchResultsUpdating {
     private let file: URL
     private var rows: [[String: Any]] = []
@@ -3233,8 +3411,72 @@ def snapshot(namespace):
         pass
 
 
+class _Tee:
+    """A stream that also keeps what goes through it (the outputs of a cell)."""
+
+    def __init__(self, stream, sink):
+        self._stream = stream
+        self._sink = sink
+
+    def write(self, text):
+        self._sink.append(text)
+        return self._stream.write(text)
+
+    def flush(self):
+        return self._stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+def _figures():
+    folder = os.path.join(os.getcwd(), "figures")
+    found = {}
+    try:
+        for name in os.listdir(folder):
+            if name.lower().endswith((".png", ".jpg", ".jpeg", ".svg", ".pdf")):
+                path = os.path.join(folder, name)
+                found[path] = os.stat(path).st_mtime
+    except OSError:
+        pass
+    return found
+
+
+_cell_count = [0]
+
+
+def record_cell(source, output, figures, seconds, failed):
+    """A cell's code, output and new figures, for Nyxian's cell outputs (NYXIAN_CELLS_FILE)."""
+    path = os.environ.get("NYXIAN_CELLS_FILE")
+    if not path:
+        return
+    try:
+        import json
+        import time
+        cells = []
+        try:
+            with open(path, encoding="utf-8") as handle:
+                cells = json.load(handle).get("cells", [])
+        except Exception:
+            cells = []
+        _cell_count[0] = max(_cell_count[0], cells[-1]["n"] if cells else 0) + 1
+        if len(output) > 30000:
+            output = output[:15000] + "\n… (%d characters left out) …\n" % (len(output) - 30000) + output[-15000:]
+        cells.append({"n": _cell_count[0], "time": time.time(), "seconds": round(seconds, 3),
+                      "source": source, "output": output, "figures": figures, "failed": failed})
+        cells = cells[-60:]
+        temporary = path + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump({"time": time.time(), "cells": cells}, handle)
+        os.replace(temporary, path)
+    except Exception:
+        pass
+
+
 class NyxianConsole(code.InteractiveConsole):
     _last = ""
+    _capture = None
+    _failed = False
 
     def raw_input(self, prompt=""):
         # inside a block (prompt "... "), keep the indentation of the line
@@ -3259,6 +3501,36 @@ class NyxianConsole(code.InteractiveConsole):
         return line
 
     def run_block(self, source):
+        """A cell (or any pasted block); with NYXIAN_CELLS_FILE its output and
+        new figures are kept for Nyxian's cell outputs."""
+        if not os.environ.get("NYXIAN_CELLS_FILE"):
+            return self._run_block(source)
+        import time
+        captured = []
+        before = _figures()
+        out, err = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = _Tee(out, captured), _Tee(err, captured)
+        self._capture = captured
+        self._failed = False
+        start = time.time()
+        try:
+            self._run_block(source)
+        finally:
+            sys.stdout, sys.stderr = out, err
+            self._capture = None
+            after = _figures()
+            new = sorted(path for path, mtime in after.items() if before.get(path) != mtime)
+            record_cell(source, "".join(captured), new, time.time() - start, self._failed)
+
+    def showtraceback(self):
+        self._failed = True
+        super().showtraceback()
+
+    def showsyntaxerror(self, *args, **kwargs):
+        self._failed = True
+        super().showsyntaxerror(*args, **kwargs)
+
+    def _run_block(self, source):
         """Runs pasted code statement by statement, like typed lines, so
         blank lines inside a def and code after a block are fine, and the
         value of an expression is shown."""
@@ -3286,6 +3558,8 @@ class NyxianConsole(code.InteractiveConsole):
 
     def write(self, data):
         _flush()
+        if self._capture is not None:
+            self._capture.append(data)
         _write(data, 2)
 
     def push(self, line, *args, **kwargs):
@@ -4428,6 +4702,14 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         mirrorFolder(project: root).appendingPathComponent(".nyxian-vars.json")
     }
     
+    /// Where the project's cell console writes each cell's output and figures (Cell Outputs reads it).
+    static func cellsFile(project root: URL) -> URL {
+        mirrorFolder(project: root).appendingPathComponent(".nyxian-cells.json")
+    }
+    
+    /// While Cell Outputs is open the results show there: the console window stays behind.
+    static var cellOutputsVisible = false
+    
     // MARK: cells (# %%) in a console that stays open, one per project
     
     private static var cellConsoles: [String: NXWindowSessionTerminal] = [:]
@@ -4445,7 +4727,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                 DispatchQueue.main.async {
                     /* pasted (bracketed paste): Nyxian's REPL runs the block whole */
                     if console.forkSendText("\u{1b}[200~" + code + "\n\u{1b}[201~") {
-                        console.forkBringToFront()
+                        if !cellOutputsVisible { console.forkBringToFront() }
                     } else {
                         cellConsoles[key] = nil
                         runCell(code, script: script, project: project, from: presenter)
@@ -4457,7 +4739,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         cellConsoles[key] = nil
         let cellFile = runFolder.appendingPathComponent(".nyxian-cell.py")
         presenter.view.window?.endEditing(true)
-        launch(from: presenter, arguments: ["-q", "-m", "nyxian_repl", "--cell", cellFile.path], workingDirectory: runFolder, title: "Cells · \(script.lastPathComponent)", closeOnExit: true, extraEnvironment: ["NYXIAN_VARS_FILE": variablesFile(project: root).path], beforeLaunch: {
+        launch(from: presenter, arguments: ["-q", "-m", "nyxian_repl", "--cell", cellFile.path], workingDirectory: runFolder, title: "Cells · \(script.lastPathComponent)", closeOnExit: true, extraEnvironment: ["NYXIAN_VARS_FILE": variablesFile(project: root).path, "NYXIAN_CELLS_FILE": cellsFile(project: root).path], beforeLaunch: {
             _ = try mirror(project: root, openTexts: openTexts)
             try code.write(to: cellFile, atomically: true, encoding: .utf8)
         }, onExit: { _ in

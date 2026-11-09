@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-09): Processes keeps a minute of CPU and memory of every
+    process: "Activity…" shows it as the profiler's graphs, live; each row
+    has a small CPU line.
   - 1.1.0 (2026-11-09): Permissions: per program (app, python3, any
     executable) file access — Nyxian default, only what it declares, or all
     of Nyxian — extra read-only / read-write folders, and network on or off;
@@ -344,6 +347,10 @@ final class ForkProcessMonitorViewController: UITableViewController, UISearchRes
     private enum Sort: String, CaseIterable { case pid = "PID", cpu = "CPU", memory = "Memory", name = "Name" }
     private var all: [[String: Any]] = []
     private var shown: [[String: Any]] = []
+    /* fork: the last minute of each process, for Activity… and the row's small graph */
+    private var history: [Int: [ForkProfilerView.Sample]] = [:]
+    private weak var activity: ForkProfilerGraphsViewController?
+    private var activityPid = -1
     private var timer: Timer?
     private var sort: Sort = .pid
     private var paused = false
@@ -403,9 +410,39 @@ final class ForkProcessMonitorViewController: UITableViewController, UISearchRes
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.all = list
+                self.record(list)
                 self.applyFilter()
             }
         }
+    }
+    
+    private func record(_ list: [[String: Any]]) {
+        var alive = Set<Int>()
+        for entry in list {
+            guard let pid = entry["pid"] as? Int, let cpu = entry["cpu"] as? Double, let memory = entry["memory"] as? Double else { continue }
+            alive.insert(pid)
+            var samples = history[pid] ?? []
+            samples.append(ForkProfilerView.Sample(cpu: cpu, memory: memory, threads: entry["threads"] as? Int ?? 0))
+            if samples.count > 60 { samples.removeFirst(samples.count - 60) }
+            history[pid] = samples
+        }
+        history = history.filter { alive.contains($0.key) }
+        if let activity = activity, let samples = history[activityPid] {
+            activity.update(samples)
+        }
+    }
+    
+    private func showActivity(pid: Int, name: String) {
+        let graphs = ForkProfilerGraphsViewController()
+        graphs.title = name
+        graphs.update(history[pid] ?? [])
+        activity = graphs
+        activityPid = pid
+        let navigation = UINavigationController(rootViewController: graphs)
+        navigation.modalPresentationStyle = .pageSheet
+        navigation.sheetPresentationController?.detents = [.medium(), .large()]
+        navigation.sheetPresentationController?.prefersGrabberVisible = true
+        present(navigation, animated: true)
     }
     
     func updateSearchResults(for searchController: UISearchController) { applyFilter() }
@@ -480,6 +517,15 @@ final class ForkProcessMonitorViewController: UITableViewController, UISearchRes
         }
         cell.imageView?.image = UIImage(systemName: symbol)
         cell.imageView?.tintColor = tint
+        /* fork: the last minute of CPU, small */
+        if let samples = history[pid], samples.count > 1 {
+            let spark = cell.accessoryView as? ForkSparklineView ?? ForkSparklineView(color: .systemTeal)
+            spark.frame = CGRect(x: 0, y: 0, width: 64, height: 28)
+            spark.values = samples.map { $0.cpu }
+            cell.accessoryView = spark
+        } else {
+            cell.accessoryView = nil
+        }
         return cell
     }
     
@@ -530,6 +576,9 @@ final class ForkProcessMonitorViewController: UITableViewController, UISearchRes
                 guard let self = self else { return }
                 self.confirmed("Kill", critical ? "PID 1 is launchd: killing it restarts Nyxian's userspace." : "\(name) ends at once, without saving anything.") { self.send(SIGKILL, to: pid, name: name) }
             })
+        }
+        if entry["cpu"] != nil {
+            sheet.addAction(UIAlertAction(title: "Activity (CPU and Memory)…", style: .default) { [weak self] _ in self?.showActivity(pid: pid, name: name) })
         }
         if pid != Int(ownPid), pid > 1, let program = ForkPermissionProgram(processEntry: entry) {
             sheet.addAction(UIAlertAction(title: "Permissions…", style: .default) { [weak self] _ in

@@ -621,6 +621,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
                 moreActions.append(UIAction(title: "Run with Arguments…", image: UIImage(systemName: "text.badge.plus")) { [weak self] _ in self?.forkRunPythonWithArguments() })
                 moreActions.append(UIAction(title: "Run Tests", image: UIImage(systemName: "checkmark.diamond")) { [weak self] _ in self?.forkRunPythonTests() })
                 moreActions.append(UIAction(title: "Show Variables", image: UIImage(systemName: "tablecells")) { [weak self] _ in self?.forkShowPythonVariables() })
+                moreActions.append(UIAction(title: "Cell Outputs", image: UIImage(systemName: "rectangle.stack")) { [weak self] _ in self?.forkShowPythonCellOutputs() })
                 moreActions.append(UIAction(title: "Run File in Console", image: UIImage(systemName: "terminal")) { [weak self] _ in self?.forkRunPythonFileInConsole() })
                 moreActions.append(UIAction(title: "Copy Python Output to Project", image: UIImage(systemName: "square.and.arrow.down.on.square")) { [weak self] _ in self?.forkCopyPythonOutput() })
             }
@@ -877,6 +878,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             commands.append(command("Run with Arguments…", #selector(forkRunPythonWithArguments), "r", [.command, .alternate]))
             commands.append(command("Run Tests", #selector(forkRunPythonTests), "u"))
             commands.append(command("Show Variables", #selector(forkShowPythonVariables), "v", [.command, .alternate]))
+            commands.append(command("Cell Outputs", #selector(forkShowPythonCellOutputs), "o", [.command, .alternate]))
             commands.append(command("Run Cell", #selector(forkRunPythonCell), "\r"))
             commands.append(command("Run File in Console", #selector(forkRunPythonFileInConsole), "\r", [.command, .shift]))
         }
@@ -1063,6 +1065,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
                     UIAction(title: "Run Tests", image: UIImage(systemName: "checkmark.diamond")) { _ in self.forkRunPythonTests() },
                     UIAction(title: "Run Cell (# %%)", image: UIImage(systemName: "play.square")) { _ in self.forkRunPythonCell() },
                     UIAction(title: "Show Variables", image: UIImage(systemName: "tablecells")) { _ in self.forkShowPythonVariables() },
+                    UIAction(title: "Cell Outputs", image: UIImage(systemName: "rectangle.stack")) { _ in self.forkShowPythonCellOutputs() },
                     UIAction(title: "Run File in Console", image: UIImage(systemName: "terminal")) { _ in self.forkRunPythonFileInConsole() },
                     UIAction(title: "Copy Python Output to Project", image: UIImage(systemName: "square.and.arrow.down.on.square")) { _ in self.forkCopyPythonOutput() },
                     UIAction(title: "Format Document", image: UIImage(systemName: "text.alignleft")) { _ in self.formatDocument() }
@@ -3644,6 +3647,20 @@ extension CodeEditorViewController {
             sheet.largestUndimmedDetentIdentifier = .medium
         }
         present(inspector, animated: true)
+    }
+    
+    /// ⌥⌘O: each cell's output and figures, one under another (like a notebook).
+    @objc func forkShowPythonCellOutputs() {
+        guard let url = self.file.fileURL else { return }
+        let root: URL = self.project.map { $0.url as URL } ?? url.deletingLastPathComponent()
+        let outputs = UINavigationController(rootViewController: ForkPythonCellOutputsViewController(file: ForkPython.cellsFile(project: root)))
+        outputs.modalPresentationStyle = .pageSheet
+        if let sheet = outputs.sheetPresentationController {
+            sheet.detents = [.medium(), .large()]
+            sheet.prefersGrabberVisible = true
+            sheet.largestUndimmedDetentIdentifier = .medium
+        }
+        present(outputs, animated: true)
     }
     
     /// The whole file in the project's Python console (its variables stay for the cells).

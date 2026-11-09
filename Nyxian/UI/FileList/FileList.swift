@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.7.1
+ Fork doctoralvarez/Nyxian — version 1.8.0
  Changelog:
+  - 1.8.0 (2026-11-09): the profiler's graphs have "All Processes".
+    Select several files and folders by sliding two
+    fingers down the list (as in Files or Mail), which starts selection mode
+    by itself; selection mode shows iOS's selection circles; on iPad, Shift-
+    and ⌘-click work too.
   - 1.7.1 (2026-11-09): a template named like a system type (ObservableObject,
     View, Codable…) gets a suffix (ObservableObjectModel): the type inherited
     from itself and the compiler, which runs inside Nyxian, crashed.
@@ -166,7 +171,9 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
         super.viewDidLoad()
         
         self.tableView.register(FileListCell.self, forCellReuseIdentifier: FileListCell.reuseIdentifier)
-        
+        /* fork: needed before a two-finger slide can start selecting */
+        self.tableView.allowsMultipleSelectionDuringEditing = !self.isReadOnly
+
         if let project = self.project {
             if !self.isSublink {
                 observation = project.observe(\.projectConfig.dictionary, options: [.new, .old]) { [weak self] project, change in
@@ -204,6 +211,11 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
         selectedPaths.removeAll()
 
         tableView.allowsMultipleSelection = isSelecting
+        /* fork: iOS's selection circles; also the mode the two-finger slide uses */
+        tableView.allowsMultipleSelectionDuringEditing = true
+        if tableView.isEditing != isSelecting {
+            tableView.setEditing(isSelecting, animated: true)
+        }
 
         navigationItem.rightBarButtonItem?.isEnabled = !isSelecting
 
@@ -749,6 +761,22 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
         }
     }
 
+    // MARK: - Fork: two-finger slide selects several rows (as in Files and Mail)
+    
+    override func tableView(_ tableView: UITableView, shouldBeginMultipleSelectionInteractionAt indexPath: IndexPath) -> Bool {
+        return !isReadOnly && !entries.isEmpty
+    }
+    
+    override func tableView(_ tableView: UITableView, didBeginMultipleSelectionInteractionAt indexPath: IndexPath) {
+        if !isSelecting {
+            toggleSelectionMode()
+        }
+    }
+    
+    override func tableViewDidEndMultipleSelectionInteraction(_ tableView: UITableView) {
+        updateSelectAllButton()
+    }
+    
     override func tableView(_ tableView: UITableView, didDeselectRowAt indexPath: IndexPath) {
         if isSelecting {
             selectedPaths.remove(entries[indexPath.row].path)
@@ -2909,9 +2937,13 @@ final class ForkProfilerGraphsViewController: UIViewController {
     
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "Profiler"
+        if title == nil { title = "Profiler" }
         view.backgroundColor = .systemBackground
         navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        /* fork: every process, from the profiler of one */
+        navigationItem.leftBarButtonItem = UIBarButtonItem(title: "All Processes", image: UIImage(systemName: "cpu"), primaryAction: UIAction { [weak self] _ in
+            self?.navigationController?.pushViewController(ForkProcessMonitorViewController(style: .insetGrouped), animated: true)
+        })
         for label in [cpuLabel, memoryLabel] {
             label.font = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
             label.numberOfLines = 2

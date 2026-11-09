@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.0
+ Fork doctoralvarez/Nyxian — version 1.5.0
  Changelog:
+  - 1.5.0 (2026-11-09): no preview pops up while Cell Outputs is open (the
+    figures show there).
   - 1.4.0 (2026-11-08): a program can ask for a preview of files
     (ESC ] 7770 ; nyxian-preview ; paths BEL — Python's plt.show()): the
     sequence is taken out of the output and the files open in Quick Look.
@@ -209,6 +211,8 @@ import UIKit
     func forkShowPreview(_ paths: [String]) {
         let urls = paths.map { URL(fileURLWithPath: $0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
         guard !urls.isEmpty, let root = window?.rootViewController else { return }
+        /* fork: Cell Outputs is open — the figures show there, under their cell */
+        if ForkPython.cellOutputsVisible { return }
         _ = resignFirstResponder()
         ForkQuickLook.present(urls, from: root)
     }

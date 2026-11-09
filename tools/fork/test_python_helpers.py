@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-# Fork doctoralvarez/Nyxian — version 1.1.0
+# Fork doctoralvarez/Nyxian — version 1.2.0
 # Changelog:
+#  - 1.2.0 (2026-11-09): cell outputs (output, errors, new figures per cell).
 #  - 1.1.0 (2026-11-09): pyflakes lint and the test runner.
 #  - 1.0.0 (2026-11-08): CI test of nyxian_jedi (completion, diagnostics),
 #    nyxian_mplbackend (plt.show) and the error file of runs.
@@ -83,6 +84,26 @@ def main():
     check("script went on", b"after" in run.stdout)
     error = json.load(open(os.path.join(folder, ".nyxian-error.json"))) if os.path.exists(os.path.join(folder, ".nyxian-error.json")) else {}
     check("error line", error.get("line") == 5 and "ZeroDivisionError" in error.get("message", ""), error)
+
+    cells_dir = tempfile.mkdtemp()
+    cells_file = os.path.join(cells_dir, ".nyxian-cells.json")
+    driver = (
+        "import nyxian_repl\n"
+        "c = nyxian_repl.NyxianConsole(locals={'__name__': '__main__'})\n"
+        "c.run_block('x = 21\\nprint(\"doble\", x * 2)\\nx + 1')\n"
+        "c.run_block('import matplotlib.pyplot as plt\\nplt.plot([3, 1, 2])\\nplt.show()')\n"
+        "c.run_block('1 / 0')\n"
+    )
+    env = dict(os.environ, PYTHONPATH=helpers, MPLBACKEND="module://nyxian_mplbackend", NYXIAN_CELLS_FILE=cells_file)
+    run = subprocess.run([sys.executable, "-c", driver], cwd=cells_dir, capture_output=True, env=env, timeout=180)
+    cells = json.load(open(cells_file)).get("cells", []) if os.path.exists(cells_file) else []
+    check("cells: three recorded", [c.get("n") for c in cells] == [1, 2, 3], [c.get("n") for c in cells])
+    if len(cells) == 3:
+        check("cells: output and value", "doble 42" in cells[0]["output"] and "22" in cells[0]["output"] and not cells[0]["failed"], cells[0])
+        check("cells: new figure", any(f.endswith("figure-1.png") for f in cells[1]["figures"]), cells[1])
+        check("cells: error kept", cells[2]["failed"] and "ZeroDivisionError" in cells[2]["output"], cells[2]["output"][-120:])
+    if run.stderr.strip() and not cells:
+        print(run.stderr[-800:])
     sys.exit(1 if failed else 0)
 
 

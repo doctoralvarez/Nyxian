@@ -4,6 +4,23 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.38.0 — 2026-11-09
+
+- **Two-finger selection in the file list**: slide two fingers down the
+  files and folders of a project (as in Files or Mail) to select several at
+  once; selection mode starts by itself and shows iOS's selection circles
+  (Delete, Select All, Copy, Share as before). On iPad, Shift-click and
+  ⌘-click with a trackpad or mouse also work.
+- **Cell outputs, like a notebook** (⌥⌘O, or ⋯ › Cell Outputs in a `.py`):
+  every cell run with ⌘↩ shows under the previous one — `In [n]`, its code,
+  its output (errors in red) and the figures it made (tap one for Quick
+  Look). Leave the sheet half open next to the code: while it is open the
+  console window stays behind the editor and plots don't pop up.
+- **Processes ↔ profiler**: Processes keeps the last minute of CPU and
+  memory of every process (small CPU line in each row) and "Activity (CPU
+  and Memory)…" shows it as live graphs; the profiler of a running app has
+  "All Processes".
+
 ## 1.37.0 — 2026-11-09
 
 - **Per-program permissions** (Settings → Management → Permissions, or
