@@ -1,6 +1,9 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.0.0
+# Fork doctoralvarez/Nyxian — version 1.0.1
 # Changelog:
+#  - 1.0.1 (2026-11-10): the iOS build leaves out sljit (miniJVM's JIT code
+#    generator): miniJVM turns its JIT off on iOS, so it is not used there,
+#    and it did not compile for iOS.
 #  - 1.0.0 (2026-11-10): packs Java for iOS as Shared/java-ios.zip: miniJVM
 #    (an interpreter in C; miniJVM turns its JIT off on iOS), its class
 #    library (Java 8 subset) and the janino-continue compiler (javac). With
@@ -38,11 +41,11 @@ EOF
 
 SRCLIST=$(find "$CSRC" -type f -name "*.c" -not -path "$CSRC/utils/sljit/*" -not -path "$CSRC/utils/mimalloc/src/*" -not -path "$CSRC/cmake-*" -not -path "$CSRC/.*")
 INCLUDES=(-I"$CSRC" -I"$CSRC/jvm" -I"$CSRC/utils/" -I"$CSRC/utils/sljit/" -I"$CSRC/utils/https/" -I"$CSRC/utils/https/mbedtls/include/" -I"$CSRC/utils/mimalloc/include/")
-build() {  # output, then compiler and flags
-  local output="$1"; shift
+build() {  # output, extra sources, then compiler and flags
+  local output="$1" extra="$2"; shift 2
   # shellcheck disable=SC2086
-  "$@" -O2 -w -include "$WORK/nyxian_quiet.h" "${INCLUDES[@]}" -o "$output" $SRCLIST \
-    "$CSRC/utils/sljit/sljitLir.c" "$CSRC/utils/mimalloc/src/static.c" -lpthread -lm
+  "$@" -O2 -w -include "$WORK/nyxian_quiet.h" "${INCLUDES[@]}" -o "$output" $SRCLIST $extra \
+    "$CSRC/utils/mimalloc/src/static.c" -lpthread -lm
 }
 
 HOME_DIR="$WORK/java"
@@ -69,13 +72,13 @@ echo "miniJVM $MINIJVM_COMMIT" > "$HOME_DIR/VERSION"
 if [ -n "${TEST_DIR:-}" ]; then
   echo ">>> miniJVM for this Mac (shell test) in $TEST_DIR"
   mkdir -p "$TEST_DIR/bin" "$TEST_DIR/lib"
-  build "$TEST_DIR/bin/java" clang
+  build "$TEST_DIR/bin/java" "$CSRC/utils/sljit/sljitLir.c" clang
   cp "$HOME_DIR"/lib/*.jar "$TEST_DIR/lib/"
   [ "${HOST_ONLY:-}" = "1" ] && exit 0
 fi
 
-echo ">>> miniJVM for iOS (arm64)"
-build "$HOME_DIR/bin/java" xcrun -sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0
+echo ">>> miniJVM for iOS (arm64, interpreter only: no sljit)"
+build "$HOME_DIR/bin/java" "" xcrun -sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0
 
 mkdir -p "$ROOT/Shared"
 rm -f "$OUT"

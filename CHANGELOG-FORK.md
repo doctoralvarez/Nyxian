@@ -4,6 +4,12 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.45.1 — 2026-11-10
+
+- Java for iOS now compiles: the iOS build of miniJVM leaves out sljit (its
+  JIT code generator), which miniJVM does not use on iOS and which did not
+  compile for iOS.
+
 ## 1.45.0 — 2026-11-10
 
 Java and .jar files:
