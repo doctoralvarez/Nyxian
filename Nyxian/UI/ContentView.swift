@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.23.0
+ Fork doctoralvarez/Nyxian — version 1.24.0
  Changelog:
+  - 1.24.0 (2026-11-10): Python panel (tap </>): Modules, console, Shell (home
+    or Python HOME $), ARGS, examples and tutorials, notebooks, the browser,
+    the folders (python HOME, SITE-PACKAGES, STDLIB, SDK sysroot, Projects),
+    About This Fork and What's New. Examples become Python projects. .ipynb
+    notebooks are shown with their outputs and turn into "# %%" cells (and
+    back). A browser for local servers (Flask, Django) and webbrowser.open().
   - 1.23.0 (2026-11-09): Python is signed once, not at every start: the date
     kept for each signed package binary was read before signing (a cached
     value), so the next start signed them all again; now it is the file's
@@ -176,6 +182,7 @@ import SwiftUI
 import UIKit
 import GameController
 import UniformTypeIdentifiers
+import WebKit
 
 @objc class ContentViewController: NXUITableViewController, UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate {
     var sessionIndex: IndexPath? = nil
@@ -191,7 +198,7 @@ import UniformTypeIdentifiers
         fatalError("init(coder:) has not been implemented")
     }
     
-    private func reloadProjectsFromDisk() {
+    func reloadProjectsFromDisk() {
         let rawProjectsList = NXProject.listProjects(at: NXBootstrap.shared().rootURL.appendingPathComponent("Projects")) as! [String: [NXProject]]
         var buckets: [String: [NXProject]] = [:]
         
@@ -232,10 +239,18 @@ import UniformTypeIdentifiers
                 }
             ])
         )
-        /* fork: Python 3 */
+        /* fork: Python 3 — a tap opens the Python panel, a long press this menu */
         let pythonItem = UIBarButtonItem(
             image: UIImage(systemName: "chevron.left.forwardslash.chevron.right"),
+            primaryAction: UIAction { [weak self] _ in
+                guard let self else { return }
+                self.navigationController?.pushViewController(ForkPythonHubViewController(owner: self), animated: true)
+            },
             menu: UIMenu(title: "Python 3", children: [
+                UIAction(title: "Python Panel", image: UIImage(systemName: "square.grid.2x2")) { [weak self] _ in
+                    guard let self else { return }
+                    self.navigationController?.pushViewController(ForkPythonHubViewController(owner: self), animated: true)
+                },
                 UIAction(title: "Python Console", image: UIImage(systemName: "terminal")) { [weak self] _ in
                     guard let self else { return }
                     ForkPython.openConsole(from: self)
@@ -312,6 +327,8 @@ import UniformTypeIdentifiers
     
     func addProject(_ project: NXProject) {
         let key = {
+            /* fork: Python projects have a section of their own */
+            if ForkPython.isPythonProject(project) { return "python" }
             switch project.projectConfig.schemeKind {
             case .app: return "applications"
             case .utility: return "utilities"
@@ -5357,6 +5374,22 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         builtins.input = _nyxian_input
     except Exception:
         pass
+    try:
+        # webbrowser.open() (Flask, Django, notebooks, your code) opens Nyxian's browser
+        import webbrowser
+
+        class _NyxianBrowser(webbrowser.BaseBrowser):
+            def open(self, url, new=0, autoraise=True):
+                try:
+                    sys.stdout.flush()
+                except Exception:
+                    pass
+                os.write(1, ("\x1b]7770;nyxian-open;%s\x07" % url).encode("utf-8"))
+                return True
+
+        webbrowser.register("nyxian", _NyxianBrowser, preferred=True)
+    except Exception:
+        pass
 """#
     ]
     
@@ -5922,7 +5955,11 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     
     /// Nyxian Shell (nyxian_shell): ls, cd, grep, pipes, redirection, programs and job control.
     /// In a project: its run folder (a copy of the project); new files come back when it closes.
-    static func openShell(from presenter: UIViewController, project: NXProject? = nil, script: URL? = nil) {
+    static func openShell(from presenter: UIViewController, project: NXProject? = nil, script: URL? = nil, folder: URL? = nil) {
+        if let folder {
+            launch(from: presenter, arguments: ["-q", "-m", "nyxian_shell"], workingDirectory: folder, title: "Shell · \(folder.lastPathComponent)", closeOnExit: true)
+            return
+        }
         let root: URL? = project.map { $0.url as URL } ?? script?.deletingLastPathComponent()
         if let root {
             let openTexts = LiveEditorRegistry.openTexts()
@@ -6342,5 +6379,1195 @@ enum ForkDefaults {
             defaults.set(20, forKey: "LDEFontSize")
         }
         defaults.set(true, forKey: migrationKey)
+    }
+}
+
+// MARK: - fork: Python home (like Python3IDE's main panel)
+
+/// Everything Python in one place: console, shell, packages, arguments, examples,
+/// notebooks, the browser, the folders Python uses, and this fork's links.
+final class ForkPythonHubViewController: UITableViewController, UIDocumentPickerDelegate {
+    private weak var owner: ContentViewController?
+
+    private enum Row {
+        case console, shell, shellHome, packages, install, examples, notebook, browser, arguments
+        case folder(String, String, URL)     /* title, symbol, folder */
+        case about, changelog, reinstall
+    }
+    private var sections: [(title: String, footer: String?, rows: [Row])] = []
+
+    init(owner: ContentViewController?) {
+        self.owner = owner
+        super.init(style: .insetGrouped)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Python"
+        navigationItem.largeTitleDisplayMode = .never
+        if presentingViewController != nil && navigationController?.viewControllers.first === self {
+            navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        }
+        let python = ForkPython.home
+        sections = [
+            ("Python \(ForkPython.version)", nil, [.console, .packages, .install, .examples, .notebook]),
+            ("Terminal", "Shell: ls, cd, grep, pipes, python3, pip, jobs (^Z, fg, bg). Arguments: what sys.argv gets for each script (⌥⌘R in the editor).",
+             [.shell, .shellHome, .arguments]),
+            ("Web", "Flask, Django and webbrowser.open() open here by themselves.", [.browser]),
+            ("Folders", "Read-only views of the folders Python and the compiler use (inside Nyxian's root).", [
+                .folder("python HOME", "folder", python),
+                .folder("python SITE-PACKAGES", "shippingbox", ForkPython.sitePackages),
+                .folder("python STDLIB", "books.vertical", python.appendingPathComponent("lib/python\(ForkPython.version)")),
+                .folder("Home (var/mobile)", "house", ForkPython.rootfs.appendingPathComponent("var/mobile")),
+                .folder("clang / swift SYSROOT (iOS SDK)", "hammer", NXBootstrap.shared().sdkURL),
+                .folder("Projects", "folder.badge.gearshape", NXBootstrap.shared().rootURL.appendingPathComponent("Projects")),
+            ]),
+            ("This Fork", nil, [.about, .changelog, .reinstall]),
+        ]
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        tableView.reloadData()
+    }
+
+    override func numberOfSections(in tableView: UITableView) -> Int { sections.count }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { sections[section].rows.count }
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? { sections[section].title }
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? { sections[section].footer }
+
+    private func describe(_ row: Row) -> (String, String, String?) {
+        switch row {
+        case .console: return ("Python Console", "terminal", "The REPL: history, paste, cells' variables")
+        case .shell: return ("Shell", "apple.terminal", "Nyxian Shell in your home folder  $")
+        case .shellHome: return ("Shell in Python HOME", "apple.terminal.on.rectangle", "opt/python  $")
+        case .packages:
+            let count = ForkPython.installedPackages().count
+            return ("Modules", "shippingbox.circle", count > 0 ? "\(count) installed — pip install, upgrade, uninstall" : "pip install, upgrade, uninstall")
+        case .install: return ("Install Package (pip)…", "shippingbox", nil)
+        case .examples: return ("Examples and Tutorials", "graduationcap", "numpy, pandas, plots, ML, cells, debugger, Flask…")
+        case .notebook: return ("Open Notebook (.ipynb)…", "book.pages", "View it, run it as cells, save it back")
+        case .browser: return ("Browser", "safari", "localhost and the web, inside Nyxian")
+        case .arguments:
+            let count = UserDefaults.standard.dictionaryRepresentation().keys.filter { $0.hasPrefix("fork.python.args.") }.count
+            return ("ARGS", "text.word.spacing", count == 0 ? "No script has arguments yet" : "\(count) script\(count == 1 ? "" : "s") with arguments")
+        case .folder(let title, let symbol, let url): return (title, symbol, url.path.replacingOccurrences(of: NXBootstrap.shared().rootURL.path, with: "…"))
+        case .about: return ("About This Fork", "info.circle", "doctoralvarez/Nyxian · GitHub · backups · report a problem")
+        case .changelog: return ("What's New", "sparkles", nil)
+        case .reinstall: return ("Reinstall Python Runtime", "arrow.clockwise", "Unpacks and signs Python again (your packages stay)")
+        }
+    }
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let row = sections[indexPath.section].rows[indexPath.row]
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        let (title, symbol, detail) = describe(row)
+        cell.textLabel?.text = title
+        cell.detailTextLabel?.text = detail
+        cell.detailTextLabel?.textColor = .secondaryLabel
+        cell.detailTextLabel?.numberOfLines = 2
+        cell.imageView?.image = UIImage(systemName: symbol)
+        if case .reinstall = row { cell.textLabel?.textColor = .systemRed }
+        if case .folder = row { cell.detailTextLabel?.font = .monospacedSystemFont(ofSize: 11, weight: .regular) }
+        cell.accessoryType = .disclosureIndicator
+        return cell
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        let row = sections[indexPath.section].rows[indexPath.row]
+        switch row {
+        case .console: ForkPython.openConsole(from: self)
+        case .shell: ForkPython.openShell(from: self)
+        case .shellHome: ForkPython.openShell(from: self, folder: ForkPython.home)
+        case .packages:
+            let manager = UINavigationController(rootViewController: ForkPythonPackagesViewController())
+            manager.modalPresentationStyle = .formSheet
+            present(manager, animated: true)
+        case .install: ForkPython.promptInstallPackage(from: self)
+        case .examples: navigationController?.pushViewController(ForkPythonExamplesViewController(owner: owner), animated: true)
+        case .notebook:
+            let types = [UTType(filenameExtension: "ipynb") ?? .json, .json]
+            let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+            picker.delegate = self
+            present(picker, animated: true)
+        case .browser: ForkBrowserViewController.present(nil, from: self)
+        case .arguments: navigationController?.pushViewController(ForkPythonArgumentsViewController(style: .insetGrouped), animated: true)
+        case .folder(_, _, let url):
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            navigationController?.pushViewController(FileListViewController(isSublink: true, path: url.path, isReadOnly: true), animated: true)
+        case .about: navigationController?.pushViewController(ForkAboutViewController(style: .insetGrouped), animated: true)
+        case .changelog: navigationController?.pushViewController(ForkTextViewController(title: "What's New", text: ForkAboutViewController.changelog()), animated: true)
+        case .reinstall: ForkPython.reinstall(from: self)
+        }
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let url = urls.first else { return }
+        ForkNotebookViewController.open(url, project: nil, from: self)
+    }
+}
+
+/// The scripts that have arguments (Run with Arguments), to see, change or clear them.
+final class ForkPythonArgumentsViewController: UITableViewController {
+    private var items: [(key: String, path: String, value: String)] = []
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "ARGS"
+        reload()
+    }
+
+    private func reload() {
+        let defaults = UserDefaults.standard.dictionaryRepresentation()
+        items = defaults.compactMap { key, value in
+            guard key.hasPrefix("fork.python.args."), let text = value as? String, !text.isEmpty else { return nil }
+            return (key, String(key.dropFirst("fork.python.args.".count)), text)
+        }.sorted { $0.path < $1.path }
+        tableView.reloadData()
+    }
+
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { max(items.count, 1) }
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        "Arguments are kept per script: in the editor, ⌥⌘R (or ⋯ › Run with Arguments). ▶ uses them afterwards. Swipe to clear."
+    }
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        guard !items.isEmpty else {
+            cell.textLabel?.text = "No script has arguments"
+            cell.textLabel?.textColor = .secondaryLabel
+            return cell
+        }
+        let item = items[indexPath.row]
+        cell.textLabel?.text = (item.path as NSString).lastPathComponent
+        cell.detailTextLabel?.text = item.value
+        cell.detailTextLabel?.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        return cell
+    }
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        guard !items.isEmpty else { return }
+        let item = items[indexPath.row]
+        let alert = UIAlertController(title: (item.path as NSString).lastPathComponent, message: "sys.argv[1:]", preferredStyle: .alert)
+        alert.addTextField { $0.text = item.value; $0.autocapitalizationType = .none; $0.autocorrectionType = .no; $0.font = .monospacedSystemFont(ofSize: 14, weight: .regular) }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Save", style: .default) { [weak self] _ in
+            UserDefaults.standard.set(alert.textFields?.first?.text ?? "", forKey: item.key)
+            self?.reload()
+        })
+        present(alert, animated: true)
+    }
+    override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard !items.isEmpty else { return nil }
+        let key = items[indexPath.row].key
+        return UISwipeActionsConfiguration(actions: [UIContextualAction(style: .destructive, title: "Clear") { [weak self] _, _, done in
+            UserDefaults.standard.removeObject(forKey: key)
+            self?.reload()
+            done(true)
+        }])
+    }
+}
+
+// MARK: - fork: about this fork
+
+final class ForkAboutViewController: UITableViewController {
+    static let repository = "doctoralvarez/Nyxian"
+
+    static var version: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let fork = info["NXForkVersion"] as? String ?? "?"
+        let app = info["CFBundleShortVersionString"] as? String ?? "?"
+        return "Fork \(fork) · Nyxian \(app)"
+    }
+
+    static var backupRepository: String {
+        UserDefaults.standard.string(forKey: "fork.sdk.backupRepo").flatMap { $0.isEmpty ? nil : $0 } ?? "doctoralvarez/nyxian-sdk"
+    }
+
+    /// CHANGELOG-FORK.md, copied into the app by CI.
+    static func changelog() -> String {
+        let url = Bundle.main.bundleURL.appendingPathComponent("Shared/CHANGELOG-FORK.md")
+        return (try? String(contentsOf: url, encoding: .utf8)) ?? "The list of changes is in CHANGELOG-FORK.md of https://github.com/\(repository)."
+    }
+
+    private let links: [(String, String, String)] = [
+        ("GitHub: doctoralvarez/Nyxian", "chevron.left.forwardslash.chevron.right", "https://github.com/doctoralvarez/Nyxian/tree/mejoras-editor-ipad"),
+        ("Builds (Actions)", "hammer", "https://github.com/doctoralvarez/Nyxian/actions"),
+        ("Report a Problem", "exclamationmark.bubble", "https://github.com/doctoralvarez/Nyxian/issues/new"),
+        ("Backups (private)", "externaldrive", ""),
+        ("Original: emexLabs Nyxian", "building.columns", "https://github.com/emexlab/Nyxian"),
+    ]
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "About This Fork"
+    }
+    override func numberOfSections(in tableView: UITableView) -> Int { 3 }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        [1, links.count, 2][section]
+    }
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        [nil, "Links", "Help"][section]
+    }
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        section == 2 ? "Nyxian is © emexLabs (EPSL 1.1 — private use and modification). This fork's changes are listed in What's New." : nil
+    }
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        switch indexPath.section {
+        case 0:
+            cell.textLabel?.text = Self.version
+            cell.textLabel?.font = .preferredFont(forTextStyle: .headline)
+            cell.detailTextLabel?.text = "Python \(ForkPython.version) · Swift / C / Objective-C · iOS SDK 27"
+            cell.detailTextLabel?.textColor = .secondaryLabel
+            cell.imageView?.image = UIImage(systemName: "hammer.circle.fill")
+            cell.selectionStyle = .none
+        case 1:
+            let link = links[indexPath.row]
+            cell.textLabel?.text = link.0
+            cell.imageView?.image = UIImage(systemName: link.1)
+            cell.detailTextLabel?.text = link.2.isEmpty ? "github.com/\(Self.backupRepository)/releases" : link.2.replacingOccurrences(of: "https://", with: "")
+            cell.detailTextLabel?.textColor = .secondaryLabel
+            cell.accessoryType = .disclosureIndicator
+        default:
+            cell.textLabel?.text = indexPath.row == 0 ? "What's New" : "Share the Kernel Log"
+            cell.imageView?.image = UIImage(systemName: indexPath.row == 0 ? "sparkles" : "square.and.arrow.up")
+            cell.accessoryType = .disclosureIndicator
+        }
+        return cell
+    }
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        switch indexPath.section {
+        case 1:
+            let link = links[indexPath.row]
+            let address = link.2.isEmpty ? "https://github.com/\(Self.backupRepository)/releases" : link.2
+            if let url = URL(string: address) { UIApplication.shared.open(url) }
+        case 2:
+            if indexPath.row == 0 {
+                navigationController?.pushViewController(ForkTextViewController(title: "What's New", text: Self.changelog()), animated: true)
+            } else {
+                let share = UIActivityViewController(activityItems: [ForkKernelLogViewController.currentURL], applicationActivities: nil)
+                share.popoverPresentationController?.sourceView = tableView
+                share.popoverPresentationController?.sourceRect = tableView.rectForRow(at: indexPath)
+                present(share, animated: true)
+            }
+        default: break
+        }
+    }
+}
+
+/// A long text (the changelog), with simple Markdown: headings, bold, code, lists.
+final class ForkTextViewController: UIViewController {
+    private let text: String
+    init(title: String, text: String) {
+        self.text = text
+        super.init(nibName: nil, bundle: nil)
+        self.title = title
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        let view = UITextView()
+        view.isEditable = false
+        view.backgroundColor = .systemBackground
+        view.textContainerInset = UIEdgeInsets(top: 16, left: 12, bottom: 24, right: 12)
+        view.attributedText = Self.render(text)
+        view.translatesAutoresizingMaskIntoConstraints = false
+        self.view.backgroundColor = .systemBackground
+        self.view.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: self.view.topAnchor),
+            view.bottomAnchor.constraint(equalTo: self.view.bottomAnchor),
+            view.leadingAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.trailingAnchor),
+        ])
+    }
+
+    static func render(_ markdown: String) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        let body = UIFont.preferredFont(forTextStyle: .body)
+        for raw in markdown.components(separatedBy: "\n") {
+            var line = raw
+            var font = body
+            var indent: CGFloat = 0
+            if line.hasPrefix("# ") { font = .preferredFont(forTextStyle: .title1).bold(); line.removeFirst(2) }
+            else if line.hasPrefix("## ") { font = .preferredFont(forTextStyle: .title3).bold(); line.removeFirst(3) }
+            else if line.hasPrefix("### ") { font = .preferredFont(forTextStyle: .headline); line.removeFirst(4) }
+            else if let range = line.range(of: #"^\s*[-*] "#, options: .regularExpression) {
+                indent = CGFloat(line.distance(from: line.startIndex, to: range.upperBound)) * 6
+                line = "•  " + line[range.upperBound...]
+            }
+            let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+            var attributed = (try? AttributedString(markdown: line, options: options)) ?? AttributedString(line)
+            attributed.uiKit.font = font
+            for run in attributed.runs {
+                if let intent = run.inlinePresentationIntent {
+                    if intent.contains(.code) { attributed[run.range].uiKit.font = UIFont.monospacedSystemFont(ofSize: font.pointSize * 0.9, weight: .regular) }
+                    else if intent.contains(.stronglyEmphasized) { attributed[run.range].uiKit.font = font.bold() }
+                }
+            }
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.headIndent = indent + 16
+            paragraph.firstLineHeadIndent = indent
+            paragraph.paragraphSpacing = font == body ? 2 : 6
+            let piece = NSMutableAttributedString(attributedString: NSAttributedString(attributed))
+            piece.addAttributes([.paragraphStyle: paragraph, .foregroundColor: UIColor.label], range: NSRange(location: 0, length: piece.length))
+            result.append(piece)
+            result.append(NSAttributedString(string: "\n"))
+        }
+        return result
+    }
+}
+
+private extension UIFont {
+    func bold() -> UIFont {
+        guard let descriptor = fontDescriptor.withSymbolicTraits(.traitBold) else { return self }
+        return UIFont(descriptor: descriptor, size: pointSize)
+    }
+}
+
+// MARK: - fork: browser (local servers, webbrowser.open, the web)
+
+
+final class ForkBrowserViewController: UIViewController, WKNavigationDelegate, UITextFieldDelegate {
+    private static weak var shown: ForkBrowserViewController?
+    private let webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+    private let address = UITextField()
+    private let progress = UIProgressView(progressViewStyle: .bar)
+    private var observation: NSKeyValueObservation?
+    private var first: URL?
+    private var retries = 0
+
+    /// Opens `url` (default: the last address, else http://127.0.0.1:5000) in the browser,
+    /// in the one already open if there is one.
+    static func present(_ url: URL?, from presenter: UIViewController) {
+        let target = url ?? UserDefaults.standard.url(forKey: "fork.browser.last") ?? URL(string: "http://127.0.0.1:5000")!
+        if let shown, shown.view.window != nil {
+            shown.load(target)
+            return
+        }
+        let browser = ForkBrowserViewController()
+        browser.first = target
+        let navigation = UINavigationController(rootViewController: browser)
+        navigation.modalPresentationStyle = .pageSheet
+        if let sheet = navigation.sheetPresentationController {
+            sheet.detents = [.medium(), .large()]
+            sheet.selectedDetentIdentifier = .large
+            sheet.prefersGrabberVisible = true
+            sheet.largestUndimmedDetentIdentifier = .medium
+        }
+        var top = presenter
+        while let next = top.presentedViewController, !next.isBeingDismissed { top = next }
+        top.present(navigation, animated: true)
+        shown = browser
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+        address.borderStyle = .roundedRect
+        address.keyboardType = .URL
+        address.autocapitalizationType = .none
+        address.autocorrectionType = .no
+        address.returnKeyType = .go
+        address.clearButtonMode = .whileEditing
+        address.delegate = self
+        address.font = .preferredFont(forTextStyle: .subheadline)
+        address.frame = CGRect(x: 0, y: 0, width: 600, height: 34)
+        navigationItem.titleView = address
+        navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        navigationItem.rightBarButtonItems = [
+            UIBarButtonItem(image: UIImage(systemName: "arrow.clockwise"), primaryAction: UIAction { [weak self] _ in self?.retries = 0; self?.webView.reload() }),
+            UIBarButtonItem(image: UIImage(systemName: "ellipsis.circle"), menu: UIMenu(children: [
+                UIAction(title: "Back", image: UIImage(systemName: "chevron.backward")) { [weak self] _ in self?.webView.goBack() },
+                UIAction(title: "Forward", image: UIImage(systemName: "chevron.forward")) { [weak self] _ in self?.webView.goForward() },
+                UIAction(title: "localhost:5000 (Flask)", image: UIImage(systemName: "flask")) { [weak self] _ in self?.load(URL(string: "http://127.0.0.1:5000")!) },
+                UIAction(title: "localhost:8000 (Django)", image: UIImage(systemName: "server.rack")) { [weak self] _ in self?.load(URL(string: "http://127.0.0.1:8000")!) },
+                UIAction(title: "Open in Safari", image: UIImage(systemName: "safari")) { [weak self] _ in
+                    if let url = self?.webView.url { UIApplication.shared.open(url) }
+                },
+                UIAction(title: "Share", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
+                    guard let self, let url = self.webView.url else { return }
+                    let share = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+                    share.popoverPresentationController?.barButtonItem = self.navigationItem.rightBarButtonItems?.last
+                    self.present(share, animated: true)
+                },
+            ])),
+        ]
+        webView.navigationDelegate = self
+        webView.allowsBackForwardNavigationGestures = true
+        webView.isInspectable = true
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        progress.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(webView)
+        view.addSubview(progress)
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            progress.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            progress.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            progress.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+        observation = webView.observe(\.estimatedProgress) { [weak self] web, _ in
+            self?.progress.progress = Float(web.estimatedProgress)
+            self?.progress.isHidden = web.estimatedProgress >= 1
+        }
+        if let first { load(first) }
+    }
+
+    func load(_ url: URL) {
+        retries = 0
+        address.text = url.absoluteString
+        webView.load(URLRequest(url: url))
+    }
+
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        textField.resignFirstResponder()
+        var text = (textField.text ?? "").trimmingCharacters(in: .whitespaces)
+        if text.isEmpty { return true }
+        if !text.contains("://") {
+            let local = text.hasPrefix("localhost") || text.hasPrefix("127.") || text.hasPrefix(":")
+            if text.hasPrefix(":") { text = "127.0.0.1" + text }
+            if !local && !text.contains(".") {
+                text = "https://duckduckgo.com/?q=" + (text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? text)
+            } else {
+                text = (local ? "http://" : "https://") + text
+            }
+        }
+        if let url = URL(string: text) { load(url) }
+        return true
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if let url = webView.url {
+            address.text = url.absoluteString
+            UserDefaults.standard.set(url, forKey: "fork.browser.last")
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        /* a server that is still starting: try again for a few seconds */
+        let host = webView.url?.host ?? URL(string: address.text ?? "")?.host ?? ""
+        if ["127.0.0.1", "localhost", "::1"].contains(host), retries < 8 {
+            retries += 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                guard let self, let url = URL(string: self.address.text ?? "") else { return }
+                self.webView.load(URLRequest(url: url))
+            }
+            return
+        }
+        let page = """
+        <html><head><meta name=viewport content="width=device-width"></head>
+        <body style="font-family:-apple-system;padding:24px;color:#555">
+        <h3>Could not open \(address.text ?? "")</h3><p>\(error.localizedDescription)</p>
+        <p>For a local server: start it in Python first (Flask: <code>app.run(port=5000)</code>), then reload.</p></body></html>
+        """
+        webView.loadHTMLString(page, baseURL: nil)
+    }
+}
+
+// MARK: - fork: examples and tutorials
+
+struct ForkPythonExample {
+    let title: String
+    let detail: String
+    let symbol: String
+    let files: [String: String]
+    let open: String
+}
+
+enum ForkPythonExamples {
+    static let all: [ForkPythonExample] = [
+        ForkPythonExample(title: "Primeros pasos", detail: "input(), variables, listas, diccionarios, funciones y f-strings", symbol: "1.circle", files: ["main.py": #"""
+# Primeros pasos con Python — ▶ (⌘R) para correrlo
+
+nombre = input("¿Cómo te llamas? ")
+print(f"Hola, {nombre} 👋")
+
+# listas
+numeros = [3, 1, 4, 1, 5, 9, 2, 6]
+print("ordenados:", sorted(numeros), "| suma:", sum(numeros), "| máximo:", max(numeros))
+pares = [n for n in numeros if n % 2 == 0]
+print("pares:", pares)
+
+# diccionarios
+agudeza = {"OD": "20/20", "OI": "20/25"}
+for ojo, valor in agudeza.items():
+    print(f"  {ojo}: {valor}")
+
+# funciones
+def equivalente_esferico(esfera: float, cilindro: float) -> float:
+    """Esfera + cilindro / 2 (dioptrías)."""
+    return esfera + cilindro / 2
+
+print("EE de -2.00 -1.50 =", equivalente_esferico(-2.0, -1.5), "D")
+"""#], open: "main.py"),
+        ForkPythonExample(title: "NumPy", detail: "Arreglos, operaciones vectoriales, álgebra lineal, estadística", symbol: "square.grid.3x3", files: ["main.py": #"""
+import numpy as np
+
+a = np.arange(12).reshape(3, 4)
+print("a =\n", a)
+print("forma:", a.shape, "| media por columna:", a.mean(axis=0))
+
+# operaciones vectoriales (sin bucles)
+x = np.linspace(0, 2 * np.pi, 5)
+print("sin(x) =", np.round(np.sin(x), 3))
+
+# álgebra lineal: resolver A·v = b
+A = np.array([[3.0, 1.0], [1.0, 2.0]])
+b = np.array([9.0, 8.0])
+v = np.linalg.solve(A, b)
+print("solución:", v, "| comprobación:", A @ v)
+
+# estadística de datos simulados
+rng = np.random.default_rng(42)
+datos = rng.normal(loc=-2.5, scale=1.2, size=1000)   # p. ej. equivalentes esféricos
+print(f"media {datos.mean():.2f} D, DE {datos.std():.2f} D, percentil 95 {np.percentile(datos, 95):.2f} D")
+"""#], open: "main.py"),
+        ForkPythonExample(title: "pandas", detail: "Tabla de datos, filtros, agrupar, describir y guardar CSV", symbol: "tablecells", files: ["main.py": #"""
+import pandas as pd
+
+df = pd.DataFrame({
+    "paciente": ["A", "B", "C", "D", "E", "F"],
+    "ojo": ["OD", "OI", "OD", "OI", "OD", "OI"],
+    "kmax": [47.2, 49.8, 52.1, 46.5, 55.3, 48.0],
+    "paquimetria": [540, 498, 470, 552, 431, 515],
+})
+print(df, "\n")
+print(df.describe(), "\n")
+
+sospechosos = df[(df.kmax > 49) | (df.paquimetria < 480)]
+print("Kmax > 49 D o paquimetría < 480 µm:\n", sospechosos, "\n")
+
+print(df.groupby("ojo")[["kmax", "paquimetria"]].mean().round(1))
+
+df.to_csv("resultados.csv", index=False)
+print("\nGuardado resultados.csv (aparece en el proyecto al terminar)")
+"""#], open: "main.py"),
+        ForkPythonExample(title: "Gráficas (matplotlib)", detail: "Líneas, dispersión e histograma; plt.show() abre la vista previa", symbol: "chart.xyaxis.line", files: ["main.py": #"""
+import numpy as np
+import matplotlib.pyplot as plt
+
+x = np.linspace(0, 10, 200)
+rng = np.random.default_rng(0)
+
+fig, ejes = plt.subplots(1, 3, figsize=(12, 3.6))
+ejes[0].plot(x, np.sin(x), label="sin")
+ejes[0].plot(x, np.cos(x), label="cos")
+ejes[0].legend(); ejes[0].set_title("Líneas")
+
+edad = rng.uniform(8, 18, 80)
+miopia = -0.35 * (edad - 8) + rng.normal(0, 0.6, 80)
+ejes[1].scatter(edad, miopia, s=12)
+ejes[1].set_xlabel("edad (años)"); ejes[1].set_ylabel("EE (D)"); ejes[1].set_title("Dispersión")
+
+ejes[2].hist(rng.normal(550, 35, 500), bins=30, color="tab:green")
+ejes[2].set_title("Paquimetría (µm)")
+
+fig.tight_layout()
+plt.show()   # la imagen también queda en figures/
+"""#], open: "main.py"),
+        ForkPythonExample(title: "SciPy", detail: "Ajuste de curvas, optimización e integración", symbol: "function", files: ["main.py": #"""
+import numpy as np
+from scipy import optimize, integrate, stats
+
+# ajuste de una curva exponencial a datos con ruido
+t = np.linspace(0, 4, 30)
+y = 3.0 * np.exp(-0.8 * t) + np.random.default_rng(1).normal(0, 0.05, t.size)
+(a, k), _ = optimize.curve_fit(lambda t, a, k: a * np.exp(-k * t), t, y)
+print(f"ajuste: y = {a:.2f}·e^(-{k:.2f}·t)")
+
+# mínimo de una función
+resultado = optimize.minimize_scalar(lambda x: (x - 2) ** 2 + 1)
+print("mínimo en x =", round(resultado.x, 4))
+
+# integral definida
+valor, error = integrate.quad(np.sin, 0, np.pi)
+print("∫ sin(x) dx de 0 a π =", round(valor, 6))
+
+# prueba t de dos grupos
+g1 = np.array([540, 552, 531, 560, 548]); g2 = np.array([498, 470, 512, 485, 501])
+print("t de Student:", stats.ttest_ind(g1, g2))
+"""#], open: "main.py"),
+        ForkPythonExample(title: "Aprendizaje automático (scikit-learn)", detail: "Clasificador con datos incluidos, exactitud y matriz de confusión", symbol: "brain", files: ["main.py": #"""
+from sklearn.datasets import load_iris
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
+
+X, y = load_iris(return_X_y=True)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=0, stratify=y)
+
+modelo = RandomForestClassifier(n_estimators=200, random_state=0)
+modelo.fit(X_train, y_train)
+pred = modelo.predict(X_test)
+
+print("exactitud:", round(accuracy_score(y_test, pred), 3))
+print("matriz de confusión:\n", confusion_matrix(y_test, pred))
+print(classification_report(y_test, pred, target_names=load_iris().target_names))
+print("importancia de variables:", dict(zip(load_iris().feature_names, modelo.feature_importances_.round(3))))
+"""#], open: "main.py"),
+        ForkPythonExample(title: "Celdas tipo notebook", detail: "# %% celdas: ⌘↩ corre una, ⌥⌘O muestra resultados, ⌥⌘V variables", symbol: "rectangle.split.3x1", files: ["cuaderno.py": #"""
+# Cada "# %%" empieza una celda. Pon el cursor en una y presiona ⌘↩.
+# ⌥⌘O: resultados de cada celda (texto y gráficas) · ⌥⌘V: variables.
+
+# %% Datos
+import numpy as np
+rng = np.random.default_rng(7)
+datos = rng.normal(-2, 1, 300)
+datos[:5]
+
+# %% Resumen
+print(f"n={datos.size}  media={datos.mean():.2f}  DE={datos.std():.2f}")
+
+# %% Gráfica
+import matplotlib.pyplot as plt
+plt.hist(datos, bins=25)
+plt.title("Distribución")
+plt.show()
+
+# %% Un error (para verlo en rojo)
+1 / 0
+"""#], open: "cuaderno.py"),
+        ForkPythonExample(title: "Depurador", detail: "Breakpoints con ⌘\\ y ⌥⌘D: n, s, c, p, locals", symbol: "ladybug", files: ["main.py": #"""
+# Depurar:
+#   1. Pon el cursor en la línea "total += valor" y presiona ⌘\ (breakpoint).
+#   2. Presiona ⌥⌘D (o ⋯ › Debug).
+#   3. En la terminal: p valor · locals · n (siguiente) · c (continuar) · q (salir)
+#   4. ⌥⌘V muestra las variables donde se detuvo.
+
+def promedio(valores):
+    total = 0
+    for valor in valores:
+        total += valor
+    return total / len(valores)
+
+lecturas = [43.5, 44.1, 43.8, 47.9]
+print("promedio:", promedio(lecturas))
+"""#], open: "main.py"),
+        ForkPythonExample(title: "Pruebas (pytest)", detail: "Un módulo y sus pruebas; ⌘U las corre y marca la que falla", symbol: "checkmark.seal", files: [
+            "calculos.py": #"""
+def equivalente_esferico(esfera, cilindro):
+    return esfera + cilindro / 2
+
+
+def es_alta_miopia(esfera):
+    return esfera <= -6.0
+"""#,
+            "test_calculos.py": #"""
+# Abre este archivo y presiona ⌘U (Run Tests).
+from calculos import equivalente_esferico, es_alta_miopia
+
+
+def test_equivalente():
+    assert equivalente_esferico(-2.0, -1.0) == -2.5
+
+
+def test_alta_miopia():
+    assert es_alta_miopia(-6.5)
+    assert not es_alta_miopia(-3.0)
+
+
+def test_que_falla():
+    # cámbialo para que pase
+    assert equivalente_esferico(0, -2) == 0
+"""#], open: "test_calculos.py"),
+        ForkPythonExample(title: "Argumentos y archivos", detail: "sys.argv (⌥⌘R), leer y escribir archivos", symbol: "doc.text", files: ["main.py": #"""
+# Córrelo con ⌥⌘R y escribe por ejemplo:  datos.txt 3
+import sys
+from pathlib import Path
+
+archivo = sys.argv[1] if len(sys.argv) > 1 else "datos.txt"
+veces = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+print("argumentos:", sys.argv[1:])
+
+ruta = Path(archivo)
+if not ruta.exists():
+    ruta.write_text("linea 1\nlinea 2\n", encoding="utf-8")
+    print("creado", ruta)
+
+for _ in range(veces):
+    with ruta.open("a", encoding="utf-8") as f:
+        f.write("otra línea\n")
+
+print(ruta.read_text(encoding="utf-8"))
+print("Al terminar, el archivo aparece en el proyecto.")
+"""#], open: "main.py"),
+        ForkPythonExample(title: "Página web con Flask", detail: "Un servidor local; el navegador de Nyxian se abre solo", symbol: "globe", files: ["app.py": #"""
+# ▶ corre el servidor; Nyxian abre su navegador en http://127.0.0.1:5000
+# Para detenerlo: ^C en la terminal (o ✕).
+from flask import Flask, request
+
+app = Flask(__name__)
+
+
+@app.route("/")
+def inicio():
+    nombre = request.args.get("nombre", "mundo")
+    return f"""
+    <meta name=viewport content="width=device-width">
+    <h1>Hola, {nombre}</h1>
+    <form><input name=nombre placeholder="tu nombre"> <button>Saludar</button></form>
+    <p><a href="/api">/api</a> devuelve JSON</p>
+    """
+
+
+@app.route("/api")
+def api():
+    return {"estado": "ok", "servidor": "Flask en Nyxian"}
+
+
+if __name__ == "__main__":
+    # sin recargador (iOS no permite fork); solo en este dispositivo
+    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
+"""#], open: "app.py"),
+        ForkPythonExample(title: "Nyxian Shell", detail: "Comandos, tuberías, redirección y trabajos", symbol: "apple.terminal", files: [
+            "LEEME.md": #"""
+# Nyxian Shell
+
+Ábrelo con ⋯ › Shell in This Project (o el panel Python › Shell). Prueba:
+
+    ls -la
+    cat datos.csv | grep -i od | wc -l
+    sort -r datos.csv > ordenado.csv && head -n 3 ordenado.csv
+    python3 contar.py datos.csv
+    python3 -c "import time; [print(i, flush=True) or time.sleep(1) for i in range(30)]"
+        (^Z lo detiene · jobs · bg · fg · ^C)
+    help
+"""#,
+            "datos.csv": "paciente,ojo,kmax\nA,OD,47.2\nB,OI,49.8\nC,OD,52.1\nD,OI,46.5\n",
+            "contar.py": #"""
+import sys
+import csv
+
+with open(sys.argv[1] if len(sys.argv) > 1 else "datos.csv", newline="") as f:
+    filas = list(csv.DictReader(f))
+print(len(filas), "filas;", "Kmax máxima:", max(float(r["kmax"]) for r in filas))
+"""#], open: "LEEME.md"),
+    ]
+}
+
+final class ForkPythonExamplesViewController: UITableViewController {
+    private weak var owner: ContentViewController?
+    init(owner: ContentViewController?) {
+        self.owner = owner
+        super.init(style: .insetGrouped)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Examples and Tutorials"
+    }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { ForkPythonExamples.all.count }
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        "Each one becomes a Python project of its own, with comments in Spanish on how to use it."
+    }
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let example = ForkPythonExamples.all[indexPath.row]
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        cell.textLabel?.text = example.title
+        cell.detailTextLabel?.text = example.detail
+        cell.detailTextLabel?.textColor = .secondaryLabel
+        cell.detailTextLabel?.numberOfLines = 2
+        cell.imageView?.image = UIImage(systemName: example.symbol)
+        cell.accessoryType = .disclosureIndicator
+        return cell
+    }
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        let example = ForkPythonExamples.all[indexPath.row]
+        guard let owner else { return }
+        let presenterRoot = owner
+        presentingViewController?.dismiss(animated: true)
+        navigationController?.popToRootViewController(animated: false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            presenterRoot.forkCreateExample(example)
+        }
+    }
+}
+
+extension ContentViewController {
+    /// A new Python project with the example's files, opened.
+    func forkCreateExample(_ example: ForkPythonExample) {
+        let model = ProjectTemplateOptionsModel(schemeKind: .utility)
+        model.selectPython()
+        var name = example.title.replacingOccurrences(of: #"[^A-Za-zÀ-ÿ0-9 ]"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+        if name.isEmpty { name = "Ejemplo" }
+        let existing = Set(projectsList.values.flatMap { $0 }.map { $0.projectConfig.displayName ?? "" })
+        var candidate = name
+        var number = 2
+        while existing.contains(candidate) { candidate = "\(name) \(number)"; number += 1 }
+        model.productName = candidate
+        guard let project = NXProject.createProject(
+            at: NXBootstrap.shared().rootURL.appendingPathComponent("Projects"),
+            withName: candidate,
+            withOrganizationIdentifier: model.normalizedOrganizationIdentifier,
+            withBundleIdentifier: model.bundleIdentifier,
+            withSchemeKind: model.schemeKind,
+            withLanguageKind: model.selectedLanguage,
+            withInterfaceKind: model.selectedInterface) else {
+            NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Could not create the example", withDelay: 0.0)
+            return
+        }
+        ForkPython.makePythonProject(project, name: candidate)
+        let root = project.url as URL
+        if example.files["main.py"] == nil { try? FileManager.default.removeItem(at: root.appendingPathComponent("main.py")) }
+        for (file, text) in example.files {
+            let url = root.appendingPathComponent(file)
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? text.write(to: url, atomically: true, encoding: .utf8)
+        }
+        reloadProjectsFromDisk()
+        forkOpenProject(project, file: root.appendingPathComponent(example.open))
+    }
+
+    /// Opens a project as a tap on its row does, then one of its files.
+    func forkOpenProject(_ project: NXProject, file: URL?) {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            let padFileVC = MainSplitViewController(project: project)
+            padFileVC.modalPresentationStyle = .fullScreen
+            present(padFileVC, animated: true) {
+                if let file {
+                    NotificationCenter.default.post(name: Notification.Name("FileListAct"), object: ["open", file.path, "0", "0", "0"])
+                }
+            }
+        } else {
+            let fileVC = FileListViewController(project: project)
+            navigationController?.pushViewController(fileVC, animated: true)
+            if let file, let editor = CodeEditorViewController(project: project, url: file, isReadOnly: false) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    let navigation = UINavigationController(rootViewController: editor)
+                    navigation.modalPresentationStyle = .overFullScreen
+                    fileVC.present(navigation, animated: true)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - fork: Jupyter notebooks (.ipynb)
+
+// BEGIN ForkNotebook
+/// A notebook as cells: markdown, code and the outputs it was saved with.
+struct ForkNotebook {
+    struct Output {
+        var text: String = ""
+        var image: Data?
+        var isError = false
+    }
+    struct Cell {
+        var kind: String          /* "code" or "markdown" (or "raw") */
+        var source: String
+        var outputs: [Output]
+    }
+    var cells: [Cell]
+    var language = "python"
+
+    private static func joined(_ value: Any?) -> String {
+        if let list = value as? [String] { return list.joined() }
+        return value as? String ?? ""
+    }
+
+    private static func stripANSI(_ text: String) -> String {
+        text.replacingOccurrences(of: #"\u001B\[[0-9;]*[A-Za-z]"#, with: "", options: .regularExpression)
+    }
+
+    init(cells: [Cell]) { self.cells = cells }
+
+    init?(data: Data) {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawCells = object["cells"] as? [[String: Any]] else { return nil }
+        if let metadata = object["metadata"] as? [String: Any],
+           let info = metadata["language_info"] as? [String: Any], let name = info["name"] as? String { language = name }
+        cells = rawCells.map { raw in
+            var outputs: [Output] = []
+            for output in raw["outputs"] as? [[String: Any]] ?? [] {
+                let type = output["output_type"] as? String ?? ""
+                var item = Output()
+                switch type {
+                case "stream":
+                    item.text = Self.joined(output["text"])
+                    item.isError = (output["name"] as? String) == "stderr"
+                case "error":
+                    item.text = Self.stripANSI((output["traceback"] as? [String] ?? []).joined(separator: "\n"))
+                    if item.text.isEmpty { item.text = "\(output["ename"] ?? ""): \(output["evalue"] ?? "")" }
+                    item.isError = true
+                default:
+                    let bundle = output["data"] as? [String: Any] ?? [:]
+                    if let png = bundle["image/png"] {
+                        item.image = Data(base64Encoded: Self.joined(png).replacingOccurrences(of: "\n", with: ""))
+                    } else if let jpeg = bundle["image/jpeg"] {
+                        item.image = Data(base64Encoded: Self.joined(jpeg).replacingOccurrences(of: "\n", with: ""))
+                    }
+                    item.text = Self.joined(bundle["text/plain"])
+                    if item.image != nil && item.text.hasPrefix("<Figure") { item.text = "" }
+                }
+                outputs.append(item)
+            }
+            return Cell(kind: raw["cell_type"] as? String ?? "code", source: Self.joined(raw["source"]), outputs: outputs)
+        }
+    }
+
+    /// Python cells ("percent" format, like Jupytext/VS Code): markdown as # comments.
+    var percentScript: String {
+        var text = "# Notebook converted by Nyxian: every cell starts with a %% line (⌘↩ runs it, ⌥⌘O shows the outputs).\n"
+        text += "# Save it back as .ipynb with ⋯ › Save as Notebook.\n\n"
+        for cell in cells {
+            if cell.kind == "markdown" {
+                text += "# %% [markdown]\n"
+                text += cell.source.components(separatedBy: "\n").map { $0.isEmpty ? "#" : "# " + $0 }.joined(separator: "\n") + "\n\n"
+            } else if cell.kind == "code" {
+                text += "# %%\n" + cell.source.trimmingCharacters(in: .newlines) + "\n\n"
+            }
+        }
+        return text
+    }
+
+    /// The cells of a "# %%" script.
+    static func fromPercentScript(_ script: String) -> ForkNotebook {
+        var cells: [Cell] = []
+        var kind = "code"
+        var lines: [String] = []
+        var seenMarker = false
+        func flush() {
+            var source = lines.joined(separator: "\n").trimmingCharacters(in: .newlines)
+            if kind == "markdown" {
+                source = source.components(separatedBy: "\n").map { line in
+                    if line == "#" { return "" }
+                    return line.hasPrefix("# ") ? String(line.dropFirst(2)) : (line.hasPrefix("#") ? String(line.dropFirst()) : line)
+                }.joined(separator: "\n")
+            }
+            if !source.isEmpty { cells.append(Cell(kind: kind, source: source, outputs: [])) }
+            lines = []
+        }
+        for line in script.components(separatedBy: "\n") {
+            if line.hasPrefix("# %%") {
+                if seenMarker || !lines.joined().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { flush() } else { lines = [] }
+                seenMarker = true
+                kind = line.contains("[markdown]") ? "markdown" : "code"
+            } else {
+                lines.append(line)
+            }
+        }
+        flush()
+        /* the converter's own header is not a cell */
+        if let first = cells.first, first.kind == "code", first.source.hasPrefix("# Notebook converted by Nyxian") { cells.removeFirst() }
+        return ForkNotebook(cells: cells)
+    }
+
+    /// nbformat 4 JSON; outputs of cells run in Nyxian's cell console are added when the code matches.
+    func jsonData(outputs recorded: [[String: Any]] = []) -> Data? {
+        var byCode: [String: [String: Any]] = [:]
+        for cell in recorded {
+            if let source = cell["source"] as? String { byCode[source.trimmingCharacters(in: .whitespacesAndNewlines)] = cell }
+        }
+        func lines(_ text: String) -> [String] {
+            let parts = text.components(separatedBy: "\n")
+            var result = parts.dropLast().map { $0 + "\n" }
+            if let last = parts.last, !last.isEmpty { result.append(last) }
+            return result
+        }
+        var count = 0
+        let rawCells: [[String: Any]] = cells.map { cell in
+            if cell.kind != "code" {
+                return ["cell_type": cell.kind, "metadata": [String: Any](), "source": lines(cell.source)]
+            }
+            var outputs: [[String: Any]] = []
+            var execution: Any = NSNull()
+            if let run = byCode[cell.source.trimmingCharacters(in: .whitespacesAndNewlines)] {
+                count += 1
+                execution = count
+                let text = run["output"] as? String ?? ""
+                let failed = run["failed"] as? Bool ?? false
+                if !text.isEmpty {
+                    if failed {
+                        outputs.append(["output_type": "error", "ename": "Error", "evalue": "", "traceback": text.components(separatedBy: "\n")])
+                    } else {
+                        outputs.append(["output_type": "stream", "name": "stdout", "text": lines(text)])
+                    }
+                }
+                for path in run["figures"] as? [String] ?? [] {
+                    if let data = FileManager.default.contents(atPath: path), path.lowercased().hasSuffix(".png") {
+                        outputs.append(["output_type": "display_data", "metadata": [String: Any](),
+                                        "data": ["image/png": data.base64EncodedString(), "text/plain": ["<Figure>"]]])
+                    }
+                }
+            } else if !cell.outputs.isEmpty {
+                for output in cell.outputs {
+                    if let image = output.image {
+                        outputs.append(["output_type": "display_data", "metadata": [String: Any](), "data": ["image/png": image.base64EncodedString()]])
+                    } else if output.isError {
+                        outputs.append(["output_type": "error", "ename": "Error", "evalue": "", "traceback": output.text.components(separatedBy: "\n")])
+                    } else {
+                        outputs.append(["output_type": "stream", "name": "stdout", "text": lines(output.text)])
+                    }
+                }
+            }
+            return ["cell_type": "code", "execution_count": execution, "metadata": [String: Any](), "outputs": outputs, "source": lines(cell.source)]
+        }
+        let notebook: [String: Any] = [
+            "cells": rawCells,
+            "metadata": ["kernelspec": ["display_name": "Python 3", "language": "python", "name": "python3"],
+                         "language_info": ["name": "python"]],
+            "nbformat": 4, "nbformat_minor": 5,
+        ]
+        return try? JSONSerialization.data(withJSONObject: notebook, options: [.prettyPrinted, .sortedKeys])
+    }
+}
+// END ForkNotebook
+
+/// Shows a notebook as saved (cells, outputs, plots); "Run as Cells" turns it into a .py of cells.
+final class ForkNotebookViewController: UIViewController {
+    private let url: URL
+    private let project: NXProject?
+    private var notebook: ForkNotebook
+    private let scroll = UIScrollView()
+    private let stack = UIStackView()
+
+    static func open(_ url: URL, project: NXProject?, from presenter: UIViewController) {
+        guard let data = try? Data(contentsOf: url), let notebook = ForkNotebook(data: data) else {
+            NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "\(url.lastPathComponent) is not a Jupyter notebook", withDelay: 0.0)
+            return
+        }
+        let viewer = ForkNotebookViewController(url: url, project: project, notebook: notebook)
+        let navigation = UINavigationController(rootViewController: viewer)
+        navigation.modalPresentationStyle = .fullScreen
+        presenter.present(navigation, animated: true)
+    }
+
+    init(url: URL, project: NXProject?, notebook: ForkNotebook) {
+        self.url = url
+        self.project = project
+        self.notebook = notebook
+        super.init(nibName: nil, bundle: nil)
+        title = url.deletingPathExtension().lastPathComponent
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemGroupedBackground
+        navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Run as Cells", image: UIImage(systemName: "play.rectangle"), primaryAction: UIAction { [weak self] _ in self?.runAsCells() })
+        stack.axis = .vertical
+        stack.spacing = 12
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.addSubview(stack)
+        view.addSubview(scroll)
+        NSLayoutConstraint.activate([
+            scroll.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 12),
+            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -24),
+            stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 14),
+            stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -14),
+        ])
+        render()
+    }
+
+    private func label(_ text: String, font: UIFont, color: UIColor = .label) -> UILabel {
+        let label = UILabel()
+        label.numberOfLines = 0
+        label.font = font
+        label.textColor = color
+        label.text = text
+        return label
+    }
+
+    private func render() {
+        let size: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 14 : 12
+        let mono = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        var count = 0
+        for cell in notebook.cells {
+            if cell.kind == "markdown" {
+                let text = UITextView()
+                text.isEditable = false
+                text.isScrollEnabled = false
+                text.backgroundColor = .clear
+                text.attributedText = ForkTextViewController.render(cell.source)
+                stack.addArrangedSubview(text)
+                continue
+            }
+            count += 1
+            let box = UIStackView()
+            box.axis = .vertical
+            box.spacing = 8
+            box.isLayoutMarginsRelativeArrangement = true
+            box.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 10, leading: 12, bottom: 12, trailing: 12)
+            box.backgroundColor = .secondarySystemGroupedBackground
+            box.layer.cornerRadius = 12
+            box.addArrangedSubview(label("In [\(count)]", font: .monospacedSystemFont(ofSize: 12, weight: .semibold), color: .secondaryLabel))
+            let code = label(cell.source, font: mono)
+            code.backgroundColor = .tertiarySystemFill
+            box.addArrangedSubview(code)
+            for output in cell.outputs {
+                if let data = output.image, let image = UIImage(data: data) {
+                    let picture = UIImageView(image: image)
+                    picture.contentMode = .scaleAspectFit
+                    picture.backgroundColor = .white
+                    picture.heightAnchor.constraint(equalTo: picture.widthAnchor, multiplier: min(2, max(0.2, image.size.height / max(1, image.size.width)))).isActive = true
+                    box.addArrangedSubview(picture)
+                }
+                let text = output.text.trimmingCharacters(in: .newlines)
+                if !text.isEmpty {
+                    box.addArrangedSubview(label(text.count > 20000 ? String(text.prefix(20000)) + "\n…" : text, font: mono, color: output.isError ? .systemRed : .label))
+                }
+            }
+            stack.addArrangedSubview(box)
+        }
+        if notebook.cells.isEmpty {
+            stack.addArrangedSubview(label("This notebook has no cells.", font: .preferredFont(forTextStyle: .body), color: .secondaryLabel))
+        }
+    }
+
+    /// A .py of "# %%" cells next to the notebook (in a project; else in a new Python project).
+    private func runAsCells() {
+        let script = url.deletingPathExtension().appendingPathExtension("py")
+        let inProject = project != nil && url.path.hasPrefix((project!.url as URL).path)
+        let target: URL
+        if inProject {
+            target = script
+        } else {
+            /* opened from Files: into the "Notebooks" folder of Nyxian's Python home */
+            let folder = ForkPython.rootfs.appendingPathComponent("var/mobile/Notebooks")
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: folder.appendingPathComponent(url.lastPathComponent))
+            try? FileManager.default.copyItem(at: url, to: folder.appendingPathComponent(url.lastPathComponent))
+            target = folder.appendingPathComponent(script.lastPathComponent)
+        }
+        if FileManager.default.fileExists(atPath: target.path) {
+            let alert = UIAlertController(title: target.lastPathComponent + " exists", message: "Replace it with the cells of the notebook?", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Open It", style: .cancel) { [weak self] _ in self?.openEditor(target) })
+            alert.addAction(UIAlertAction(title: "Replace", style: .destructive) { [weak self] _ in self?.write(target) })
+            present(alert, animated: true)
+        } else {
+            write(target)
+        }
+    }
+
+    private func write(_ target: URL) {
+        do {
+            try notebook.percentScript.write(to: target, atomically: true, encoding: .utf8)
+            NotificationCenter.default.post(name: Notification.Name("FileListRefresh"), object: nil)
+            openEditor(target)
+        } catch {
+            NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Could not write \(target.lastPathComponent): \(error.localizedDescription)", withDelay: 0.0)
+        }
+    }
+
+    private func openEditor(_ target: URL) {
+        guard let editor = CodeEditorViewController(project: project, url: target, isReadOnly: false) else { return }
+        let navigation = UINavigationController(rootViewController: editor)
+        navigation.modalPresentationStyle = .overFullScreen
+        present(navigation, animated: true)
     }
 }

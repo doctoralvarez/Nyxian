@@ -4,6 +4,34 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.42.0 — 2026-11-10
+
+Python, like Python3IDE's main panel (tanda A):
+- **Python panel** (tap **</>** on the project list; long press for the old
+  menu): Python Console, **Modules** (packages, pip), Install Package,
+  **Examples and Tutorials**, **Open Notebook (.ipynb)**, **Shell** in your
+  home `$` or in Python HOME `$`, **ARGS** (every script's arguments: edit,
+  clear), **Browser**, the **folders** Python and the compiler use (python
+  HOME, SITE-PACKAGES, STDLIB, home, the iOS SDK as clang/swift SYSROOT,
+  Projects), **About This Fork**, **What's New** and Reinstall Python.
+- **Examples and Tutorials**: 12 ready Python projects with comments in
+  Spanish — first steps, NumPy, pandas, matplotlib, SciPy, scikit-learn,
+  notebook cells, the debugger, pytest, arguments and files, a Flask web
+  page, Nyxian Shell. Picking one creates the project and opens its file.
+- **Jupyter notebooks**: an `.ipynb` (in a project, or picked from Files)
+  shows its cells with the outputs and plots it was saved with; **Run as
+  Cells** turns it into a `.py` of `# %%` cells (markdown as comments) to run
+  with ⌘↩; **Save as Notebook (.ipynb)** (edit/⋯ menu of a `.py`) writes it
+  back, with the outputs and figures the cell console recorded.
+- **Browser** inside Nyxian: opens by itself when Flask, Django or uvicorn
+  say where they listen, and for `webbrowser.open()`; address bar,
+  localhost:5000/8000 shortcuts, Safari, share; retries while a local server
+  starts. **Flask and Django come bundled.**
+- **About This Fork**: version, GitHub, builds, report a problem, your
+  private backups, the original Nyxian, What's New (this list, inside the
+  app) and sharing the kernel log.
+- New Python projects show up in the Python section right away.
+
 ## 1.41.0 — 2026-11-09
 
 - **Python is signed once, not every time it opens.** The date kept for

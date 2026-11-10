@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.17.0
+ Fork doctoralvarez/Nyxian — version 1.18.0
  Changelog:
+  - 1.18.0 (2026-11-10): Python — Save as Notebook (.ipynb): the "# %%" cells
+    with the outputs the cell console recorded.
   - 1.17.0 (2026-11-09): quicker SwiftUI previews: only the Swift files the
     previewed file needs are compiled (found by the names it uses), the whole
     project when that is not enough (remembered). Python — Shell in This Project, Debug (⌥⌘D: stops at the breakpoints set
@@ -628,6 +630,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
                 moreActions.append(UIAction(title: "Debug", image: UIImage(systemName: "ladybug")) { [weak self] _ in self?.forkDebugPythonFile() })
                 moreActions.append(UIAction(title: "Show Variables", image: UIImage(systemName: "tablecells")) { [weak self] _ in self?.forkShowPythonVariables() })
                 moreActions.append(UIAction(title: "Cell Outputs", image: UIImage(systemName: "rectangle.stack")) { [weak self] _ in self?.forkShowPythonCellOutputs() })
+                moreActions.append(UIAction(title: "Save as Notebook (.ipynb)", image: UIImage(systemName: "book.pages")) { [weak self] _ in self?.forkSaveAsNotebook() })
                 moreActions.append(UIAction(title: "Shell in This Project", image: UIImage(systemName: "apple.terminal")) { [weak self] _ in
                     guard let self else { return }
                     ForkPython.openShell(from: self, project: self.project, script: self.file.fileURL)
@@ -1079,6 +1082,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
                     UIAction(title: "Run Cell (# %%)", image: UIImage(systemName: "play.square")) { _ in self.forkRunPythonCell() },
                     UIAction(title: "Show Variables", image: UIImage(systemName: "tablecells")) { _ in self.forkShowPythonVariables() },
                     UIAction(title: "Cell Outputs", image: UIImage(systemName: "rectangle.stack")) { _ in self.forkShowPythonCellOutputs() },
+                    UIAction(title: "Save as Notebook (.ipynb)", image: UIImage(systemName: "book.pages")) { _ in self.forkSaveAsNotebook() },
                     UIAction(title: "Shell in This Project", image: UIImage(systemName: "apple.terminal")) { _ in ForkPython.openShell(from: self, project: self.project, script: self.file.fileURL) },
                     UIAction(title: "Run File in Console", image: UIImage(systemName: "terminal")) { _ in self.forkRunPythonFileInConsole() },
                     UIAction(title: "Copy Python Output to Project", image: UIImage(systemName: "square.and.arrow.down.on.square")) { _ in self.forkCopyPythonOutput() },
@@ -3750,6 +3754,29 @@ extension CodeEditorViewController {
         NXDocumentManager.shared().saveAll { [weak self] in
             guard let self else { return }
             ForkPython.debug(script: url, project: self.project, from: self)
+        }
+    }
+    
+    /// The "# %%" cells of this .py as a Jupyter notebook next to it, with the outputs
+    /// the cell console recorded for them (same code).
+    @objc func forkSaveAsNotebook() {
+        guard let url = self.file.fileURL else { return }
+        let root: URL = self.project.map { $0.url as URL } ?? url.deletingLastPathComponent()
+        var recorded: [[String: Any]] = []
+        if let data = try? Data(contentsOf: ForkPython.cellsFile(project: root)),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            recorded = object["cells"] as? [[String: Any]] ?? []
+        }
+        let notebook = ForkNotebook.fromPercentScript(self.textView.text)
+        var target = url.deletingPathExtension().appendingPathExtension("ipynb")
+        if target.lastPathComponent.hasSuffix(".ipynb.ipynb") { target = url.deletingPathExtension() }
+        guard let data = notebook.jsonData(outputs: recorded) else { return }
+        do {
+            try data.write(to: target, options: .atomic)
+            NotificationCenter.default.post(name: Notification.Name("FileListRefresh"), object: nil)
+            NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Saved \(target.lastPathComponent) (\(notebook.cells.count) cells)", withDelay: 0.0)
+        } catch {
+            NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Could not save the notebook: \(error.localizedDescription)", withDelay: 0.0)
         }
     }
     

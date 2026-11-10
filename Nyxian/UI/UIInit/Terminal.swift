@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.5.0
+ Fork doctoralvarez/Nyxian — version 1.6.0
  Changelog:
+  - 1.6.0 (2026-11-10): web pages from the terminal open in Nyxian's browser:
+    webbrowser.open() in Python (ESC ] 7770 ; nyxian-open ; url BEL), and
+    local servers when they say where they listen (Flask, Django, uvicorn…).
   - 1.5.0 (2026-11-09): no preview pops up while Cell Outputs is open (the
     figures show there).
   - 1.4.0 (2026-11-08): a program can ask for a preview of files
@@ -140,10 +143,14 @@ import UIKit
             guard !data.isEmpty else { return }
             /* fork: plt.show() in Python asks for a preview of its figures */
             let previews = TerminalViewObjC.forkTakePreviewRequests(from: &data)
+            /* fork: webbrowser.open(), and local servers saying where they listen */
+            var pages = TerminalViewObjC.forkTakeRequests(TerminalViewObjC.openStart, from: &data)
+            pages.append(contentsOf: self.forkLocalServers(in: data))
             
             DispatchQueue.main.async {
                 if !data.isEmpty { self.feed(byteArray: ArraySlice<UInt8>(data)) }
                 if !previews.isEmpty { self.forkShowPreview(previews) }
+                if let page = pages.last { self.forkOpenPage(page) }
             }
         }
         
@@ -196,6 +203,52 @@ import UIKit
         }
         if !paths.isEmpty { data = Data(bytes) }
         return paths
+    }
+    
+    static let openStart = Array("\u{1b}]7770;nyxian-open;".utf8)
+    
+    /// Takes every ESC ] 7770 ; KIND ; text BEL of one kind out of the output; returns the texts.
+    static func forkTakeRequests(_ prefix: [UInt8], from data: inout Data) -> [String] {
+        var found: [String] = []
+        var bytes = [UInt8](data)
+        var searchFrom = 0
+        while let start = forkFind(prefix, in: bytes, from: searchFrom) {
+            guard let end = bytes[(start + prefix.count)...].firstIndex(of: 0x07) else { break }
+            if let text = String(bytes: bytes[(start + prefix.count)..<end], encoding: .utf8) { found.append(text) }
+            bytes.removeSubrange(start...end)
+            searchFrom = start
+        }
+        if !found.isEmpty { data = Data(bytes) }
+        return found
+    }
+    
+    /* fork: "Running on http://127.0.0.1:5000" (Flask), "Starting development server at http://127.0.0.1:8000/"
+       (Django), "Uvicorn running on http://127.0.0.1:8000"… — opened once per address */
+    private static let serverRegex = try! NSRegularExpression(pattern: #"(?i)(?:running on|server at|listening on|serving (?:http )?on|available on)[^\n]*?(https?://(?:127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1?\])(?::\d+)?[^\s'"]*)"#)
+    private var forkOpenedServers = Set<String>()
+    
+    private func forkLocalServers(in data: Data) -> [String] {
+        guard data.count < 65536, let text = String(data: data, encoding: .utf8), text.contains("http") else { return [] }
+        let ns = text as NSString
+        var pages: [String] = []
+        for match in Self.serverRegex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            var url = ns.substring(with: match.range(at: 1))
+            url = url.replacingOccurrences(of: "0.0.0.0", with: "127.0.0.1").replacingOccurrences(of: "[::]", with: "127.0.0.1")
+            /* ANSI colour codes some servers print right after the address */
+            if let escape = url.firstIndex(of: "\u{1b}") { url = String(url[..<escape]) }
+            while let last = url.last, ".,;)".contains(last) { url.removeLast() }
+            if !forkOpenedServers.contains(url) {
+                forkOpenedServers.insert(url)
+                pages.append(url)
+            }
+        }
+        return pages
+    }
+    
+    func forkOpenPage(_ address: String) {
+        guard let url = URL(string: address), let root = window?.rootViewController else { return }
+        _ = resignFirstResponder()
+        ForkBrowserViewController.present(url, from: root)
     }
     
     private static func forkFind(_ needle: [UInt8], in haystack: [UInt8], from: Int) -> Int? {

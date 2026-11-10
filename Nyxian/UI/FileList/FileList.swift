@@ -23,7 +23,8 @@
 /*
  Fork doctoralvarez/Nyxian — version 1.8.0
  Changelog:
-  - 1.8.0 (2026-11-09): the profiler's graphs have "All Processes".
+  - 1.8.0 (2026-11-09): .ipynb notebooks open in the notebook viewer
+    (2026-11-10). The profiler's graphs have "All Processes".
     Select several files and folders by sliding two
     fingers down the list (as in Files or Mail), which starts selection mode
     by itself; selection mode shows iOS's selection circles; on iPad, Shift-
@@ -743,6 +744,9 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
                         NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Failed to unzip \(fileListEntry.path)", withDelay: 0.0)
                     }
                 }
+            } else if URL(fileURLWithPath: fileListEntry.path).pathExtension.lowercased() == "ipynb" {
+                /* fork: a Jupyter notebook, with its outputs; "Run as Cells" makes a .py of cells */
+                ForkNotebookViewController.open(URL(fileURLWithPath: fileListEntry.path), project: project, from: self)
             } else if ForkQuickLook.canPreview(URL(fileURLWithPath: fileListEntry.path)) {
                 /* fork: pictures (plots from Python), PDFs… open in a preview, not as text */
                 ForkQuickLook.present(URL(fileURLWithPath: fileListEntry.path), from: self)

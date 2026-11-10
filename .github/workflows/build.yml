@@ -54,6 +54,12 @@ jobs:
           xcrun swiftc -O -o /tmp/formatter_test tools/fork/formatter_test/main.swift /tmp/ForkSwiftFormatter.swift
           /tmp/formatter_test
 
+      - name: Test notebook conversion (fork)
+        run: |
+          { echo "import Foundation"; sed -n '/^\/\/ BEGIN ForkNotebook/,/^\/\/ END ForkNotebook/p' Nyxian/UI/ContentView.swift; } > /tmp/ForkNotebook.swift
+          xcrun swiftc -O -o /tmp/notebook_test tools/fork/notebook_test/main.swift /tmp/ForkNotebook.swift
+          /tmp/notebook_test
+
       - name: Check pip finds the fork's iOS wheels (fork)
         continue-on-error: true
         run: |
@@ -179,6 +185,9 @@ jobs:
           ./tools/fork/backup_asset.sh save python-runtime "python-ios-3.14-b14-${{ hashFiles('tools/fork/build_python_runtime.sh', 'tools/fork/python_launcher.c') }}.zip" Shared/python-ios.zip || true
 
       # fork: the app knows the runtime by its checksum (an update with the same runtime does not unpack it again)
+      - name: What's New inside the app
+        run: cp CHANGELOG-FORK.md Shared/CHANGELOG-FORK.md
+
       - name: Checksum of the Python runtime
         run: shasum -a 256 Shared/python-ios.zip | cut -c1-64 > Shared/python-ios.zip.sha256 && cat Shared/python-ios.zip.sha256
 
