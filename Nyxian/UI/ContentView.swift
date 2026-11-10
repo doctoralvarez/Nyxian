@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.27.0
+ Fork doctoralvarez/Nyxian — version 1.28.0
  Changelog:
+  - 1.28.0 (2026-11-10): java in Nyxian Shell ("could not start (Operation
+    not permitted)"): miniJVM is now lib/libminijvm.dylib, signed like
+    NodeMobile, and bin/java a tiny launcher that loads it. python3 may also
+    read opt/node and opt/java (programs the Shell starts get its file
+    sandbox); only its launcher is signed again (launcherRevision). The Shell
+    says what to try when Nyxian does not let java or node start.
   - 1.27.0 (2026-11-10): Java. ForkJava unpacks and signs miniJVM
     (Shared/java-ios.zip) after Node.js; ▶ runs .java files; Nyxian Shell:
     java (FILE.java, -jar with Main-Class/Class-Path, -cp CLASS), javac
@@ -3010,6 +3016,9 @@ enum ForkPython {
     private static let launcherKey = "fork.python.launcher"
     private static let signedKey = "fork.python.signedPackageBinaries"
     private static let signingRevision = 4  /* 3: pip may write all of opt/python; 4: may start processes (Nyxian Shell) */
+    /// Only python3's own entitlements changed: sign the launcher again, without unpacking Python.
+    private static let launcherRevision = 1  /* 1: may read opt/node and opt/java (for the programs Nyxian Shell starts) */
+    private static let launcherRevisionKey = "fork.python.launcherRevision"
 
     /// Python files Nyxian adds to site-packages: the line editor, the REPL, input() with echo.
     private static let helperFiles: [String: String] = [
@@ -3982,6 +3991,7 @@ if __name__ == "__main__":
 # one in front, jobs / fg / bg / kill, "&" starts one in the background.
 # Run as: python3 -m nyxian_shell
 import ctypes
+import errno
 import fnmatch
 import glob
 import io
@@ -5308,6 +5318,9 @@ def run_pipeline(pipeline, background, text):
                     pid = spawner().spawn(argv[0], argv, env, {0: fd_in, 1: fd_out, 2: fd_err}, job["pgid"])
                 except OSError as error:
                     sys.stderr.write("%s: could not start (%s)\n" % (command["argv"][0], error.strerror or error))
+                    if error.errno == errno.EPERM and command["argv"][0] in ("java", "javac", "node", "npm", "npx"):
+                        sys.stderr.write("  Nyxian did not let it start: try Reinstall %s in the Python panel, then open a new terminal\n"
+                                         % ("Java" if command["argv"][0].startswith("java") else "Node.js"))
                     status = 126
                     pid = None
                 if pid:
@@ -6453,7 +6466,11 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             "org.emexlabs.nyxian.get-task-allow": true,   /* debugger and profiler */
             "org.emexlabs.nyxian.process.spawn": true,    /* Nyxian Shell starts programs (python3, your tools) */
             "org.emexlabs.nyxian.sandbox.file.read": [
-                "$(NXROOT)/opt/python"
+                "$(NXROOT)/opt/python",
+                /* programs Nyxian Shell starts get python3's file sandbox: node loads
+                   opt/node/lib/NodeMobile, java opt/java/lib/libminijvm.dylib and its jars */
+                "$(NXROOT)/opt/node",
+                "$(NXROOT)/opt/java"
             ],
             "org.emexlabs.nyxian.sandbox.file.read-write": [
                 /* pip writes site-packages and also bin/ (command scripts), share/, include/ */
@@ -6636,6 +6653,15 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                 linkPythonFramework()
                 writeHelperFiles()
                 try signNewPackageBinaries(progress: progress)
+                if defaults.integer(forKey: launcherRevisionKey) != launcherRevision {
+                    progress("Signing python3…")
+                    let launcherURL = home.appendingPathComponent("bin/python3")
+                    guard signLauncher(launcherURL) else { throw Failure.signing("python3") }
+                    guard let fresh = fastpath(launcherURL, progress: progress) else { throw Failure.fastpath }
+                    defaults.set(launcherRevision, forKey: launcherRevisionKey)
+                    defaults.set(fresh, forKey: launcherKey)
+                    return fresh
+                }
                 return launcher
             }
             
@@ -6722,6 +6748,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             guard let launcher = fastpath(launcherURL, progress: progress) else { throw Failure.fastpath }
             defaults.set(stamp, forKey: stampKey)
             defaults.set(launcher, forKey: launcherKey)
+            defaults.set(launcherRevision, forKey: launcherRevisionKey)
             return launcher
         }
     }
@@ -7644,7 +7671,7 @@ enum ForkJava {
     private static var bundledZip: URL { Bundle.main.bundleURL.appendingPathComponent("Shared/java-ios.zip") }
     private static let stampKey = "fork.java.stamp"
     private static let launcherKey = "fork.java.launcher"
-    private static let signingRevision = 1
+    private static let signingRevision = 2  /* 2: miniJVM is lib/libminijvm.dylib, bin/java only loads it */
     private static let queue = DispatchQueue(label: "fork.java.install")
 
     static var isBundled: Bool { FileManager.default.fileExists(atPath: bundledZip.path) }
@@ -7663,6 +7690,8 @@ enum ForkJava {
 
     private static var launcherURL: URL { home.appendingPathComponent("bin/java") }
     private static var launcherOriginal: URL { home.appendingPathComponent("bin/.java.original") }
+    /// miniJVM itself: the small `java` launcher loads it (like `node` loads NodeMobile).
+    private static var library: URL { home.appendingPathComponent("lib/libminijvm.dylib") }
 
     private static func signLauncher() -> Bool {
         let fm = FileManager.default
@@ -7688,7 +7717,8 @@ enum ForkJava {
         guard let stamp = defaults.string(forKey: stampKey), stamp == identity,
               let launcher = defaults.string(forKey: launcherKey),
               FileManager.default.fileExists(atPath: launcher),
-              FileManager.default.fileExists(atPath: home.appendingPathComponent("lib/minijvm_rt.jar").path) else { return nil }
+              FileManager.default.fileExists(atPath: home.appendingPathComponent("lib/minijvm_rt.jar").path),
+              FileManager.default.fileExists(atPath: library.path) else { return nil }
         return launcher
     }
 
@@ -7702,6 +7732,9 @@ enum ForkJava {
             let opt = home.deletingLastPathComponent()
             try fm.createDirectory(at: opt, withIntermediateDirectories: true)
             guard unzipArchiveAtPath(bundledZip.path, opt.path) else { throw Failure.notBundled }
+            progress("Signing miniJVM…")
+            guard fm.fileExists(atPath: library.path), LCUtils.signMachOWithoutPatch(at: library) else { throw ForkNode.Failure.signing("libminijvm.dylib") }
+            _ = trust_nxt2_sign(library.path, [String: Any]() as CFDictionary, true, nil)
             progress("Signing java…")
             try? fm.removeItem(at: launcherOriginal)
             try? fm.copyItem(at: launcherURL, to: launcherOriginal)

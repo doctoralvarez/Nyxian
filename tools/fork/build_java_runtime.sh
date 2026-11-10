@@ -1,6 +1,10 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.0.1
+# Fork doctoralvarez/Nyxian — version 1.1.0
 # Changelog:
+#  - 1.1.0 (2026-11-10): on iOS miniJVM is a library (lib/libminijvm.dylib,
+#    its main renamed minijvm_main) loaded by a tiny `java` launcher, like
+#    Node.js: Nyxian refused to start the big miniJVM executable from
+#    Nyxian Shell ("Operation not permitted").
 #  - 1.0.1 (2026-11-10): the iOS build leaves out sljit (miniJVM's JIT code
 #    generator): miniJVM turns its JIT off on iOS, so it is not used there,
 #    and it did not compile for iOS.
@@ -77,8 +81,16 @@ if [ -n "${TEST_DIR:-}" ]; then
   [ "${HOST_ONLY:-}" = "1" ] && exit 0
 fi
 
-echo ">>> miniJVM for iOS (arm64, interpreter only: no sljit)"
-build "$HOME_DIR/bin/java" "" xcrun -sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0
+echo ">>> miniJVM for iOS (arm64, interpreter only: no sljit) as lib/libminijvm.dylib"
+sed -i '' 's/^int main(int argc, char \*\*argv) {/int minijvm_main(int argc, char **argv) {/' "$CSRC/main.c"
+grep -q '^int minijvm_main(' "$CSRC/main.c" || { echo "main() of miniJVM not found"; exit 1; }
+IOS_CC=(xcrun -sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0)
+build "$HOME_DIR/lib/libminijvm.dylib" "" "${IOS_CC[@]}" -dynamiclib -install_name @loader_path/libminijvm.dylib
+nm -gU "$HOME_DIR/lib/libminijvm.dylib" | grep -q ' _minijvm_main$' || { echo "minijvm_main is not exported"; exit 1; }
+# Nyxian signs it again on the device
+codesign --remove-signature "$HOME_DIR/lib/libminijvm.dylib" 2>/dev/null || true
+echo ">>> java launcher"
+"${IOS_CC[@]}" -O2 -o "$HOME_DIR/bin/java" "$ROOT/tools/fork/java_launcher.c"
 
 mkdir -p "$ROOT/Shared"
 rm -f "$OUT"

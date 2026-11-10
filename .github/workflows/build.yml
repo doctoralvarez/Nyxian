@@ -233,7 +233,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: Shared/java-ios.zip
-          key: java-ios-minijvm-${{ hashFiles('tools/fork/build_java_runtime.sh') }}
+          key: java-ios-minijvm-${{ hashFiles('tools/fork/build_java_runtime.sh', 'tools/fork/java_launcher.c') }}
 
       - name: Restore Java runtime from the backup (cache miss)
         id: java-backup
@@ -242,7 +242,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
         run: |
-          name="java-ios-minijvm-${{ hashFiles('tools/fork/build_java_runtime.sh') }}.zip"
+          name="java-ios-minijvm-${{ hashFiles('tools/fork/build_java_runtime.sh', 'tools/fork/java_launcher.c') }}.zip"
           ./tools/fork/backup_asset.sh restore java-runtime "$name"
           mv "$name" Shared/java-ios.zip
 
@@ -255,14 +255,14 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: Shared/java-ios.zip
-          key: java-ios-minijvm-${{ hashFiles('tools/fork/build_java_runtime.sh') }}
+          key: java-ios-minijvm-${{ hashFiles('tools/fork/build_java_runtime.sh', 'tools/fork/java_launcher.c') }}
 
       - name: Back up the Java runtime (once per version)
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
         run: |
-          ./tools/fork/backup_asset.sh save java-runtime "java-ios-minijvm-${{ hashFiles('tools/fork/build_java_runtime.sh') }}.zip" Shared/java-ios.zip || true
+          ./tools/fork/backup_asset.sh save java-runtime "java-ios-minijvm-${{ hashFiles('tools/fork/build_java_runtime.sh', 'tools/fork/java_launcher.c') }}.zip" Shared/java-ios.zip || true
 
       # fork: the app knows the runtime by its checksum (an update with the same runtime does not unpack it again)
       - name: What's New inside the app

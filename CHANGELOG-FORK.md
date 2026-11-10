@@ -4,6 +4,18 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.46.0 — 2026-11-10
+
+- **java in Nyxian Shell** said "could not start (Operation not permitted)".
+  miniJVM is now a library (`opt/java/lib/libminijvm.dylib`) loaded by a
+  tiny `java` launcher, the same way `node` loads Node.js; the library is
+  signed like NodeMobile.
+- Programs the Shell starts get python3's file sandbox: python3 may now also
+  read `opt/node` and `opt/java`. Only its launcher is signed again (fast,
+  once), Python is not unpacked again.
+- When Nyxian does not let `java` or `node` start, the Shell says to try
+  Reinstall Java / Node.js.
+
 ## 1.45.1 — 2026-11-10
 
 - Java for iOS now compiles: the iOS build of miniJVM leaves out sljit (its
