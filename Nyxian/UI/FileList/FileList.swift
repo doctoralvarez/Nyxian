@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.8.0
+ Fork doctoralvarez/Nyxian — version 1.9.0
  Changelog:
+  - 1.9.0 (2026-11-10): .jar files: tap or hold › Run (java -jar, miniJVM),
+    Run in Browser (CheerpJ), Open Contents (NAME.jar.contents, to edit);
+    hold that folder › Pack into NAME.jar (the old one stays as .bak).
   - 1.8.0 (2026-11-09): .ipynb notebooks open in the notebook viewer
     (2026-11-10). The profiler's graphs have "All Processes".
     Select several files and folders by sliding two
@@ -128,6 +131,12 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
         self.refreshControl?.addTarget(self, action: #selector(performRefresh), for: .valueChanged)
     }
     
+    /// fork: the list again after a jar was opened or packed
+    func forkReloadEntries() {
+        self.entries = FileListEntry.getEntries(ofPath: self.path)
+        self.tableView.reloadData()
+    }
+
     @objc func performRefresh() {
         if !self.isSublink, let project = self.project {
             if project.reload() {
@@ -698,6 +707,34 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             
             var children: [UIMenu] = []
             children.append(UIMenu(options: .displayInline, children: [getInfoAction]))
+            /* fork: .jar files and their opened contents */
+            let forkEntryURL = URL(fileURLWithPath: self.entries[indexPath.row].path)
+            if forkEntryURL.pathExtension.lowercased() == "jar" {
+                children.append(UIMenu(options: .displayInline, children: [
+                    UIAction(title: "Run (java -jar)", image: UIImage(systemName: "play.fill")) { [weak self] _ in
+                        guard let self else { return }
+                        ForkJava.runJar(forkEntryURL, project: self.project, from: self)
+                    },
+                    UIAction(title: "Run in Browser (CheerpJ)", image: UIImage(systemName: "globe")) { [weak self] _ in
+                        guard let self else { return }
+                        ForkCheerpJ.present(jar: forkEntryURL, from: self)
+                    },
+                ] + (self.isReadOnly ? [] : [
+                    UIAction(title: "Open Contents (to edit)", image: UIImage(systemName: "shippingbox")) { [weak self] _ in
+                        guard let self else { return }
+                        ForkJarEditor.extract(forkEntryURL, from: self)
+                        self.forkReloadEntries()
+                    },
+                ])))
+            } else if !self.isReadOnly, let forkJar = ForkJarEditor.jar(for: forkEntryURL) {
+                children.append(UIMenu(options: .displayInline, children: [
+                    UIAction(title: "Pack into \(forkJar.lastPathComponent)", image: UIImage(systemName: "shippingbox.and.arrow.backward")) { [weak self] _ in
+                        guard let self else { return }
+                        ForkJarEditor.pack(forkEntryURL, from: self)
+                        self.forkReloadEntries()
+                    },
+                ]))
+            }
             children.append(UIMenu(options: .displayInline, children: self.isReadOnly ? [copyAction] : [copyAction, moveAction, renameAction]))
             children.append(UIMenu(options: .displayInline, children: [shareAction]))
             if !self.isReadOnly {
@@ -744,6 +781,9 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
                         NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Failed to unzip \(fileListEntry.path)", withDelay: 0.0)
                     }
                 }
+            } else if URL(fileURLWithPath: fileListEntry.path).pathExtension.lowercased() == "jar" {
+                /* fork: a jar runs here (miniJVM) or in the browser (CheerpJ), or opens to edit */
+                ForkJava.presentJarActions(URL(fileURLWithPath: fileListEntry.path), project: project, from: self, sourceView: tableView.cellForRow(at: indexPath))
             } else if URL(fileURLWithPath: fileListEntry.path).pathExtension.lowercased() == "ipynb" {
                 /* fork: a Jupyter notebook, with its outputs; "Run as Cells" makes a .py of cells */
                 ForkNotebookViewController.open(URL(fileURLWithPath: fileListEntry.path), project: project, from: self)

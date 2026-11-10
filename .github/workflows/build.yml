@@ -38,7 +38,11 @@ jobs:
         run: python3 tools/fork/test_python_terminal.py
 
       - name: Test Nyxian Shell (fork)
-        run: python3 tools/fork/test_python_shell.py
+        run: |
+          # java, javac and jar with miniJVM built for this Mac (the same sources as the iOS one)
+          TEST_DIR="$RUNNER_TEMP/minijvm" HOST_ONLY=1 ./tools/fork/build_java_runtime.sh > "$RUNNER_TEMP/minijvm.log" 2>&1 \
+            && export NYXIAN_TEST_JAVA_HOME="$RUNNER_TEMP/minijvm" || { tail -20 "$RUNNER_TEMP/minijvm.log"; echo "::warning::miniJVM for the test did not build; Java not tested"; }
+          python3 tools/fork/test_python_shell.py
 
       - name: Test Python editor help and plots (fork)
         run: |
@@ -223,14 +227,52 @@ jobs:
         run: |
           ./tools/fork/backup_asset.sh save node-runtime "node-ios-18.20.4-${{ hashFiles('tools/fork/build_node_runtime.sh', 'tools/fork/node_launcher.c') }}.zip" Shared/node-ios.zip || true
 
+      # fork: Java for iOS (miniJVM, an interpreter) with javac (janino): Shared/java-ios.zip
+      - name: Restore Java runtime cache
+        id: java-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: Shared/java-ios.zip
+          key: java-ios-minijvm-${{ hashFiles('tools/fork/build_java_runtime.sh') }}
+
+      - name: Restore Java runtime from the backup (cache miss)
+        id: java-backup
+        if: steps.java-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+        run: |
+          name="java-ios-minijvm-${{ hashFiles('tools/fork/build_java_runtime.sh') }}.zip"
+          ./tools/fork/backup_asset.sh restore java-runtime "$name"
+          mv "$name" Shared/java-ios.zip
+
+      - name: Pack Java runtime (cache miss)
+        if: steps.java-cache.outputs.cache-hit != 'true' && steps.java-backup.outcome != 'success'
+        run: ./tools/fork/build_java_runtime.sh
+
+      - name: Save Java runtime cache
+        if: steps.java-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: Shared/java-ios.zip
+          key: java-ios-minijvm-${{ hashFiles('tools/fork/build_java_runtime.sh') }}
+
+      - name: Back up the Java runtime (once per version)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+        run: |
+          ./tools/fork/backup_asset.sh save java-runtime "java-ios-minijvm-${{ hashFiles('tools/fork/build_java_runtime.sh') }}.zip" Shared/java-ios.zip || true
+
       # fork: the app knows the runtime by its checksum (an update with the same runtime does not unpack it again)
       - name: What's New inside the app
         run: cp CHANGELOG-FORK.md Shared/CHANGELOG-FORK.md
 
-      - name: Checksum of the Python and Node.js runtimes
+      - name: Checksum of the Python, Node.js and Java runtimes
         run: |
           shasum -a 256 Shared/python-ios.zip | cut -c1-64 > Shared/python-ios.zip.sha256 && cat Shared/python-ios.zip.sha256
           shasum -a 256 Shared/node-ios.zip | cut -c1-64 > Shared/node-ios.zip.sha256 && cat Shared/node-ios.zip.sha256
+          shasum -a 256 Shared/java-ios.zip | cut -c1-64 > Shared/java-ios.zip.sha256 && cat Shared/java-ios.zip.sha256
 
       # fork: the emexLabs root CA public key goes inside the app, so a new install
       # does not need nyxian.app for it (from nyxian.app, else from the backup)

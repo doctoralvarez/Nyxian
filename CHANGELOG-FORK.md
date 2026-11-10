@@ -4,6 +4,31 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.45.0 — 2026-11-10
+
+Java and .jar files:
+- **miniJVM** comes inside Nyxian: a Java virtual machine written in C that
+  interprets bytecode (on iOS its JIT is off). It runs offline in the
+  terminal, with the Java 8 language and miniJVM's class library — a subset
+  of the JDK, without Swing or AWT windows. It is prepared in the background
+  after Python and Node.js.
+- **▶ / ⌘R on a .java file** compiles it (javac: janino-continue) and runs it;
+  files it writes come back to the project. Java is colored
+  (tree-sitter-java). New example: Java (miniJVM).
+- **Nyxian Shell**: `java FILE.java`, `java -jar APP.jar` (Main-Class and
+  Class-Path from the manifest), `java -cp DIR CLASS`, `javac -d DIR FILES`,
+  and `jar` (c/t/x/u with f, m, e, v and -C) to make, list, extract and
+  update jars.
+- **A .jar in Files** (tap or hold it):
+  - **Run (java -jar)** with miniJVM.
+  - **Run in Browser (CheerpJ)**: the full Java 8, 11, 17 or 21, chosen from
+    the jar's classes, with Swing windows, in Nyxian's browser. It needs the
+    internet (CheerpJ loads from its CDN; free for personal use).
+  - **Open Contents** makes NAME.jar.contents to edit MANIFEST, resources and
+    classes; hold that folder › **Pack into NAME.jar** (the previous jar is
+    kept as .bak).
+- Python panel › **Java**, java HOME folder, Reinstall Java.
+
 ## 1.44.0 — 2026-11-10
 
 JavaScript and Node.js (tanda B):

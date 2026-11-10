@@ -21,8 +21,15 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.26.0
+ Fork doctoralvarez/Nyxian — version 1.27.0
  Changelog:
+  - 1.27.0 (2026-11-10): Java. ForkJava unpacks and signs miniJVM
+    (Shared/java-ios.zip) after Node.js; ▶ runs .java files; Nyxian Shell:
+    java (FILE.java, -jar with Main-Class/Class-Path, -cp CLASS), javac
+    (janino) and jar (c/t/x/u, f m e v, -C). .jar files: Run, Run in
+    Browser with CheerpJ (ForkCheerpJ + a small local HTTP server with
+    Range requests: full Java 8–21, Swing), Open Contents / Pack into
+    .jar (ForkJarEditor). Java section in the Python panel, Java example.
   - 1.26.0 (2026-11-10): Node.js 18 (nodejs-mobile, no JIT): ForkNode unpacks
     and signs Shared/node-ios.zip once (in the background after Python);
     ▶ runs .js files from a copy of the project; Node.js Console, npm
@@ -193,6 +200,7 @@ import UIKit
 import GameController
 import UniformTypeIdentifiers
 import WebKit
+import Network
 
 @objc class ContentViewController: NXUITableViewController, UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate {
     var sessionIndex: IndexPath? = nil
@@ -4198,6 +4206,224 @@ def _script_command(path, args):
     return None
 
 
+# ---------------------------------------------------------------- Java (miniJVM)
+
+_JAVAC_MAIN = "org.codehaus.commons.compiler.tools.Javac"
+
+
+def _java():
+    path = os.environ.get("NYXIAN_JAVA")
+    return path if path else None
+
+
+def _java_lib(name):
+    return os.path.join(os.environ.get("NYXIAN_JAVA_HOME", ""), "lib", name)
+
+
+def _jar_manifest(path):
+    """The main attributes of a jar's META-INF/MANIFEST.MF (continuation lines joined)."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as archive:
+            text = archive.read("META-INF/MANIFEST.MF").decode("utf-8", "replace")
+    except (KeyError, OSError, zipfile.BadZipFile):
+        return {}
+    attributes, key = {}, None
+    for line in text.replace("\r\n", "\n").split("\n"):
+        if not line.strip():
+            if attributes:
+                break
+            continue
+        if line.startswith(" ") and key:
+            attributes[key] += line[1:]
+        elif ":" in line:
+            key, value = line.split(":", 1)
+            key = key.strip()
+            attributes[key] = value.strip()
+    return attributes
+
+
+def _javac_argv(args):
+    java = _java()
+    rt = _java_lib("minijvm_rt.jar")
+    argv = [java, "-bootclasspath", rt, "-cp", _java_lib("janino.jar") + ":" + _java_lib("commons-compiler.jar"),
+            _JAVAC_MAIN, "-bootclasspath", rt]
+    if not any(a in ("-source", "-target", "--release") for a in args):
+        argv += ["-source", "8", "-target", "8"]
+    if "-encoding" not in args:
+        argv += ["-encoding", "UTF-8"]
+    return argv + list(args)
+
+
+def _java_command(name, args):
+    """java / javac for miniJVM. None if not one; a str is an error to show."""
+    if name not in ("java", "javac"):
+        return None
+    java = _java()
+    if not java:
+        return "%s: Java (miniJVM) is not ready yet (Nyxian prepares it after Python and Node.js)" % name
+    if name == "javac":
+        if not args:
+            return "usage: javac [-d DIR] [-cp PATH] FILE.java… (Java 8 language, miniJVM's class library)"
+        return _javac_argv(args)
+    vm, classpath, i = [], None, 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-cp", "-classpath", "--class-path") and i + 1 < len(args):
+            classpath = args[i + 1]
+            i += 2
+            continue
+        if arg == "-jar" and i + 1 < len(args):
+            jar = os.path.abspath(os.path.expanduser(args[i + 1]))
+            manifest = _jar_manifest(jar)
+            main = manifest.get("Main-Class")
+            if not main:
+                return "java: %s has no Main-Class in META-INF/MANIFEST.MF (run a class: java -cp %s NAME)" % (args[i + 1], args[i + 1])
+            folder = os.path.dirname(jar)
+            parts = [jar] + [os.path.join(folder, p) for p in manifest.get("Class-Path", "").split() if p]
+            return [java, "-bootclasspath", _java_lib("minijvm_rt.jar"), "-cp", ":".join(parts)] + vm + [main] + args[i + 2:]
+        if arg in ("-version", "--version"):
+            return [java, "-bootclasspath", _java_lib("minijvm_rt.jar"), "-version"]
+        if arg.startswith("-X"):
+            vm.append(arg)
+            i += 1
+            continue
+        if arg.startswith("-D") or arg.startswith("--") or arg in ("-ea", "-da", "-server", "-client"):
+            sys.stderr.write("java: %s is ignored by miniJVM\n" % arg)
+            i += 1
+            continue
+        break
+    rest = args[i:]
+    if not rest:
+        return "usage: java [-cp PATH] CLASS [ARGS] · java -jar FILE.jar [ARGS] · java FILE.java [ARGS]"
+    target, program_args = rest[0], rest[1:]
+    if target.endswith(".java") and os.path.isfile(target):
+        # java FILE.java: compiled first (into a folder of its own), then run
+        import hashlib
+        source = os.path.abspath(target)
+        out = os.path.join(os.environ.get("TMPDIR", "/tmp"), "nyxian-java-" + hashlib.sha1(source.encode()).hexdigest()[:12])
+        shutil.rmtree(out, ignore_errors=True)
+        os.makedirs(out, exist_ok=True)
+        compile_cp = (classpath + ":" if classpath else "") + "."
+        status = run_line(" ".join(_quote(a) for a in ["javac", "-cp", compile_cp, "-d", out, target]))
+        if status != 0:
+            return "status:%d" % status
+        stem = os.path.splitext(os.path.basename(target))[0]
+        main = stem
+        if not os.path.exists(os.path.join(out, stem + ".class")):
+            tops = sorted(f[:-6] for f in os.listdir(out) if f.endswith(".class") and "$" not in f)
+            main = tops[0] if tops else stem
+        classpath = out + ":" + (classpath or ".")
+        target = main
+    target = target[:-6] if target.endswith(".class") else target
+    return [java, "-bootclasspath", _java_lib("minijvm_rt.jar"), "-cp", classpath or os.environ.get("CLASSPATH", ".")] + vm + [target.replace("/", ".")] + program_args
+
+
+def _quote(text):
+    return text if text and all(c.isalnum() or c in "-_./:=+@%," for c in text) else "'" + text.replace("'", "'\"'\"'") + "'"
+
+
+def b_jar(args, inp, out, err):
+    """jar c/t/x/u: make, list, extract and update .jar files (META-INF/MANIFEST.MF first)."""
+    import zipfile
+    usage = "usage: jar {c|t|x|u}[vfme] [JAR] [MANIFEST] [MAIN] [-C DIR] FILES…  (jar cfe app.jar Main -C classes .)"
+    if not args:
+        return _err("jar", usage, err)
+    mode = args[0].lstrip("-")
+    rest = list(args[1:])
+    if not mode or mode[0] not in "ctxu":
+        return _err("jar", usage, err)
+    verbose = "v" in mode
+    jarfile = manifest = entry = None
+    for letter in mode[1:]:
+        if letter == "f" and rest:
+            jarfile = rest.pop(0)
+        elif letter == "m" and rest:
+            manifest = rest.pop(0)
+        elif letter == "e" and rest:
+            entry = rest.pop(0)
+    if not jarfile:
+        return _err("jar", "name the jar with f (jar cf app.jar …)", err)
+    if mode[0] == "t":
+        try:
+            with zipfile.ZipFile(jarfile) as archive:
+                for info in archive.infolist():
+                    out.write(("%8d %s\n" % (info.file_size, info.filename)) if verbose else info.filename + "\n")
+        except (OSError, zipfile.BadZipFile) as error:
+            return _err("jar", "%s: %s" % (jarfile, error), err)
+        return 0
+    if mode[0] == "x":
+        try:
+            with zipfile.ZipFile(jarfile) as archive:
+                names = [n for n in archive.namelist() if not rest or any(n == r or n.startswith(r.rstrip("/") + "/") for r in rest)]
+                for name in names:
+                    archive.extract(name, ".")
+                    if verbose:
+                        out.write("  extracted: %s\n" % name)
+        except (OSError, zipfile.BadZipFile) as error:
+            return _err("jar", "%s: %s" % (jarfile, error), err)
+        return 0
+    # c / u: files (and -C DIR FILES) into the jar
+    pairs, base = [], "."
+    i = 0
+    while i < len(rest):
+        if rest[i] == "-C" and i + 1 < len(rest):
+            base = rest[i + 1]
+            i += 2
+            continue
+        source = os.path.join(base, rest[i])
+        if os.path.isdir(source):
+            for folder, dirs, files in os.walk(source):
+                dirs.sort()
+                for name in sorted(files):
+                    path = os.path.join(folder, name)
+                    pairs.append((path, os.path.normpath(os.path.relpath(path, base)).replace(os.sep, "/")))
+        elif os.path.exists(source):
+            pairs.append((source, os.path.normpath(rest[i]).replace(os.sep, "/")))
+        else:
+            return _err("jar", "%s: no such file or folder" % source, err)
+        base = "."   # -C DIR applies to the name after it
+        i += 1
+    existing = {}
+    if mode[0] == "u" and os.path.exists(jarfile):
+        with zipfile.ZipFile(jarfile) as archive:
+            existing = {n: archive.read(n) for n in archive.namelist()}
+    names = {name for _, name in pairs}
+    text = None
+    if manifest:
+        with open(manifest, encoding="utf-8") as handle:
+            text = handle.read()
+    elif "META-INF/MANIFEST.MF" in names:
+        text = None
+    elif "META-INF/MANIFEST.MF" in existing:
+        text = existing.pop("META-INF/MANIFEST.MF").decode("utf-8", "replace")
+    else:
+        text = "Manifest-Version: 1.0\nCreated-By: Nyxian Shell\n"
+    if text is not None:
+        if entry:
+            lines = [l for l in text.replace("\r\n", "\n").split("\n") if l and not l.startswith("Main-Class:")]
+            text = "\n".join(lines + ["Main-Class: " + entry]) + "\n"
+        if not text.endswith("\n"):
+            text += "\n"
+    temporary = jarfile + ".tmp"
+    with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as archive:
+        if text is not None:
+            archive.writestr("META-INF/MANIFEST.MF", text.replace("\n", "\r\n"))
+        for path, name in pairs:
+            if name == "META-INF/MANIFEST.MF" and text is not None:
+                continue
+            if os.path.abspath(path) == os.path.abspath(jarfile):
+                continue
+            archive.write(path, name)
+            existing.pop(name, None)
+            if verbose:
+                out.write("adding: %s\n" % name)
+        for name, data in existing.items():
+            archive.writestr(name, data)
+    os.replace(temporary, jarfile)
+    return 0
+
+
 def _node_command(name, args):
     """node, npm, npx, corepack — or a command npm installed. None if not one."""
     node = _node()
@@ -4578,6 +4804,8 @@ def b_which(args, inp, out, err):
     for name in args:
         if name in BUILTINS:
             out.write("%s: built-in command of Nyxian Shell\n" % name)
+        elif name in ("java", "javac") and _java():
+            out.write(_java() + "\n")
         elif name in ("node", "nodejs") and _node():
             out.write(_node() + "\n")
         elif name in _NODE_TOOLS and _node():
@@ -4705,6 +4933,7 @@ def b_help(args, inp, out, err):
         "  jobs     jobs · fg [%%n] · bg [%%n] · kill [-9|-STOP|-CONT] PID|%%n · ^Z stops the program in front\n"
         "  programs python3 FILE.py · pip install NAME · your command line tools (by path or PATH)\n"
         "  node     node [FILE.js] · npm install/run/ls … · npx NAME · commands in node_modules/.bin\n"
+        "  java     java FILE.java / java -jar APP.jar / java -cp DIR CLASS · javac -d DIR FILES · jar cf/tf/xf/uf (miniJVM: Java 8 subset)\n"
         "  scripts  sh FILE.sh / source FILE: its lines run in Nyxian Shell · ./tool with #! runs with its interpreter\n"
         "  syntax   a | b · > file · >> file · < file · 2> file · 2>&1 · a ; b · a && b · a || b · cmd & · $VAR ~ *.py\n" % VERSION)
     return 0
@@ -4758,6 +4987,7 @@ BUILTINS = {
     "unset": b_unset, "which": b_which, "clear": b_clear, "history": b_history, "sleep": b_sleep,
     "true": b_true, "false": b_false, "exit": b_exit, "jobs": b_jobs, "fg": b_fg, "bg": b_bg,
     "kill": b_kill, "help": b_help, "source": b_source, ".": b_source, "sh": b_source, "bash": b_source,
+    "jar": b_jar,
 }
 # changing the shell itself: never in a pipe's thread or the background
 _SHELL_STATE = {"cd", "export", "unset", "exit", "fg", "bg", "jobs", "kill", "history", "clear", "source", ".", "sh", "bash"}
@@ -5004,11 +5234,16 @@ def run_pipeline(pipeline, background, text):
             stages.append(("noop", command, None))
             continue
         name = argv[0]
-        node_argv = None if name in BUILTINS or name == "pip" else _node_command(name, list(argv[1:]))
+        node_argv = None if name in BUILTINS or name == "pip" else (_java_command(name, list(argv[1:])) or _node_command(name, list(argv[1:])))
         if name == "pip":
             stages.append(("program", command, [sys.executable, "-m", "nyxian_pip"] + argv[1:]))
         elif name in BUILTINS:
             stages.append(("builtin", command, None))
+        elif isinstance(node_argv, str) and node_argv.startswith("status:"):
+            return int(node_argv[7:])
+        elif isinstance(node_argv, str) and not node_argv.startswith("npx:") and node_argv != "node":
+            sys.stderr.write(node_argv + "\n")
+            return 2 if node_argv.startswith("usage") else 127
         elif isinstance(node_argv, str):
             if node_argv.startswith("npx:"):
                 sys.stderr.write("npx: %s is not installed here: npm install %s (then npx %s, or just %s)\n"
@@ -6364,8 +6599,9 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             } catch {
                 NSLog("[ForkPython] background preparation failed: %@", "\(error)")
             }
-            /* fork: then Node.js (one signing at a time) */
+            /* fork: then Node.js and Java (one signing at a time) */
             ForkNode.warmUp()
+            ForkJava.warmUp()
         }
     }
     
@@ -6538,12 +6774,18 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             ?? ProjectFileIndex.files(in: root).first { $0.pathExtension.lowercased() == "py" }
             ?? [root.appendingPathComponent("main.js"), root.appendingPathComponent("index.js")].first { FileManager.default.fileExists(atPath: $0.path) }
             ?? ProjectFileIndex.files(in: root).first { ForkNode.isScript($0) }
+            ?? [root.appendingPathComponent("Main.java")].first { FileManager.default.fileExists(atPath: $0.path) }
+            ?? ProjectFileIndex.files(in: root).first { ForkJava.isSource($0) }
         guard let script else {
             presenter.forkGitHubAlert("Python", "This project has no .py or .js file yet. Make one with New › File (name.py or name.js).")
             return
         }
         if ForkNode.isScript(script) {
             ForkNode.run(script: script, project: project, from: presenter)
+            return
+        }
+        if ForkJava.isSource(script) {
+            ForkJava.run(script: script, project: project, from: presenter)
             return
         }
         run(script: script, project: project, from: presenter)
@@ -6647,6 +6889,10 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         ]
         if let workingDirectory { environment["PYTHONPATH"] = workingDirectory.path }
         /* fork: node, npm and npx in Nyxian Shell (and commands npm install -g puts in .node/bin) */
+        /* fork: java, javac (miniJVM) in Nyxian Shell */
+        if let java = ForkJava.readyLauncher() {
+            environment.merge(ForkJava.environment(launcher: java)) { old, _ in old }
+        }
         if let node = ForkNode.readyLauncher() {
             environment.merge(ForkNode.environment(launcher: node)) { old, _ in old }
             environment["PATH"] = ForkNode.globalPrefix.appendingPathComponent("bin").path + ":" + (environment["PATH"] ?? "")
@@ -6819,7 +7065,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         alert.addAction(UIAlertAction(title: "Add a File of the Project…", style: .default) { [weak alert] _ in
             let typed = alert?.textFields?.first?.text ?? ""
             let root: URL = project.map { $0.url as URL } ?? script.deletingLastPathComponent()
-            let files = ProjectFileIndex.files(in: root).filter { !["py", "js", "mjs", "cjs"].contains($0.pathExtension.lowercased()) && !$0.path.contains("/Config/") }.prefix(40)
+            let files = ProjectFileIndex.files(in: root).filter { !["py", "js", "mjs", "cjs", "java"].contains($0.pathExtension.lowercased()) && !$0.path.contains("/Config/") }.prefix(40)
             let sheet = UIAlertController(title: "File of the Project", message: files.isEmpty ? "No data files in this project yet." : nil, preferredStyle: .actionSheet)
             for file in files {
                 let relative = ProjectFileIndex.relativePath(file, root: root)
@@ -6840,6 +7086,8 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             UserDefaults.standard.set(text, forKey: argumentsKey(script))
             if ForkNode.isScript(script) {
                 ForkNode.run(script: script, project: project, from: presenter)
+            } else if ForkJava.isSource(script) {
+                ForkJava.run(script: script, project: project, from: presenter)
             } else {
                 run(script: script, project: project, from: presenter)
             }
@@ -7373,6 +7621,538 @@ enum ForkNode {
     }
 }
 
+// MARK: - fork: Java (miniJVM, an interpreter) — java, javac, jar, .java files
+
+/// Java for iOS (Shared/java-ios.zip: miniJVM, its class library — a Java 8
+/// subset — and the janino compiler), unpacked into opt/java and signed once.
+enum ForkJava {
+    static let name = "miniJVM"
+
+    enum Failure: LocalizedError {
+        case notBundled, server
+        var errorDescription: String? {
+            switch self {
+            case .notBundled: return "This build of Nyxian has no Java runtime (Shared/java-ios.zip)."
+            case .server: return "Could not open a local port for CheerpJ."
+            }
+        }
+    }
+
+    static var rootfs: URL { NXBootstrap.shared().rootfsURL }
+    static var home: URL { rootfs.appendingPathComponent("opt/java") }
+    static var userHome: URL { rootfs.appendingPathComponent("var/mobile") }
+    private static var bundledZip: URL { Bundle.main.bundleURL.appendingPathComponent("Shared/java-ios.zip") }
+    private static let stampKey = "fork.java.stamp"
+    private static let launcherKey = "fork.java.launcher"
+    private static let signingRevision = 1
+    private static let queue = DispatchQueue(label: "fork.java.install")
+
+    static var isBundled: Bool { FileManager.default.fileExists(atPath: bundledZip.path) }
+
+    private static var launcherEntitlements: [String: Any] {
+        [
+            "org.emexlabs.nyxian.get-task-allow": true,
+            "org.emexlabs.nyxian.sandbox.file.read": [
+                "$(NXROOT)/opt/java"
+            ],
+            "org.emexlabs.nyxian.sandbox.file.read-write": [
+                "$(NXROOT)/var/mobile"   /* home, projects' run folders */
+            ]
+        ]
+    }
+
+    private static var launcherURL: URL { home.appendingPathComponent("bin/java") }
+    private static var launcherOriginal: URL { home.appendingPathComponent("bin/.java.original") }
+
+    private static func signLauncher() -> Bool {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: launcherOriginal.path) {
+            try? fm.removeItem(at: launcherURL)
+            guard (try? fm.copyItem(at: launcherOriginal, to: launcherURL)) != nil else { return false }
+        }
+        guard LCUtils.signMachO(at: launcherURL) else { return false }
+        _ = trust_nxt2_sign(launcherURL.path, launcherEntitlements as CFDictionary, true, nil)
+        return true
+    }
+
+    private static var identity: String? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: bundledZip.path) else { return nil }
+        let checksum = (try? String(contentsOf: bundledZip.appendingPathExtension("sha256"), encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = (checksum?.count == 64) ? "sha256:\(checksum!)" : "\((attributes[.size] as? NSNumber)?.intValue ?? 0)-\((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)"
+        return "\(base)-\(signingRevision)"
+    }
+
+    static func readyLauncher() -> String? {
+        let defaults = UserDefaults.standard
+        guard let stamp = defaults.string(forKey: stampKey), stamp == identity,
+              let launcher = defaults.string(forKey: launcherKey),
+              FileManager.default.fileExists(atPath: launcher),
+              FileManager.default.fileExists(atPath: home.appendingPathComponent("lib/minijvm_rt.jar").path) else { return nil }
+        return launcher
+    }
+
+    static func prepare(progress: @escaping (String) -> Void) throws -> String {
+        try queue.sync {
+            if let ready = readyLauncher() { return ready }
+            guard let stamp = identity else { throw Failure.notBundled }
+            let fm = FileManager.default
+            progress("Unpacking Java (\(name))…")
+            try? fm.removeItem(at: home)
+            let opt = home.deletingLastPathComponent()
+            try fm.createDirectory(at: opt, withIntermediateDirectories: true)
+            guard unzipArchiveAtPath(bundledZip.path, opt.path) else { throw Failure.notBundled }
+            progress("Signing java…")
+            try? fm.removeItem(at: launcherOriginal)
+            try? fm.copyItem(at: launcherURL, to: launcherOriginal)
+            guard signLauncher() else { throw ForkNode.Failure.signing("java") }
+            var found: String?
+            for _ in 1...6 {
+                found = LDEApplicationWorkspace.shared().fastpathUtility(launcherURL.path)
+                if found != nil { break }
+                Thread.sleep(forTimeInterval: 0.5)
+                _ = signLauncher()
+                Thread.sleep(forTimeInterval: 0.5)
+            }
+            guard let launcher = found else { throw ForkNode.Failure.fastpath }
+            UserDefaults.standard.set(stamp, forKey: stampKey)
+            UserDefaults.standard.set(launcher, forKey: launcherKey)
+            return launcher
+        }
+    }
+
+    /// After Node.js's background preparation.
+    static func warmUp() {
+        guard isBundled, readyLauncher() == nil else { return }
+        do {
+            _ = try prepare { _ in }
+            DispatchQueue.main.async {
+                NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Java is ready: java, javac, jar", withDelay: 0.0)
+            }
+        } catch {
+            NSLog("[ForkJava] background preparation failed: %@", "\(error)")
+        }
+    }
+
+    static func environment(launcher: String) -> [String: String] {
+        let tmp = userHome.appendingPathComponent("tmp")
+        try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        return [
+            "NYXIAN_JAVA": launcher,
+            "NYXIAN_JAVA_HOME": home.path,
+            "TMPDIR": tmp.path,   /* java FILE.java compiles there */
+        ]
+    }
+
+    static func isSource(_ url: URL) -> Bool { url.pathExtension.lowercased() == "java" }
+
+    /// Runs `command` in Nyxian Shell (java needs the shell: -jar, FILE.java) from a copy of the project.
+    static func runInShell(_ command: String, title: String, project root: URL, from presenter: UIViewController) {
+        let openTexts = LiveEditorRegistry.openTexts()
+        let runFolder = ForkPython.mirrorFolder(project: root)
+        DispatchQueue.global(qos: .userInitiated).async {
+            /* Java is prepared on first use when the background preparation has not finished */
+            if readyLauncher() == nil, isBundled { _ = try? prepare { _ in } }
+            DispatchQueue.main.async {
+                ForkPython.launch(from: presenter, arguments: ["-m", "nyxian_shell", "-c", command], workingDirectory: runFolder, title: title, beforeLaunch: {
+                    _ = try ForkPython.mirror(project: root, openTexts: openTexts)
+                }, onExit: { _ in
+                    let copied = ForkPython.copyOutput(project: root)
+                    DispatchQueue.main.async { NotificationCenter.default.post(name: Notification.Name("FileListRefresh"), object: nil) }
+                    guard !copied.isEmpty else { return nil }
+                    let list = copied.prefix(10).joined(separator: ", ") + (copied.count > 10 ? " … (+\(copied.count - 10))" : "")
+                    return "[copied to the project: \(list)]"
+                })
+            }
+        }
+    }
+
+    static func quote(_ text: String) -> String {
+        let plain = text.allSatisfy { $0.isLetter || $0.isNumber || "-_./:=+@%,".contains($0) }
+        return plain && !text.isEmpty ? text : "'" + text.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
+    /// ▶ on a .java file: java FILE.java (compiled with janino, run with miniJVM).
+    static func run(script: URL, project: NXProject?, from presenter: UIViewController) {
+        presenter.view.window?.endEditing(true)
+        let root: URL = project.map { $0.url as URL } ?? script.deletingLastPathComponent()
+        let relative = ProjectFileIndex.relativePath(script, root: root)
+        let arguments = ForkPython.splitArguments(ForkPython.savedArguments(for: script))
+        let command = (["java", relative] + arguments).map(quote).joined(separator: " ")
+        runInShell(command, title: "java \(script.lastPathComponent)", project: root, from: presenter)
+    }
+
+    /// A .jar in the Files list: java -jar with miniJVM, from its folder.
+    static func runJar(_ jar: URL, project: NXProject?, from presenter: UIViewController) {
+        let root: URL = project.map { $0.url as URL } ?? jar.deletingLastPathComponent()
+        let relative = ProjectFileIndex.relativePath(jar, root: root)
+        runInShell("java -jar \(quote(relative))", title: "java -jar \(jar.lastPathComponent)", project: root, from: presenter)
+    }
+
+    static func reinstall(from presenter: UIViewController) {
+        UserDefaults.standard.removeObject(forKey: stampKey)
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = try? prepare { _ in }
+            DispatchQueue.main.async {
+                ForkPython.launch(from: presenter, arguments: ["-m", "nyxian_shell", "-c", "java -version"], workingDirectory: userHome, title: "Java")
+            }
+        }
+    }
+
+    /// A .jar opened in Files: run it here (miniJVM) or in the browser (CheerpJ, full Java), or open its contents.
+    static func presentJarActions(_ jar: URL, project: NXProject?, from presenter: UIViewController, sourceView: UIView?) {
+        let sheet = UIAlertController(title: jar.lastPathComponent, message: "miniJVM runs it here, offline (a Java 8 subset, no windows). CheerpJ runs the full Java (8–21, with Swing windows) in Nyxian's browser; it needs the internet.", preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "Run (java -jar, miniJVM)", style: .default) { _ in runJar(jar, project: project, from: presenter) })
+        sheet.addAction(UIAlertAction(title: "Run in Browser (CheerpJ)", style: .default) { _ in ForkCheerpJ.present(jar: jar, from: presenter) })
+        sheet.addAction(UIAlertAction(title: "Open Contents (to edit)", style: .default) { _ in
+            ForkJarEditor.extract(jar, from: presenter)
+            (presenter as? FileListViewController)?.forkReloadEntries()
+        })
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        sheet.popoverPresentationController?.sourceView = sourceView ?? presenter.view
+        sheet.popoverPresentationController?.sourceRect = sourceView?.bounds ?? CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 1, height: 1)
+        presenter.present(sheet, animated: true)
+    }
+}
+
+/// A .jar is a ZIP: "Open Contents" makes NAME.jar.contents (edit MANIFEST, resources, classes),
+/// "Pack into NAME.jar" writes it back (the old jar is kept as NAME.jar.bak).
+enum ForkJarEditor {
+    static let suffix = ".jar.contents"
+
+    static func contentsFolder(for jar: URL) -> URL {
+        jar.deletingLastPathComponent().appendingPathComponent(jar.deletingPathExtension().lastPathComponent + suffix)
+    }
+
+    static func jar(for folder: URL) -> URL? {
+        let name = folder.lastPathComponent
+        guard name.hasSuffix(suffix), name.count > suffix.count else { return nil }
+        return folder.deletingLastPathComponent().appendingPathComponent(String(name.dropLast(suffix.count)) + ".jar")
+    }
+
+    static func extract(_ jar: URL, from presenter: UIViewController) {
+        let folder = contentsFolder(for: jar)
+        let fm = FileManager.default
+        if fm.fileExists(atPath: folder.path) {
+            NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "\(folder.lastPathComponent) is already there: edit it, then hold it › Pack into \(jar.lastPathComponent)", withDelay: 0.0)
+            return
+        }
+        do {
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        } catch {
+            presenter.forkGitHubAlert("Open Contents", error.localizedDescription)
+            return
+        }
+        if unzipArchiveAtPathWithoutParentDirectory(jar.path, folder.path) || unzipArchiveAtPath(jar.path, folder.path) {
+            NotificationCenter.default.post(name: Notification.Name("FileListRefresh"), object: nil)
+            NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Opened in \(folder.lastPathComponent). Edit its files, then hold the folder › Pack into \(jar.lastPathComponent)", withDelay: 0.0)
+        } else {
+            try? fm.removeItem(at: folder)
+            presenter.forkGitHubAlert("Open Contents", "\(jar.lastPathComponent) is not a readable ZIP/JAR file.")
+        }
+    }
+
+    static func pack(_ folder: URL, from presenter: UIViewController) {
+        guard let jar = jar(for: folder) else { return }
+        let fm = FileManager.default
+        let temporary = jar.deletingLastPathComponent().appendingPathComponent(".\(jar.lastPathComponent).new")
+        try? fm.removeItem(at: temporary)
+        guard zipDirectoryAtPath(folder.path, temporary.path, false) else {
+            presenter.forkGitHubAlert("Pack into .jar", "Could not write \(jar.lastPathComponent).")
+            return
+        }
+        if fm.fileExists(atPath: jar.path) {
+            let backup = jar.appendingPathExtension("bak")
+            try? fm.removeItem(at: backup)
+            try? fm.moveItem(at: jar, to: backup)
+        }
+        do {
+            try fm.moveItem(at: temporary, to: jar)
+            NotificationCenter.default.post(name: Notification.Name("FileListRefresh"), object: nil)
+            NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Packed \(jar.lastPathComponent) (the previous one is \(jar.lastPathComponent).bak)", withDelay: 0.0)
+        } catch {
+            presenter.forkGitHubAlert("Pack into .jar", error.localizedDescription)
+        }
+    }
+}
+
+// MARK: - fork: CheerpJ — the full Java (8–21, Swing) in Nyxian's browser
+
+/// Serves a jar's folder over http://127.0.0.1 (CheerpJ reads /app/… from the page's server,
+/// with Range requests) and shows a page that runs the jar with CheerpJ (loaded from its
+/// CDN: free for personal use; needs the internet).
+final class ForkCheerpJ: UIViewController, WKNavigationDelegate, WKScriptMessageHandler {
+    private static var server: ForkStaticServer?
+    private var webView: WKWebView!
+    private var jar: URL!
+    private var javaVersion = 17
+    private var page: URL?
+
+    static func present(jar: URL, from presenter: UIViewController) {
+        let controller = ForkCheerpJ()
+        controller.jar = jar
+        controller.javaVersion = classVersion(of: jar)
+        let navigation = UINavigationController(rootViewController: controller)
+        navigation.modalPresentationStyle = .fullScreen
+        var top = presenter
+        while let next = top.presentedViewController, !next.isBeingDismissed { top = next }
+        top.present(navigation, animated: true)
+    }
+
+    /// The Java a jar was made for (class file version) → the CheerpJ runtime to use.
+    static func classVersion(of jar: URL) -> Int {
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent("cheerpj-probe-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: folder) }
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        guard unzipArchiveAtPathWithoutParentDirectory(jar.path, folder.path) || unzipArchiveAtPath(jar.path, folder.path),
+              let enumerator = fm.enumerator(at: folder, includingPropertiesForKeys: nil) else { return 17 }
+        var highest = 0
+        var seen = 0
+        for case let url as URL in enumerator where url.pathExtension == "class" {
+            if let handle = try? FileHandle(forReadingFrom: url), let head = try? handle.read(upToCount: 8), head.count == 8 {
+                highest = max(highest, Int(head[6]) << 8 | Int(head[7]))
+                try? handle.close()
+            }
+            seen += 1
+            if seen > 40 { break }
+        }
+        switch highest {
+        case 0...52: return 8
+        case 53...55: return 11
+        case 56...61: return 17
+        case 62...65: return 21
+        default: return highest > 65 ? 25 : 17
+        }
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = jar.lastPathComponent
+        view.backgroundColor = .systemBackground
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(self, name: "nyxian")
+        webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = self
+        webView.isInspectable = true
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+        navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in
+            self?.webView.loadHTMLString("", baseURL: nil)
+            self?.webView.configuration.userContentController.removeScriptMessageHandler(forName: "nyxian")
+            self?.dismiss(animated: true)
+        })
+        navigationItem.rightBarButtonItems = [
+            UIBarButtonItem(image: UIImage(systemName: "arrow.clockwise"), primaryAction: UIAction { [weak self] _ in self?.start() }),
+            UIBarButtonItem(title: "Java \(javaVersion)", image: nil, primaryAction: nil, menu: versionMenu()),
+        ]
+        start()
+    }
+
+    private func versionMenu() -> UIMenu {
+        UIMenu(title: "Java runtime (CheerpJ)", children: [8, 11, 17, 21].map { version in
+            UIAction(title: "Java \(version)", state: version == javaVersion ? .on : .off) { [weak self] _ in
+                guard let self else { return }
+                self.javaVersion = version
+                self.navigationItem.rightBarButtonItems?.last?.title = "Java \(version)"
+                self.navigationItem.rightBarButtonItems?.last?.menu = self.versionMenu()
+                self.start()
+            }
+        })
+    }
+
+    private func start() {
+        do {
+            let folder = jar.deletingLastPathComponent()
+            let server = try Self.server ?? ForkStaticServer()
+            Self.server = server
+            server.root = folder
+            server.page = pageHTML()
+            guard let url = URL(string: "http://127.0.0.1:\(server.port)/") else { return }
+            webView.load(URLRequest(url: url))
+        } catch {
+            webView.loadHTMLString("<p style='font-family:-apple-system;padding:20px'>Could not start the local server: \(error.localizedDescription)</p>", baseURL: nil)
+        }
+    }
+
+    private func pageHTML() -> String {
+        let name = jar.lastPathComponent.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? jar.lastPathComponent
+        return """
+        <!doctype html><html><head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>\(jar.lastPathComponent)</title>
+        <style>
+          html,body{margin:0;height:100%;background:#1e1e1e;color:#ddd;font:13px -apple-system,sans-serif}
+          #display{position:absolute;top:0;left:0;right:0;bottom:34%;background:#2b2b2b}
+          #out{position:absolute;left:0;right:0;bottom:0;height:34%;margin:0;padding:8px;overflow:auto;
+               box-sizing:border-box;font:12px ui-monospace,Menlo,monospace;white-space:pre-wrap;border-top:1px solid #444}
+          .err{color:#ff7b72}.info{color:#8b949e}
+        </style>
+        <script src="https://cjrtnc.leaningtech.com/5.0/loader.js"></script>
+        </head><body>
+        <div id="display"></div><pre id="out"><span class="info">CheerpJ · Java \(javaVersion) · \(jar.lastPathComponent)
+        Loading the Java runtime from cjrtnc.leaningtech.com (needs the internet; the first time takes a while)…
+        </span></pre>
+        <script>
+        const out = document.getElementById("out");
+        function show(text, cls) {
+          const span = document.createElement("span");
+          if (cls) span.className = cls;
+          span.textContent = text + "\\n";
+          out.appendChild(span);
+          out.scrollTop = out.scrollHeight;
+        }
+        for (const [name, cls] of [["log", ""], ["info", ""], ["warn", "err"], ["error", "err"]]) {
+          const original = console[name].bind(console);
+          console[name] = (...args) => { original(...args); show(args.map(String).join(" "), cls); };
+        }
+        window.addEventListener("error", (e) => show(String(e.message), "err"));
+        (async () => {
+          if (typeof cheerpjInit !== "function") {
+            show("CheerpJ could not be loaded: check the internet connection, then ↻.", "err");
+            return;
+          }
+          try {
+            await cheerpjInit({ version: \(javaVersion), status: "default" });
+            const box = document.getElementById("display");
+            cheerpjCreateDisplay(-1, -1, box);
+            show("Running /app/\(name)…", "info");
+            const code = await cheerpjRunJar("/app/\(name)");
+            show("[exit code " + code + "]", "info");
+            window.webkit.messageHandlers.nyxian.postMessage("exit:" + code);
+          } catch (e) {
+            show(String(e && e.stack || e), "err");
+          }
+        })();
+        </script></body></html>
+        """
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {}
+
+    deinit {
+        webView?.configuration.userContentController.removeScriptMessageHandler(forName: "nyxian")
+    }
+}
+
+/// A tiny HTTP server on 127.0.0.1 for CheerpJ: "/" is the page, "/app/…" the jar's folder
+/// (GET and HEAD, with Range requests).
+final class ForkStaticServer {
+    let port: UInt16
+    var root: URL = URL(fileURLWithPath: "/")
+    var page = ""
+    private let listener: NWListener
+    private let queue: DispatchQueue
+
+    init() throws {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: .any)
+        let listener = try NWListener(using: parameters)
+        let queue = DispatchQueue(label: "fork.cheerpj.server")
+        let ready = DispatchSemaphore(value: 0)
+        var assigned: UInt16 = 0
+        listener.stateUpdateHandler = { state in
+            if case .ready = state { assigned = listener.port?.rawValue ?? 0; ready.signal() }
+            if case .failed = state { ready.signal() }
+        }
+        listener.newConnectionHandler = { $0.cancel() }
+        listener.start(queue: queue)
+        _ = ready.wait(timeout: .now() + 3)
+        guard assigned != 0 else {
+            listener.cancel()
+            throw ForkJava.Failure.server
+        }
+        self.listener = listener
+        self.queue = queue
+        self.port = assigned
+        listener.newConnectionHandler = { [weak self] connection in self?.serve(connection) }
+    }
+
+    private func serve(_ connection: NWConnection) {
+        connection.start(queue: queue)
+        receive(connection, buffer: Data())
+    }
+
+    private func receive(_ connection: NWConnection, buffer: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, complete, error in
+            guard let self else { connection.cancel(); return }
+            var buffer = buffer
+            if let data { buffer.append(data) }
+            if let end = buffer.range(of: Data("\r\n\r\n".utf8)) {
+                let head = String(decoding: buffer[..<end.lowerBound], as: UTF8.self)
+                self.respond(connection, head: head)
+                return
+            }
+            if complete || error != nil || buffer.count > 65536 { connection.cancel(); return }
+            self.receive(connection, buffer: buffer)
+        }
+    }
+
+    private func respond(_ connection: NWConnection, head: String) {
+        let lines = head.components(separatedBy: "\r\n")
+        let parts = (lines.first ?? "").split(separator: " ")
+        let method = parts.first.map(String.init) ?? "GET"
+        var path = parts.count > 1 ? String(parts[1]) : "/"
+        if let query = path.firstIndex(of: "?") { path = String(path[..<query]) }
+        path = path.removingPercentEncoding ?? path
+        var headers: [String: String] = [:]
+        for line in lines.dropFirst() {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            headers[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        }
+        var body = Data()
+        var status = "200 OK"
+        var type = "application/octet-stream"
+        var extra = ""
+        if path == "/" || path == "/index.html" {
+            body = Data(page.utf8)
+            type = "text/html; charset=utf-8"
+        } else {
+            let relative = path.hasPrefix("/app/") ? String(path.dropFirst(5)) : String(path.dropFirst())
+            let file = root.appendingPathComponent(relative).standardizedFileURL
+            var isFolder: ObjCBool = false
+            if !relative.contains(".."), file.path.hasPrefix(root.standardizedFileURL.path),
+               FileManager.default.fileExists(atPath: file.path, isDirectory: &isFolder), !isFolder.boolValue,
+               let data = try? Data(contentsOf: file, options: .mappedIfSafe) {
+                type = file.pathExtension == "jar" ? "application/java-archive" : (file.pathExtension == "html" ? "text/html" : "application/octet-stream")
+                extra = "Accept-Ranges: bytes\r\n"
+                if let range = headers["range"], range.hasPrefix("bytes=") {
+                    let bounds = range.dropFirst(6).split(separator: "-", omittingEmptySubsequences: false)
+                    let total = data.count
+                    var start = Int(bounds.first ?? "") ?? 0
+                    var end = bounds.count > 1 ? (Int(bounds[1]) ?? total - 1) : total - 1
+                    if bounds.first?.isEmpty == true, let suffix = Int(bounds.count > 1 ? bounds[1] : "") { start = max(0, total - suffix); end = total - 1 }
+                    end = min(end, total - 1)
+                    if start <= end, start < total {
+                        body = data.subdata(in: start..<(end + 1))
+                        status = "206 Partial Content"
+                        extra += "Content-Range: bytes \(start)-\(end)/\(total)\r\n"
+                    } else {
+                        status = "416 Range Not Satisfiable"
+                        extra += "Content-Range: bytes */\(total)\r\n"
+                    }
+                } else {
+                    body = data
+                }
+            } else {
+                status = "404 Not Found"
+                body = Data("not found".utf8)
+                type = "text/plain"
+            }
+        }
+        var response = "HTTP/1.1 \(status)\r\nContent-Type: \(type)\r\nContent-Length: \(body.count)\r\n\(extra)Cache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
+        var payload = Data(response.utf8)
+        if method != "HEAD" { payload.append(body) }
+        connection.send(content: payload, completion: .contentProcessed { _ in connection.cancel() })
+    }
+}
+
 /// One-time edits of Nyxian's own copy of the iOS SDK so it builds without Xcode-only compiler plugins.
 enum ForkSDKPatches {
     private static let markerName = ".nyxian-fork-sdk-patches"
@@ -7445,6 +8225,7 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
     private enum Row {
         case console, shell, shellHome, packages, install, examples, notebook, browser, arguments
         case nodeConsole, npmInstall, npmList, nodeReinstall
+        case javaShell, javaReinstall
         case folder(String, String, URL)     /* title, symbol, folder */
         case about, changelog, reinstall
     }
@@ -7470,6 +8251,8 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
              [.shell, .shellHome, .arguments]),
             ("Node.js \(ForkNode.version)", "JavaScript without JIT (iOS). ▶ runs .js files; in Shell: node, npm, npx. Packages with native code (.node) or install scripts do not work.",
              [.nodeConsole, .npmInstall, .npmList]),
+            ("Java (\(ForkJava.name))", "▶ runs .java files (Java 8 language, miniJVM's class library: a subset of the JDK, no windows). In Shell: java, javac, jar. A .jar in Files: run here, in the browser with CheerpJ (full Java 8–21, Swing; needs the internet) or open its contents to edit.",
+             [.javaShell]),
             ("Web", "Flask, Django, node servers and webbrowser.open() open here by themselves.", [.browser]),
             ("Folders", "Read-only views of the folders Python and the compiler use (inside Nyxian's root).", [
                 .folder("python HOME", "folder", python),
@@ -7477,11 +8260,12 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
                 .folder("python STDLIB", "books.vertical", python.appendingPathComponent("lib/python\(ForkPython.version)")),
                 .folder("node NODE_MODULES (npm install -g)", "shippingbox.fill", ForkNode.globalModules),
                 .folder("node HOME (npm, corepack)", "folder", ForkNode.home),
+                .folder("java HOME (miniJVM, javac)", "cup.and.saucer", ForkJava.home),
                 .folder("Home (var/mobile)", "house", ForkPython.rootfs.appendingPathComponent("var/mobile")),
                 .folder("clang / swift SYSROOT (iOS SDK)", "hammer", NXBootstrap.shared().sdkURL),
                 .folder("Projects", "folder.badge.gearshape", NXBootstrap.shared().rootURL.appendingPathComponent("Projects")),
             ]),
-            ("This Fork", nil, [.about, .changelog, .reinstall, .nodeReinstall]),
+            ("This Fork", nil, [.about, .changelog, .reinstall, .nodeReinstall, .javaReinstall]),
         ]
     }
 
@@ -7518,6 +8302,8 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
         case .npmInstall: return ("Install Package (npm)…", "shippingbox", "npm install -g: require() finds it from any script")
         case .npmList: return ("Installed Packages (npm ls -g)", "list.bullet", nil)
         case .nodeReinstall: return ("Reinstall Node.js", "arrow.clockwise", "Unpacks and signs Node.js again (your packages stay)")
+        case .javaShell: return ("Java in Shell", "cup.and.saucer", "java -version, javac, java -jar")
+        case .javaReinstall: return ("Reinstall Java", "arrow.clockwise", "Unpacks and signs miniJVM again")
         }
     }
 
@@ -7532,6 +8318,7 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
         cell.imageView?.image = UIImage(systemName: symbol)
         if case .reinstall = row { cell.textLabel?.textColor = .systemRed }
         if case .nodeReinstall = row { cell.textLabel?.textColor = .systemRed }
+        if case .javaReinstall = row { cell.textLabel?.textColor = .systemRed }
         if case .folder = row { cell.detailTextLabel?.font = .monospacedSystemFont(ofSize: 11, weight: .regular) }
         cell.accessoryType = .disclosureIndicator
         return cell
@@ -7567,6 +8354,8 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
         case .npmInstall: ForkNode.promptInstallPackage(from: self)
         case .npmList: ForkNode.listPackages(from: self)
         case .nodeReinstall: ForkNode.reinstall(from: self)
+        case .javaShell: ForkPython.launch(from: self, arguments: ["-m", "nyxian_shell", "-c", "java -version; echo; echo 'java FILE.java · javac -d DIR FILES · java -jar APP.jar · jar tf APP.jar'"], workingDirectory: ForkJava.userHome, title: "Java")
+        case .javaReinstall: ForkJava.reinstall(from: self)
         }
     }
 
@@ -8135,6 +8924,59 @@ servidor.listen(3000, "127.0.0.1", () => {
   console.log("Servidor en http://127.0.0.1:3000");
 });
 """#], open: "server.js"),
+        ForkPythonExample(title: "Java (miniJVM)", detail: "Clases, interfaces, lambdas, colecciones y archivos; ▶ corre Main.java", symbol: "cup.and.saucer", files: ["Main.java": #"""
+// Java en Nyxian (miniJVM): ▶ (o ⌘R) compila y corre este archivo.
+// En el Shell del proyecto: javac -d clases Main.java · java -cp clases Main
+// · jar cfe app.jar Main -C clases . · java -jar app.jar
+import java.io.*;
+import java.util.*;
+
+public class Main {
+    interface Figura { double area(); }
+
+    static class Circulo implements Figura {
+        final double r;
+        Circulo(double r) { this.r = r; }
+        public double area() { return Math.PI * r * r; }
+        public String toString() { return "Círculo(r=" + r + ")"; }
+    }
+
+    static class Rectangulo implements Figura {
+        final double a, b;
+        Rectangulo(double a, double b) { this.a = a; this.b = b; }
+        public double area() { return a * b; }
+        public String toString() { return "Rectángulo(" + a + "×" + b + ")"; }
+    }
+
+    public static void main(String[] args) throws IOException {
+        System.out.println("Hola desde Java en Nyxian. Argumentos: " + Arrays.toString(args));
+
+        List<Figura> figuras = new ArrayList<>();
+        figuras.add(new Circulo(1.5));
+        figuras.add(new Rectangulo(2, 3));
+        figuras.add(new Circulo(0.5));
+        Collections.sort(figuras, (x, y) -> Double.compare(x.area(), y.area()));
+        double total = 0;
+        for (Figura f : figuras) {
+            System.out.printf("%-22s área %.3f%n", f, f.area());
+            total += f.area();
+        }
+        System.out.printf("Total: %.3f%n", total);
+
+        Map<String, Integer> cuenta = new TreeMap<>();
+        for (String palabra : "el sol y el mar y el cielo".split(" ")) {
+            Integer n = cuenta.get(palabra);
+            cuenta.put(palabra, n == null ? 1 : n + 1);
+        }
+        System.out.println("Palabras: " + cuenta);
+
+        FileWriter w = new FileWriter("resultado.txt");
+        w.write("total=" + total + "\n");
+        w.close();
+        System.out.println("Guardado resultado.txt (llega al proyecto al terminar)");
+    }
+}
+"""#], open: "Main.java"),
         ForkPythonExample(title: "SciPy", detail: "Ajuste de curvas, optimización e integración", symbol: "function", files: ["main.py": #"""
 import numpy as np
 from scipy import optimize, integrate, stats

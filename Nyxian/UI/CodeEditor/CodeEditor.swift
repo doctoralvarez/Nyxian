@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.19.0
+ Fork doctoralvarez/Nyxian — version 1.20.0
  Changelog:
+  - 1.20.0 (2026-11-10): Java — .java files run with miniJVM (▶, ⌘R, Run
+    with Arguments, Shell in This Project) and are colored
+    (tree-sitter-java).
   - 1.19.0 (2026-11-10): JavaScript — .js/.mjs/.cjs files run with Node.js
     (▶, ⌘R, Run with Arguments ⌥⌘R, Shell in This Project, Node.js Console)
     and are colored (tree-sitter-javascript).
@@ -118,6 +121,7 @@ import TreeSitterCPP
 import TreeSitterSwift
 import TreeSitterPython
 import TreeSitterJavaScript
+import TreeSitterJava
 import GameController
 import MobileDevelopmentKit
 
@@ -340,6 +344,11 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         case "swift":
             loadLanguage(language: tree_sitter_swift(), highlightsURL: [
                 URL(fileURLWithPath: "\(Bundle.main.bundlePath)/TreeSitterSwift_TreeSitterSwift.bundle/queries/highlights.scm")
+            ])
+        case "java":
+            /* fork: Java (miniJVM / CheerpJ) */
+            loadLanguage(language: tree_sitter_java(), highlightsURL: [
+                URL(fileURLWithPath: "\(Bundle.main.bundlePath)/TreeSitterJava_TreeSitterJava.bundle/queries/highlights.scm")
             ])
         case "js", "mjs", "cjs", "jsx":
             /* fork: JavaScript (Node.js) */
@@ -617,8 +626,8 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             }
         }
         
-        /* fork: run a JavaScript file with Node.js (always on the bar) */
-        if let url = self.file.fileURL, ForkNode.isScript(url) {
+        /* fork: run a Java or JavaScript file (always on the bar) */
+        if let url = self.file.fileURL, ForkNode.isScript(url) || ForkJava.isSource(url) {
             items.append(UIBarButtonItem(customView: SymbolButton(symbolName: "play.fill", width: compactBar ? 32.0 : 35.0) { [weak self] in
                 self?.forkRunNodeFile()
             }))
@@ -629,10 +638,12 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
                     guard let self else { return }
                     ForkPython.openShell(from: self, project: self.project, script: self.file.fileURL)
                 })
-                moreActions.append(UIAction(title: "Node.js Console", image: UIImage(systemName: "curlybraces")) { [weak self] _ in
-                    guard let self else { return }
-                    ForkNode.openConsole(from: self)
-                })
+                if ForkNode.isScript(url) {
+                    moreActions.append(UIAction(title: "Node.js Console", image: UIImage(systemName: "curlybraces")) { [weak self] _ in
+                        guard let self else { return }
+                        ForkNode.openConsole(from: self)
+                    })
+                }
             }
         }
         /* fork: run a Python file (always on the bar) */
@@ -911,9 +922,9 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         if self.project != nil, !self.isReadOnly {
             commands.append(command("Toggle Breakpoint", #selector(forkToggleBreakpoint), "\\"))
         }
-        /* fork: JavaScript files run with Node.js */
-        if let url = self.file.fileURL, ForkNode.isScript(url) {
-            commands.append(command("Run with Node.js", #selector(forkRunNodeFile), "r"))
+        /* fork: JavaScript files run with Node.js, Java files with miniJVM */
+        if let url = self.file.fileURL, ForkNode.isScript(url) || ForkJava.isSource(url) {
+            commands.append(command(ForkJava.isSource(url) ? "Run with Java" : "Run with Node.js", #selector(forkRunNodeFile), "r"))
             commands.append(command("Run with Arguments…", #selector(forkRunNodeWithArguments), "r", [.command, .alternate]))
         }
         /* fork: Python files run with Python 3 (takes ⌘R from the project's Run while one is open) */
@@ -1104,13 +1115,15 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         
         guard self.languageServer != nil else {
             /* fork: Python files have no language server, but get their own commands */
-            if let url = self.file.fileURL, ForkNode.isScript(url) {
+            if let url = self.file.fileURL, ForkNode.isScript(url) || ForkJava.isSource(url) {
+                let java = ForkJava.isSource(url)
                 builder.insertChild(UIMenu(options: .displayInline, children: [
-                    UIAction(title: "Run with Node.js", image: UIImage(systemName: "play.fill")) { _ in self.forkRunNodeFile() },
+                    UIAction(title: java ? "Run with Java" : "Run with Node.js", image: UIImage(systemName: "play.fill")) { _ in self.forkRunNodeFile() },
                     UIAction(title: "Run with Arguments…", image: UIImage(systemName: "text.badge.plus")) { _ in self.forkRunNodeWithArguments() },
-                    UIAction(title: "Shell in This Project", image: UIImage(systemName: "apple.terminal")) { _ in ForkPython.openShell(from: self, project: self.project, script: self.file.fileURL) },
+                    UIAction(title: "Shell in This Project", image: UIImage(systemName: "apple.terminal")) { _ in ForkPython.openShell(from: self, project: self.project, script: self.file.fileURL) }
+                ] + (java ? [] : [
                     UIAction(title: "Node.js Console", image: UIImage(systemName: "curlybraces")) { _ in ForkNode.openConsole(from: self) }
-                ]), atEndOfMenu: .standardEdit)
+                ])), atEndOfMenu: .standardEdit)
             } else if self.file.fileURL?.pathExtension.lowercased() == "py" {
                 builder.insertChild(UIMenu(options: .displayInline, children: [
                     UIAction(title: "Run Python File", image: UIImage(systemName: "play.fill")) { _ in self.forkRunPythonFile() },
@@ -2003,7 +2016,7 @@ enum LiveEditorRegistry {
         let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
         let candidates = editors.allObjects.compactMap { editor -> (URL, Bool)? in
             guard editor.viewIfLoaded?.window != nil, let url: URL = editor.file.fileURL,
-                  ["py", "js", "mjs", "cjs"].contains(url.pathExtension.lowercased()),
+                  ["py", "js", "mjs", "cjs", "java"].contains(url.pathExtension.lowercased()),
                   url.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(rootPath) else { return nil }
             return (url, editor.textView.isFirstResponder)
         }
@@ -3715,7 +3728,11 @@ extension CodeEditorViewController {
         guard let url = self.file.fileURL else { return }
         NXDocumentManager.shared().saveAll { [weak self] in
             guard let self else { return }
-            ForkNode.run(script: url, project: self.project, from: self)
+            if ForkJava.isSource(url) {
+                ForkJava.run(script: url, project: self.project, from: self)
+            } else {
+                ForkNode.run(script: url, project: self.project, from: self)
+            }
         }
     }
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-# Fork doctoralvarez/Nyxian — version 1.1.0
+# Fork doctoralvarez/Nyxian — version 1.2.0
 # Changelog:
+#  - 1.2.0 (2026-11-10): java FILE.java, javac, java -jar, jar cfe/tf/xf with
+#    miniJVM when NYXIAN_TEST_JAVA_HOME has bin/java and lib/ (CI builds one).
 #  - 1.1.0 (2026-11-10): scripts with #! (python, sh), sh FILE / source, and
 #    node / npm / npx when the machine has Node.js (as NYXIAN_NODE).
 #  - 1.0.0 (2026-11-09): CI test of Nyxian Shell (nyxian_shell) in a pseudo
@@ -40,6 +42,9 @@ def spawn(helpers, work):
                     | termios.ECHOCTL | termios.ISIG | termios.IEXTEN)
         termios.tcsetattr(0, termios.TCSANOW, attrs)
         os.environ.update(NYXIAN_TERMINAL="1", PYTHONPATH=helpers, PYTHONUNBUFFERED="1", HOME=work)
+        java_home = os.environ.get("NYXIAN_TEST_JAVA_HOME")
+        if java_home:
+            os.environ.update(NYXIAN_JAVA=os.path.join(java_home, "bin", "java"), NYXIAN_JAVA_HOME=java_home, TMPDIR=work)
         node = shutil.which("node")
         if node:
             # as in Nyxian: node by path, npm's scripts under NYXIAN_NODE_HOME
@@ -92,6 +97,11 @@ def main():
     os.chmod(os.path.join(work, "herramienta"), 0o755)
     with open(os.path.join(work, "pasos.sh"), "w") as handle:
         handle.write("# comentario\necho paso uno $1\ncat datos.txt | grep -c o\n")
+    with open(os.path.join(work, "Hola.java"), "w") as handle:
+        handle.write("import java.util.*;\npublic class Hola {\n  public static void main(String[] a) {\n"
+                     "    List<Integer> l = new ArrayList<>(Arrays.asList(3, 1, 2)); Collections.sort(l);\n"
+                     "    StringBuilder b = new StringBuilder(); for (String x : a) b.append(b.length() > 0 ? \",\" : \"\").append(x);\n"
+                     "    System.out.println(\"hola java \" + l + \" \" + b);\n  }\n}\n")
     with open(os.path.join(work, "hola.js"), "w") as handle:
         handle.write("console.log('hola desde node', process.argv.slice(2).join(','));\n")
     fd = spawn(helpers, work)
@@ -123,6 +133,14 @@ def main():
         (b"source pasos.sh\r", b"\r\n3\r\n"),
         (b"sh -c 'echo dentro'\r", b"dentro"),
     ]
+    if os.environ.get("NYXIAN_TEST_JAVA_HOME"):
+        checks += [
+            (b"java Hola.java x y\r", b"hola java [1, 2, 3] x,y"),
+            (b"mkdir -p clases && javac -d clases Hola.java && ls clases\r", b"Hola.class"),
+            (b"jar cfe hola.jar Hola -C clases . && jar tf hola.jar\r", b"META-INF/MANIFEST.MF"),
+            (b"java -jar hola.jar z\r", b"hola java [1, 2, 3] z"),
+            (b"java -cp clases Hola w | grep java\r", b"hola java [1, 2, 3] w"),
+        ]
     if shutil.which("node"):
         checks += [
             (b"node hola.js a b\r", b"hola desde node a,b"),
