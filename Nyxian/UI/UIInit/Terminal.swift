@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.6.0
+ Fork doctoralvarez/Nyxian — version 1.6.1
  Changelog:
+  - 1.6.1 (2026-11-10): the key bar scrolls sideways when the slide starts on
+    a key (UIScrollView did not cancel a touch on a button, and the keys
+    cover the whole bar: on iPhone paste, clear, A−/A+… were out of reach).
   - 1.6.0 (2026-11-10): web pages from the terminal open in Nyxian's browser:
     webbrowser.open() in Python (ESC ] 7770 ; nyxian-open ; url BEL), and
     local servers when they say where they listen (Flask, Django, uvicorn…).
@@ -376,6 +379,11 @@ import UIKit
 
 // MARK: - Fork: key bar above the keyboard
 
+/// A slide that starts on a key scrolls the bar (a plain UIScrollView leaves a touch on a button to it).
+final class ForkKeyBarScrollView: UIScrollView {
+    override func touchesShouldCancel(in view: UIView) -> Bool { true }
+}
+
 final class ForkTerminalKeyBar: UIInputView {
     private weak var terminal: TerminalViewObjC?
     
@@ -454,8 +462,9 @@ final class ForkTerminalKeyBar: UIInputView {
                 })
             }
         }
-        let scroll = UIScrollView()
+        let scroll = ForkKeyBarScrollView()
         scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.canCancelContentTouches = true
         scroll.showsHorizontalScrollIndicator = false
         scroll.alwaysBounceHorizontal = true
         scroll.delaysContentTouches = false

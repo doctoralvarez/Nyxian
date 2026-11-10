@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.24.0
+ Fork doctoralvarez/Nyxian — version 1.25.0
  Changelog:
+  - 1.25.0 (2026-11-10): turtle works: `import turtle` draws in memory and
+    done() / the end of the script shows the drawing as PNG (iOS has no Tk);
+    a turtle example.
   - 1.24.0 (2026-11-10): Python panel (tap </>): Modules, console, Shell (home
     or Python HOME $), ARGS, examples and tutorials, notebooks, the browser,
     the folders (python HOME, SITE-PACKAGES, STDLIB, SDK sysroot, Projects),
@@ -5309,6 +5312,611 @@ def main():
 if __name__ == "__main__":
     main()
 """#,
+        "nyxian_turtle.py": #"""
+# turtle in Nyxian: iOS has no Tk window, so the turtle draws in memory and
+# done() / mainloop() / exitonclick() (or the end of the script) saves the
+# drawing as PNG (turtle/ in the run folder) and shows it like a plt.show().
+# `import turtle` loads this module.
+import atexit
+import math
+import os
+import sys
+
+__all__ = ["Turtle", "Pen", "RawTurtle", "Screen", "TurtleScreen", "Vec2D", "done", "mainloop",
+           "exitonclick", "bye", "Terminator"]
+
+
+class Terminator(Exception):
+    pass
+
+
+class Vec2D(tuple):
+    def __new__(cls, x, y):
+        return tuple.__new__(cls, (x, y))
+
+    def __add__(self, other):
+        return Vec2D(self[0] + other[0], self[1] + other[1])
+
+    def __sub__(self, other):
+        return Vec2D(self[0] - other[0], self[1] - other[1])
+
+    def __mul__(self, other):
+        if isinstance(other, Vec2D):
+            return self[0] * other[0] + self[1] * other[1]
+        return Vec2D(self[0] * other, self[1] * other)
+
+    __rmul__ = __mul__
+
+    def __abs__(self):
+        return math.hypot(self[0], self[1])
+
+    def __neg__(self):
+        return Vec2D(-self[0], -self[1])
+
+    def __repr__(self):
+        return "(%.2f,%.2f)" % self
+
+
+def _color(args):
+    if not args:
+        return None
+    if len(args) == 1:
+        value = args[0]
+    else:
+        value = tuple(args)
+    if isinstance(value, tuple) and len(value) == 3:
+        mode = _screen()._colormode
+        if mode == 255:
+            value = tuple(c / 255.0 for c in value)
+    return value
+
+
+class TurtleScreen:
+    def __init__(self):
+        self._turtles = []
+        self._bg = "white"
+        self._title = "turtle"
+        self._colormode = 1.0
+        self._shown = False
+        self._world = None
+        self._size = (800, 600)
+
+    # window-ish settings
+    def bgcolor(self, *args):
+        if not args:
+            return self._bg
+        self._bg = _color(args)
+
+    def title(self, text):
+        self._title = str(text)
+
+    def setup(self, width=800, height=600, startx=None, starty=None):
+        if isinstance(width, int) and isinstance(height, int):
+            self._size = (width, height)
+
+    def screensize(self, canvwidth=None, canvheight=None, bg=None):
+        if bg is not None:
+            self._bg = bg
+        if canvwidth and canvheight:
+            self._size = (canvwidth, canvheight)
+        return self._size
+
+    def setworldcoordinates(self, llx, lly, urx, ury):
+        self._world = (llx, lly, urx, ury)
+
+    def colormode(self, mode=None):
+        if mode is None:
+            return self._colormode
+        self._colormode = 255 if mode == 255 else 1.0
+
+    def window_width(self):
+        return self._size[0]
+
+    def window_height(self):
+        return self._size[1]
+
+    def turtles(self):
+        return list(self._turtles)
+
+    def clear(self):
+        for t in self._turtles:
+            t.clear()
+
+    clearscreen = clear
+
+    def reset(self):
+        for t in self._turtles:
+            t.reset()
+
+    resetscreen = reset
+
+    # animation and events: the drawing is shown once, at the end
+    def tracer(self, n=None, delay=None):
+        return 1
+
+    def delay(self, delay=None):
+        return 0
+
+    def update(self):
+        pass
+
+    def listen(self, xdummy=None, ydummy=None):
+        pass
+
+    def onkey(self, fun, key=None):
+        pass
+
+    onkeyrelease = onkeypress = onkey
+
+    def onclick(self, fun, btn=1, add=None):
+        pass
+
+    onscreenclick = onclick
+
+    def ontimer(self, fun, t=0):
+        pass
+
+    def register_shape(self, name, shape=None):
+        pass
+
+    addshape = register_shape
+
+    def textinput(self, title, prompt):
+        return input("%s: " % prompt)
+
+    def numinput(self, title, prompt, default=None, minval=None, maxval=None):
+        text = input("%s: " % prompt)
+        try:
+            return float(text)
+        except ValueError:
+            return default
+
+    def mainloop(self):
+        self._show()
+
+    done = mainloop
+
+    def exitonclick(self):
+        self._show()
+
+    def bye(self):
+        self._show()
+
+    def getcanvas(self):
+        return None
+
+    # drawing
+    def _show(self):
+        if self._shown:
+            return
+        self._shown = True
+        if not any(t._items or t._current for t in self._turtles):
+            return
+        try:
+            from matplotlib.backends.backend_agg import FigureCanvasAgg
+            from matplotlib.figure import Figure
+            from matplotlib.patches import Polygon
+        except Exception as error:
+            sys.stderr.write("turtle: matplotlib is needed to draw (%s)\n" % error)
+            return
+        width, height = self._size
+        figure = Figure(figsize=(width / 100.0, height / 100.0), dpi=100)
+        FigureCanvasAgg(figure)
+        figure.patch.set_facecolor(self._bg)
+        axes = figure.add_axes([0, 0, 1, 1])
+        axes.set_facecolor(self._bg)
+        axes.set_axis_off()
+        axes.set_aspect("equal" if self._world is None else "auto")
+        xs, ys = [0.0], [0.0]
+        for t in self._turtles:
+            for kind, data in t._items + ([("line", t._current)] if t._current else []):
+                if kind == "fill":
+                    points, color = data
+                    if len(points) > 2:
+                        axes.add_patch(Polygon(points, closed=True, facecolor=color, edgecolor="none", zorder=1))
+                        xs += [p[0] for p in points]
+                        ys += [p[1] for p in points]
+                elif kind == "line":
+                    points, color, size = data
+                    if len(points) > 1:
+                        axes.plot([p[0] for p in points], [p[1] for p in points], color=color,
+                                  linewidth=size * 0.75, solid_capstyle="round", solid_joinstyle="round", zorder=2)
+                        xs += [p[0] for p in points]
+                        ys += [p[1] for p in points]
+                elif kind == "dot":
+                    (x, y), size, color = data
+                    axes.scatter([x], [y], s=(size * 0.75) ** 2, c=[color], zorder=3, linewidths=0)
+                    xs.append(x)
+                    ys.append(y)
+                elif kind == "text":
+                    (x, y), text, color, align, font = data
+                    family, size, style = (list(font) + ["Arial", 8, "normal"][len(font):])[:3]
+                    axes.text(x, y, text, color=color, ha={"left": "left", "right": "right"}.get(align, "center"),
+                              va="bottom", fontsize=size, fontweight="bold" if "bold" in str(style) else "normal",
+                              fontstyle="italic" if "italic" in str(style) else "normal", zorder=4)
+                    xs.append(x)
+                    ys.append(y)
+            if t._visible:
+                x, y = t._pos
+                a = math.radians(t._heading)
+                tip = (x + 10 * math.cos(a), y + 10 * math.sin(a))
+                left = (x + 6 * math.cos(a + 2.5), y + 6 * math.sin(a + 2.5))
+                right = (x + 6 * math.cos(a - 2.5), y + 6 * math.sin(a - 2.5))
+                axes.add_patch(Polygon([tip, left, (x, y), right], closed=True, facecolor=t._fill,
+                                       edgecolor=t._pen, zorder=5))
+        if self._world:
+            llx, lly, urx, ury = self._world
+            axes.set_xlim(llx, urx)
+            axes.set_ylim(lly, ury)
+        else:
+            margin = 20
+            left, right = min(xs) - margin, max(xs) + margin
+            bottom, top = min(ys) - margin, max(ys) + margin
+            half_w = max(width / 2.0, abs(left), abs(right))
+            half_h = max(height / 2.0, abs(bottom), abs(top))
+            axes.set_xlim(-half_w, half_w)
+            axes.set_ylim(-half_h, half_h)
+        folder = os.environ.get("NYXIAN_PLOT_DIR") or os.path.join(os.getcwd(), "figures")
+        os.makedirs(folder, exist_ok=True)
+        number = 1
+        while os.path.exists(os.path.join(folder, "turtle-%d.png" % number)):
+            number += 1
+        path = os.path.join(folder, "turtle-%d.png" % number)
+        figure.savefig(path, dpi=144, facecolor=figure.get_facecolor())
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except Exception:
+                pass
+        if os.environ.get("NYXIAN_TERMINAL") == "1":
+            os.write(1, ("\x1b]7770;nyxian-preview;%s\x07" % path).encode("utf-8"))
+        os.write(1, ("[turtle: %s]\n" % os.path.relpath(path)).encode("utf-8"))
+
+
+_the_screen = None
+
+
+def _screen():
+    global _the_screen
+    if _the_screen is None:
+        _the_screen = TurtleScreen()
+        atexit.register(_the_screen._show)
+    return _the_screen
+
+
+def Screen():
+    return _screen()
+
+
+class RawTurtle:
+    def __init__(self, canvas=None, shape="classic", undobuffersize=1000, visible=True):
+        self.screen = _screen()
+        self.screen._turtles.append(self)
+        self._visible = visible
+        self.reset()
+
+    def reset(self):
+        self._pos = Vec2D(0.0, 0.0)
+        self._heading = 0.0
+        self._down = True
+        self._pen = "black"
+        self._fill = "black"
+        self._size = 1
+        self._items = []
+        self._current = None
+        self._filling = None
+        self._degrees = 360.0
+
+    def clear(self):
+        self._items = []
+        self._current = None
+        self._filling = None
+
+    # moving
+    def _move_to(self, x, y):
+        x, y = float(x), float(y)
+        if self._down:
+            if self._current is None:
+                self._current = ([tuple(self._pos)], self._pen, self._size)
+            self._current[0].append((x, y))
+        if self._filling is not None:
+            self._filling.append((x, y))
+        self._pos = Vec2D(x, y)
+
+    def _end_line(self):
+        if self._current is not None:
+            self._items.append(("line", self._current))
+            self._current = None
+
+    def forward(self, distance):
+        a = math.radians(self._heading)
+        self._move_to(self._pos[0] + distance * math.cos(a), self._pos[1] + distance * math.sin(a))
+
+    fd = forward
+
+    def backward(self, distance):
+        self.forward(-distance)
+
+    bk = back = backward
+
+    def _unit(self, angle):
+        return angle * 360.0 / self._degrees
+
+    def left(self, angle):
+        self._heading = (self._heading + self._unit(angle)) % 360
+
+    lt = left
+
+    def right(self, angle):
+        self._heading = (self._heading - self._unit(angle)) % 360
+
+    rt = right
+
+    def goto(self, x, y=None):
+        if y is None:
+            x, y = x
+        self._move_to(x, y)
+
+    setpos = setposition = goto
+
+    def teleport(self, x=None, y=None, *, fill_gap=False):
+        self._end_line()
+        self._pos = Vec2D(self._pos[0] if x is None else float(x), self._pos[1] if y is None else float(y))
+
+    def setx(self, x):
+        self._move_to(x, self._pos[1])
+
+    def sety(self, y):
+        self._move_to(self._pos[0], y)
+
+    def setheading(self, to_angle):
+        self._heading = self._unit(to_angle) % 360
+
+    seth = setheading
+
+    def home(self):
+        self._move_to(0, 0)
+        self._heading = 0.0
+
+    def circle(self, radius, extent=None, steps=None):
+        if extent is None:
+            extent = self._degrees
+        extent = self._unit(extent)
+        if steps is None:
+            steps = 1 + int(min(11 + abs(radius) / 6.0, 59.0) * abs(extent) / 360.0)
+        step_angle = float(extent) / steps
+        length = 2.0 * radius * math.sin(math.radians(step_angle) / 2.0)
+        if radius < 0:
+            length, step_angle = -length, -step_angle
+        self._heading = (self._heading + step_angle / 2.0) % 360
+        for _ in range(steps):
+            a = math.radians(self._heading)
+            self._move_to(self._pos[0] + length * math.cos(a), self._pos[1] + length * math.sin(a))
+            self._heading = (self._heading + step_angle) % 360
+        self._heading = (self._heading - step_angle / 2.0) % 360
+
+    def dot(self, size=None, *color):
+        size = size or max(self._size + 4, 2 * self._size)
+        self._items.append(("dot", (tuple(self._pos), size, _color(color) or self._pen)))
+
+    def stamp(self):
+        return 0
+
+    def clearstamp(self, stampid):
+        pass
+
+    def clearstamps(self, n=None):
+        pass
+
+    def undo(self):
+        pass
+
+    def speed(self, speed=None):
+        return 0
+
+    def degrees(self, fullcircle=360.0):
+        self._degrees = float(fullcircle)
+
+    def radians(self):
+        self._degrees = 2 * math.pi
+
+    # state
+    def position(self):
+        return self._pos
+
+    pos = position
+
+    def xcor(self):
+        return self._pos[0]
+
+    def ycor(self):
+        return self._pos[1]
+
+    def heading(self):
+        return self._heading * self._degrees / 360.0
+
+    def towards(self, x, y=None):
+        if y is None:
+            x, y = x
+        return (math.degrees(math.atan2(y - self._pos[1], x - self._pos[0])) % 360) * self._degrees / 360.0
+
+    def distance(self, x, y=None):
+        if y is None:
+            x, y = x
+        return math.hypot(x - self._pos[0], y - self._pos[1])
+
+    # pen
+    def penup(self):
+        self._end_line()
+        self._down = False
+
+    pu = up = penup
+
+    def pendown(self):
+        self._down = True
+
+    pd = down = pendown
+
+    def isdown(self):
+        return self._down
+
+    def pensize(self, width=None):
+        if width is None:
+            return self._size
+        self._end_line()
+        self._size = width
+
+    width = pensize
+
+    def pencolor(self, *args):
+        if not args:
+            return self._pen
+        self._end_line()
+        self._pen = _color(args)
+
+    def fillcolor(self, *args):
+        if not args:
+            return self._fill
+        self._fill = _color(args)
+
+    def color(self, *args):
+        if not args:
+            return self._pen, self._fill
+        if len(args) == 2 and not all(isinstance(a, (int, float)) for a in args):
+            self.pencolor(args[0])
+            self.fillcolor(args[1])
+        else:
+            self.pencolor(*args)
+            self.fillcolor(*args)
+
+    def pen(self, pen=None, **pendict):
+        settings = dict(pen or {}, **pendict)
+        if "pencolor" in settings:
+            self.pencolor(settings["pencolor"])
+        if "fillcolor" in settings:
+            self.fillcolor(settings["fillcolor"])
+        if "pensize" in settings:
+            self.pensize(settings["pensize"])
+        if settings.get("pendown") is False:
+            self.penup()
+        elif settings.get("pendown") is True:
+            self.pendown()
+        return {"pendown": self._down, "pencolor": self._pen, "fillcolor": self._fill, "pensize": self._size}
+
+    def begin_fill(self):
+        self._filling = [tuple(self._pos)]
+
+    def end_fill(self):
+        if self._filling is not None:
+            # the fill goes under the outline drawn so far
+            self._end_line()
+            self._items.insert(len(self._items) - 1 if self._items else 0, ("fill", (self._filling, self._fill)))
+            self._filling = None
+
+    def filling(self):
+        return self._filling is not None
+
+    def write(self, arg, move=False, align="left", font=("Arial", 8, "normal")):
+        self._items.append(("text", (tuple(self._pos), str(arg), self._pen, align, font)))
+
+    # shape
+    def hideturtle(self):
+        self._visible = False
+
+    ht = hideturtle
+
+    def showturtle(self):
+        self._visible = True
+
+    st = showturtle
+
+    def isvisible(self):
+        return self._visible
+
+    def shape(self, name=None):
+        return "classic"
+
+    def shapesize(self, *args, **kwargs):
+        return (1, 1, 1)
+
+    turtlesize = shapesize
+
+    def getscreen(self):
+        return self.screen
+
+    def clone(self):
+        other = Turtle()
+        other._pos, other._heading, other._pen, other._fill, other._size, other._down = (
+            self._pos, self._heading, self._pen, self._fill, self._size, self._down)
+        return other
+
+    def onclick(self, fun, btn=1, add=None):
+        pass
+
+    onrelease = ondrag = onclick
+
+
+class Turtle(RawTurtle):
+    def __init__(self, shape="classic", undobuffersize=1000, visible=True):
+        RawTurtle.__init__(self, None, shape, undobuffersize, visible)
+
+
+Pen = Turtle
+RawPen = RawTurtle
+
+_the_turtle = None
+
+
+def getturtle():
+    global _the_turtle
+    if _the_turtle is None:
+        _the_turtle = Turtle()
+    return _the_turtle
+
+
+getpen = getturtle
+
+
+def done():
+    _screen().mainloop()
+
+
+mainloop = done
+
+
+def exitonclick():
+    _screen().exitonclick()
+
+
+def bye():
+    _screen().bye()
+
+
+def _make(name, owner):
+    def function(*args, **kwargs):
+        target = getturtle() if owner == "turtle" else _screen()
+        return getattr(target, name)(*args, **kwargs)
+    function.__name__ = name
+    return function
+
+
+_TURTLE = ["forward", "fd", "backward", "bk", "back", "left", "lt", "right", "rt", "goto", "setpos",
+           "setposition", "teleport", "setx", "sety", "setheading", "seth", "home", "circle", "dot", "stamp",
+           "clearstamp", "clearstamps", "undo", "speed", "degrees", "radians", "position", "pos", "xcor", "ycor",
+           "heading", "towards", "distance", "penup", "pu", "up", "pendown", "pd", "down", "isdown", "pensize",
+           "width", "pencolor", "fillcolor", "color", "pen", "begin_fill", "end_fill", "filling", "write",
+           "hideturtle", "ht", "showturtle", "st", "isvisible", "shape", "shapesize", "turtlesize", "reset",
+           "clear", "onrelease", "ondrag"]
+_SCREEN = ["bgcolor", "title", "setup", "screensize", "setworldcoordinates", "colormode", "window_width",
+           "window_height", "turtles", "tracer", "delay", "update", "listen", "onkey", "onkeyrelease",
+           "onkeypress", "onscreenclick", "ontimer", "register_shape", "addshape", "textinput", "numinput",
+           "clearscreen", "resetscreen"]
+for _name in _TURTLE:
+    globals()[_name] = _make(_name, "turtle")
+for _name in _SCREEN:
+    globals()[_name] = _make(_name, "screen")
+__all__ += _TURTLE + _SCREEN + ["getturtle", "getpen", "RawPen"]
+"""#,
         "sitecustomize.py": #"""
 # Nyxian: only when Python runs in a Nyxian terminal window, input() uses
 # Nyxian's line editor (history, ← →, paste), sys.stdout / sys.stderr write
@@ -5316,6 +5924,23 @@ if __name__ == "__main__":
 import os
 
 import sys
+
+try:
+    # iOS has no Tk: `import turtle` loads Nyxian's turtle, which saves the drawing as PNG
+    import importlib.util
+
+    if importlib.util.find_spec("_tkinter") is None:
+        class _NyxianTurtleFinder:
+            @staticmethod
+            def find_spec(name, path=None, target=None):
+                if name != "turtle":
+                    return None
+                return importlib.util.spec_from_file_location(
+                    "turtle", os.path.join(os.path.dirname(os.path.abspath(__file__)), "nyxian_turtle.py"))
+
+        sys.meta_path.insert(0, _NyxianTurtleFinder())
+except Exception:
+    pass
 
 if os.environ.get("NYXIAN_TERMINAL") == "1":
     try:
@@ -6971,6 +7596,27 @@ ejes[2].set_title("Paquimetría (µm)")
 
 fig.tight_layout()
 plt.show()   # la imagen también queda en figures/
+"""#], open: "main.py"),
+        ForkPythonExample(title: "Tortuga (turtle)", detail: "Dibujos con turtle; done() muestra la imagen", symbol: "scribble.variable", files: ["main.py": #"""
+# turtle en Nyxian: iOS no tiene ventanas Tk, así que el dibujo se guarda
+# como PNG en figures/ y se abre al llamar done() (o al terminar).
+import turtle
+
+pantalla = turtle.Screen()
+pantalla.bgcolor("midnightblue")
+t = turtle.Turtle()
+t.pensize(2)
+colores = ["gold", "orange", "tomato", "orchid", "deepskyblue", "lime"]
+for i in range(72):
+    t.pencolor(colores[i % len(colores)])
+    t.circle(120, steps=6)
+    t.left(5)
+t.penup()
+t.goto(0, -200)
+t.pencolor("white")
+t.write("Hola desde Nyxian", align="center", font=("Arial", 18, "bold"))
+t.hideturtle()
+turtle.done()
 """#], open: "main.py"),
         ForkPythonExample(title: "SciPy", detail: "Ajuste de curvas, optimización e integración", symbol: "function", files: ["main.py": #"""
 import numpy as np

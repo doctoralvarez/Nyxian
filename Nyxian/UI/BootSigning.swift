@@ -20,6 +20,16 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-10): a signing certificate that ships inside the app
+    (Shared/Backup/signing.p12 and signing.password — only in the IPA kept
+    on the owner's private backup repository, never in the public build) is
+    installed by itself at the first start when it matches the app's
+    provisioning profile; otherwise Nyxian asks for one as always.
+*/
+
 import UIKit
 import UniformTypeIdentifiers
 
@@ -52,6 +62,23 @@ func validateBootSigningSnapshot(_ identity: BootSigningIdentity) throws {
     }
 }
 
+/// fork: the certificate shipped in the app, saved as if it had been imported, when it fits
+/// the embedded provisioning profile. False when there is none or it does not fit.
+private func forkInstallBundledCertificate() -> Bool {
+    let folder = Bundle.main.bundleURL.appendingPathComponent("Shared/Backup")
+    guard let data = try? Data(contentsOf: folder.appendingPathComponent("signing.p12")), !data.isEmpty,
+          let profile = NXBootSigningProfileData() else { return false }
+    let password = ((try? String(contentsOf: folder.appendingPathComponent("signing.password"), encoding: .utf8)) ?? "")
+        .trimmingCharacters(in: .newlines)
+    var error: NSError?
+    guard NXBootValidateSigningIdentity(data, password, profile, Bundle.main.bundleIdentifier ?? "", Date(), &error) != nil else {
+        NSLog("[boot-signing] the bundled certificate does not fit this installation: %@", error?.localizedDescription ?? "?")
+        return false
+    }
+    NXBootSigningSetCredential(data, password)
+    return CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication)
+}
+
 func requireBootSigning(showSetup: @escaping (BootSigningImportController) -> Void, completion: @escaping () -> Void) {
     DispatchQueue.global(qos: .userInitiated).async {
         do {
@@ -60,6 +87,13 @@ func requireBootSigning(showSetup: @escaping (BootSigningImportController) -> Vo
                 completion()
             }
         } catch {
+            /* fork: the certificate that came with the app, if it is the right one */
+            if forkInstallBundledCertificate(), (try? currentBootSigningIdentity()) != nil {
+                DispatchQueue.main.async {
+                    completion()
+                }
+                return
+            }
             DispatchQueue.main.async {
                 let importer = BootSigningImportController(completion: completion)
                 showSetup(importer)

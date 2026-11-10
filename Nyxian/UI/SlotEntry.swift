@@ -20,6 +20,14 @@
 
  See LICENSE for the full license terms.
 */
+
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-10): no "Welcome to Nyxian" screen (Development,
+    MobileDevelopmentKit…) after installing; Recovery › Settings › "Show
+    welcome screen" brings it back.
+*/
                                         
 import UIKit
 import UIOnboarding
@@ -142,7 +150,10 @@ final class SlotCoordinator: NSObject, UITabBarControllerDelegate, UIOnboardingV
     }
     
     func didAppear() {
-        if UserDefaults.standard.object(forKey: "NXOnboardingSentinel") is NSNumber {
+        /* fork: the welcome screen only when turned on (Recovery › Settings) */
+        if UserDefaults.standard.object(forKey: "NXOnboardingSentinel") is NSNumber
+            || !UserDefaults.standard.bool(forKey: "fork.boot.showWelcome") {
+            UserDefaults.standard.set(NSNumber(booleanLiteral: true), forKey: "NXOnboardingSentinel")
             checkSigningSetup()
             return
         }

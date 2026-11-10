@@ -224,6 +224,37 @@ jobs:
           archive: false
           retention-days: 90
 
+      # fork: a second IPA, ONLY on the private backup, with your signing certificate inside, so a
+      # reinstalled Nyxian does not ask for it (Shared/Backup/signing.p12 + signing.password). The
+      # certificate and its password: signing/ in the private backup repository (the secret
+      # NYXIAN_P12_PASSWORD overrides the password). The public build (the artifact above) never carries it.
+      - name: Back up the IPA with your signing certificate (private)
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+          P12_PASSWORD: ${{ secrets.NYXIAN_P12_PASSWORD }}
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "no SDK_REPO_TOKEN: no IPA with a certificate"; exit 0; }
+          work=$(mktemp -d)
+          gh api "repos/$BACKUP_REPO/contents/signing/nyxian-signing.p12" -H "Accept: application/vnd.github.raw" > "$work/signing.p12" \
+            || { echo "no signing/nyxian-signing.p12 on $BACKUP_REPO"; exit 0; }
+          [ -s "$work/signing.p12" ] || exit 0
+          if [ -z "$P12_PASSWORD" ]; then
+            P12_PASSWORD=$(gh api "repos/$BACKUP_REPO/contents/signing/nyxian-signing.password" -H "Accept: application/vnd.github.raw" 2>/dev/null || true)
+          fi
+          mkdir -p "$work/x"
+          unzip -q Nyxian.ipa -d "$work/x"
+          app=$(ls -d "$work"/x/Payload/*.app | head -1)
+          mkdir -p "$app/Shared/Backup"
+          cp "$work/signing.p12" "$app/Shared/Backup/signing.p12"
+          printf '%s' "$P12_PASSWORD" > "$app/Shared/Backup/signing.password"
+          version=$(sed -n 's/^NYXIAN_FORK_VERSION *= *//p' Config.xcconfig | tr -d ' ')
+          name="Nyxian-${version}-${GITHUB_SHA::7}-cert.ipa"
+          (cd "$work/x" && zip -qry "$work/$name" Payload)
+          ./tools/fork/backup_asset.sh save ipa "$name" "$work/$name"
+          rm -rf "$work"
+
       # fork: every build's IPA also on the private backup (artifacts expire after 90 days)
       - name: Back up the IPA
         if: github.event_name != 'pull_request'

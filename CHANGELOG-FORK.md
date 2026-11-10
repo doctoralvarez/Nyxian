@@ -4,6 +4,24 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.43.0 — 2026-11-10
+
+- **Landscape**: console, shell, Python console and every other window now
+  widen when you turn the iPhone or iPad sideways (title bar included); the
+  windows are laid out again whenever the screen size or safe area changes.
+- **iPhone key bar**: the top row of terminal keys scrolls sideways again,
+  even when the slide starts on a key, so paste and the rest are reachable.
+- **Your signing certificate comes with the private IPA**: the `-cert.ipa`
+  in the private `ipa` release carries it, and Nyxian installs it on its
+  own after a reinstall; if it doesn't match the app's profile, Nyxian asks
+  for one as before. The public build never contains it.
+- **No welcome screen** ("Welcome to Nyxian": Development,
+  MobileDevelopmentKit…) after installing. Recovery › Settings › **Show
+  welcome screen** brings it back, like the TeamWin boot splash.
+- **turtle works**: `import turtle` draws in memory (iOS has no Tk window)
+  and `done()`, `mainloop()`, `exitonclick()` or the end of the script shows
+  the drawing as PNG, saved in `figures/`. New example: Tortuga (turtle).
+
 ## 1.42.0 — 2026-11-10
 
 Python, like Python3IDE's main panel (tanda A):

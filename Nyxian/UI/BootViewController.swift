@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-10): Recovery › Settings › "Show welcome screen" brings back the
+    "Welcome to Nyxian" screen, now off by default.
   - 1.2.0 (2026-11-08): the app delegate gives the orientations chosen in
     Settings (landscape on iPhone too, or one orientation kept).
   - 1.1.0 (2026-11-07): no TeamWin splash image on normal launches (plain
@@ -297,6 +299,14 @@ enum BootConfig {
     static var showBootSplash: Bool {
         get { UserDefaults.standard.bool(forKey: showBootSplashKey) }
         set { UserDefaults.standard.set(newValue, forKey: showBootSplashKey) }
+    }
+    /* fork: the "Welcome to Nyxian" screen after installing (off by default); on: shown at the next launch */
+    static var showWelcome: Bool {
+        get { UserDefaults.standard.bool(forKey: "fork.boot.showWelcome") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "fork.boot.showWelcome")
+            if newValue { UserDefaults.standard.removeObject(forKey: "NXOnboardingSentinel") }
+        }
     }
     
     static var preferBundledIDE: Bool {
@@ -1252,6 +1262,15 @@ private func bootConfigItems() -> [NXRecoveryItem] {
     splash.toggle = true
     splash.checked = BootConfig.showBootSplash
     items.append(splash)
+    /* fork: the "Welcome to Nyxian" screen (Development, MobileDevelopmentKit…) */
+    let welcome: NXRecoveryItem = NXRecoveryItem(title: "Show welcome screen") { c in
+        guard let c else { return }
+        BootConfig.showWelcome.toggle()
+        reload(c)
+    }
+    welcome.toggle = true
+    welcome.checked = BootConfig.showWelcome
+    items.append(welcome)
     // the boot toggles are boot arguments now (BootHandoff/NXBootArgs.h)
     items.append(NXRecoveryItem(title: bootArgumentsSettingTitle()) { c in
         guard let c else { return }

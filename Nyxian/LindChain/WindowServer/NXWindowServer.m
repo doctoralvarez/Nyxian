@@ -20,6 +20,17 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-10): windows follow a rotation on iPhone and iPad: when
+    the screen's size or safe area changes (landscape ↔ portrait, also with
+    the orientation lock of Settings), every window is laid out again —
+    maximized ones (terminals, consoles) take the new full width, with their
+    title bar. Before, only iPad listened, and to the device orientation,
+    which comes before the screen has its new size.
+*/
+
 #import <LindChain/WindowServer/NXWindowServer.h>
 #import <LindChain/WindowServer/NXAppTile.h>
 #import <LindChain/WindowServer/Session/NXWindowSessionApplication.h>
@@ -39,6 +50,9 @@
 @end
 
 @implementation NXWindowServer {
+    /* fork: the size and safe area the windows were laid out for */
+    CGSize _forkLaidOutSize;
+    UIEdgeInsets _forkLaidOutInsets;
     UIStackView *_stackView;
     UIStackView *_placeholderStack;
     NXWindow *_activeWindow;
@@ -84,6 +98,39 @@
 {
     [super layoutSubviews];
     _windowLayer.frame = self.bounds;
+    [self forkRelayoutWindowsIfNeeded];
+}
+
+- (void)safeAreaInsetsDidChange
+{
+    [super safeAreaInsetsDidChange];
+    [self forkRelayoutWindowsIfNeeded];
+}
+
+/* fork: rotation — every window again for the new screen */
+- (void)forkRelayoutWindowsIfNeeded
+{
+    CGSize size = self.bounds.size;
+    UIEdgeInsets insets = self.safeAreaInsets;
+    if(CGSizeEqualToSize(size, _forkLaidOutSize) && UIEdgeInsetsEqualToEdgeInsets(insets, _forkLaidOutInsets))
+    {
+        return;
+    }
+    BOOL first = CGSizeEqualToSize(_forkLaidOutSize, CGSizeZero);
+    _forkLaidOutSize = size;
+    _forkLaidOutInsets = insets;
+    if(first || size.width <= 0 || size.height <= 0)
+    {
+        return;
+    }
+    for(NSNumber *key in self.windows)
+    {
+        NXWindow *window = self.windows[key];
+        if(window == nil) continue;
+        CGRect target = window.isMaximized ? [self window:window wantsToChangeToRect:CGRectZero]
+                                           : [self window:window wantsToChangeToRect:window.view.frame];
+        [window changeWindowToRect:target completion:nil];
+    }
 }
 
 + (instancetype)sharedWithWindowScene:(UIWindowScene*)windowScene
