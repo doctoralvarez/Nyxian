@@ -25,7 +25,7 @@
  Changelog:
   - 1.2.0 (2026-11-10): -initWithItems: records why a spawn failed
     (PEProcessSpawnFailure, logged as PEProcess:spawn) so posix_spawn can
-    return a telling error instead of always EPERM.
+    return a telling error instead of always EPERM. PEForkSigningReport.
   - 1.1.0 (2026-11-07): NXForkDebugger (end of file) — debugger for apps run
     from Nyxian: pause / continue, stop on traps, hardware line breakpoints,
     backtraces with file:line from DWARF line tables of the build's objects.
@@ -50,6 +50,8 @@
 #import <LindChain/ProcEnvironment/Surface/proc/list.h>
 #import <LindChain/ProcEnvironment/Surface/tty/tty.h>
 #import <LindChain/Private/mach/fileport.h>
+#import <LindChain/ProcEnvironment/Surface/trust/trust.h>
+#import <LindChain/ProcEnvironment/Surface/trust/signing.h>
 #include <mach/mach.h>
 #include <unistd.h>
 
@@ -107,6 +109,47 @@ static id PEForkSpawnFailed(int reason, NSString *path)
     PEProcessSpawnFailure = reason;
     klog_log("PEProcess:spawn", "cannot spawn %s: %s (errno %d)", [path isKindOfClass:[NSString class]] ? path.UTF8String : "?", (reason >= 0 && reason <= 6) ? names[reason] : "?", savedErrno);
     return nil;
+}
+
+NSString *PEForkSigningReport(NSArray<NSString *> *paths)
+{
+    NSMutableString *text = [NSMutableString string];
+    for(NSString *path in paths)
+    {
+        [text appendFormat:@"%@\n", path];
+        if(access(path.fileSystemRepresentation, R_OK) != 0)
+        {
+            [text appendFormat:@"  not readable (errno %d)\n", errno];
+            continue;
+        }
+        ksurface_nxt2_t blob;
+        bzero(&blob, sizeof(blob));
+        kern_return_t kr = trust_nxt2_read(path.fileSystemRepresentation, &blob);
+        if(kr != KERN_SUCCESS)
+        {
+            [text appendFormat:@"  NXT2: none or unreadable (kr %d)\n", kr];
+        }
+        else
+        {
+            NSDictionary *entitlements = (__bridge NSDictionary *)blob.entitlements;
+            [text appendFormat:@"  NXT2: valid %d, signed %d, cdhash ok %d, needs resign %d, keys: %@\n",
+                 blob.isValid, blob.isSigned, blob.isCdHashValid, blob.needsResign,
+                 [[entitlements.allKeys sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@", "] ?: @"-"];
+            if(blob.entitlements != NULL) CFRelease(blob.entitlements);
+        }
+        errno = 0;
+        ksurface_trust_identity_t *identity = trust_identity_create_from_path(path.fileSystemRepresentation);
+        if(identity == NULL)
+        {
+            [text appendFormat:@"  identity: refused (errno %d)\n", errno];
+            continue;
+        }
+        PEEntitlementFlags flags = trust_identity_entitlement_flags_from_entitlements(identity->entitlements);
+        [text appendFormat:@"  identity: trust level %u (0 fallback, 1 signature, 2 trusted), may start programs %d\n",
+             (unsigned)identity->trustLevel, entitlement_got_entitlement(flags, kPEEntitlementFlagProcessSpawn) ? 1 : 0];
+        trust_identity_destroy(identity);
+    }
+    return text;
 }
 
 @implementation PEProcess {

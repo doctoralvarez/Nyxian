@@ -23,7 +23,8 @@
 /*
  Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
-  - 1.2.0 (2026-11-10): PEProcessSpawnFailure, why the last spawn failed.
+  - 1.2.0 (2026-11-10): PEProcessSpawnFailure, why the last spawn failed;
+    PEForkSigningReport, how Nyxian sees the signature of some programs.
   - 1.1.1 (2026-11-07): nullability of +shared and the stop dictionary.
   - 1.1.0 (2026-11-07): NXForkDebugger — attaches to a running app through
     its task port: pause / continue, stop on Swift traps, line breakpoints
@@ -57,6 +58,10 @@ typedef NS_ENUM(int, PEProcessSpawnFailureReason) {
     PEProcessSpawnFailureRegister = 6,      /* kernel surface could not register it */
 };
 extern int PEProcessSpawnFailure;
+
+/// fork: for each path, its NXT2 blob (present, valid, signed, cdhash) and the identity and
+/// entitlement flags Nyxian would give it when started (process.spawn among them), as text.
+NSString *PEForkSigningReport(NSArray<NSString *> *paths);
 
 @interface PEProcess : NSObject <FBProcessObserver>
 

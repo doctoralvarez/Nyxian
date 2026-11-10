@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.29.0
+ Fork doctoralvarez/Nyxian — version 1.30.0
  Changelog:
+  - 1.30.0 (2026-11-10): ForkSigningReport: the result of signing each
+    launcher's NXT2 entitlements, and how Nyxian sees python3, node and java
+    (NXT2 blob, trust level, may start programs), written to
+    opt/python/.nyxian-signing.txt each time a terminal opens; Nyxian Shell
+    prints it when a program cannot start. Preparing Python says each step
+    after "Installing pip…" (it seemed stuck there).
   - 1.29.0 (2026-11-10): Nyxian Shell hands a program only stdin, stdout and
     stderr (POSIX_SPAWN_CLOEXEC_DEFAULT + inherit), not all of python3's
     descriptors; when a program cannot start it says why (error number and
@@ -5339,6 +5345,11 @@ def run_pipeline(pipeline, background, text):
                     }.get(error.errno)
                     if why:
                         sys.stderr.write("  %s\n" % why)
+                    report = os.environ.get("NYXIAN_SIGNING_REPORT", "")
+                    if report and os.path.isfile(report):
+                        sys.stderr.write("  --- signatures (send this to fix it) ---\n")
+                        with open(report, encoding="utf-8", errors="replace") as handle:
+                            sys.stderr.write("".join("  " + line for line in handle))
                     if command["argv"][0] in ("java", "javac", "node", "npm", "npx"):
                         sys.stderr.write("  try Reinstall %s in the Python panel, then open a new terminal\n"
                                          % ("Java" if command["argv"][0].startswith("java") else "Node.js"))
@@ -6456,7 +6467,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             guard (try? fm.copyItem(at: launcherOriginal, to: launcher)) != nil else { return false }
         }
         guard LCUtils.signMachO(at: launcher) else { return false }
-        _ = trust_nxt2_sign(launcher.path, launcherEntitlements as CFDictionary, true, nil)
+        ForkSigningReport.note("python3", trust_nxt2_sign(launcher.path, launcherEntitlements as CFDictionary, true, nil))
         return true
     }
     
@@ -6763,9 +6774,12 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                 }
             }
             
+            progress("Writing Nyxian's Python files…")
             writeHelperFiles()
             /* kept packages are signed again for the new runtime */
+            progress("Checking installed packages…")
             try signNewPackageBinaries(progress: progress)
+            progress("Installing python3…")
             guard let launcher = fastpath(launcherURL, progress: progress) else { throw Failure.fastpath }
             defaults.set(stamp, forKey: stampKey)
             defaults.set(launcher, forKey: launcherKey)
@@ -6918,6 +6932,8 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     static func baseEnvironment(workingDirectory: URL?) -> [String: String] {
         var environment = [
             "PYTHONHOME": home.path,
+            /* fork: Nyxian Shell shows it when a program cannot start */
+            "NYXIAN_SIGNING_REPORT": ForkSigningReport.file.path,
             "PYTHONUNBUFFERED": "1",
             "PIP_DISABLE_PIP_VERSION_CHECK": "1",
             /* iOS builds of numpy, Pillow, … (BeeWare's index) and scipy, scikit-learn, … (Flet's index of mobile wheels) */
@@ -6967,6 +6983,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                 let launcher = try prepare { message in
                     DispatchQueue.main.async { progress.message = message }
                 }
+                ForkSigningReport.write()
                 if let beforeLaunch {
                     DispatchQueue.main.async { progress.message = "Copying the project…" }
                     try beforeLaunch()
@@ -7413,6 +7430,36 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
 /// Node.js for iOS (Shared/node-ios.zip: nodejs-mobile's library, npm, the
 /// `node` launcher), unpacked into opt/node and signed once, like Python.
 /// V8 runs without JIT (nodejs-mobile's standard iOS build).
+/// fork: how Nyxian sees the launchers' signatures (NXT2 blob, identity, may start
+/// programs), written next to the runtimes; Nyxian Shell shows it when a program
+/// cannot start.
+enum ForkSigningReport {
+    private static let resultsKey = "fork.signing.results"
+    static var file: URL { ForkPython.home.appendingPathComponent(".nyxian-signing.txt") }  /* python3 may read opt/python */
+
+    /// The result of signing a launcher's NXT2 entitlements (KERN_SUCCESS is 0).
+    static func note(_ name: String, _ result: kern_return_t) {
+        var results = UserDefaults.standard.dictionary(forKey: resultsKey) as? [String: Int] ?? [:]
+        results[name] = Int(result)
+        UserDefaults.standard.set(results, forKey: resultsKey)
+    }
+
+    static func write() {
+        let defaults = UserDefaults.standard
+        var paths: [String] = []
+        for key in ["fork.python.launcher", "fork.node.launcher", "fork.java.launcher"] {
+            if let path = defaults.string(forKey: key) { paths.append(path) }
+        }
+        paths.append(ForkPython.home.appendingPathComponent("bin/python3").path)
+        let results = (defaults.dictionary(forKey: resultsKey) as? [String: Int] ?? [:])
+            .sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", ")
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let text = "Nyxian \(version) — last NXT2 signing (0 = ok): \(results.isEmpty ? "-" : results)\n"
+            + ((PEForkSigningReport(paths) as String?) ?? "")
+        try? text.write(to: file, atomically: true, encoding: .utf8)
+    }
+}
+
 enum ForkNode {
     static let version = "18.20.4"
 
@@ -7466,7 +7513,7 @@ enum ForkNode {
             guard (try? fm.copyItem(at: launcherOriginal, to: launcherURL)) != nil else { return false }
         }
         guard LCUtils.signMachO(at: launcherURL) else { return false }
-        _ = trust_nxt2_sign(launcherURL.path, launcherEntitlements as CFDictionary, true, nil)
+        ForkSigningReport.note(launcherURL.lastPathComponent, trust_nxt2_sign(launcherURL.path, launcherEntitlements as CFDictionary, true, nil))
         return true
     }
 
@@ -7580,6 +7627,7 @@ enum ForkNode {
                 let launcher = try prepare { message in
                     DispatchQueue.main.async { progress.message = message }
                 }
+                ForkSigningReport.write()
                 if let beforeLaunch {
                     DispatchQueue.main.async { progress.message = "Copying the project…" }
                     try beforeLaunch()
@@ -7721,7 +7769,7 @@ enum ForkJava {
             guard (try? fm.copyItem(at: launcherOriginal, to: launcherURL)) != nil else { return false }
         }
         guard LCUtils.signMachO(at: launcherURL) else { return false }
-        _ = trust_nxt2_sign(launcherURL.path, launcherEntitlements as CFDictionary, true, nil)
+        ForkSigningReport.note(launcherURL.lastPathComponent, trust_nxt2_sign(launcherURL.path, launcherEntitlements as CFDictionary, true, nil))
         return true
     }
 

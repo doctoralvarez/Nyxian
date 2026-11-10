@@ -4,6 +4,19 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.48.0 — 2026-11-10
+
+- Still investigating why Nyxian Shell cannot start `node`, `java` (any
+  program): the host refuses python3's spawn request. Now:
+  - the host says whether python3's process was unknown (ESRCH) or lacks
+    the `process.spawn` entitlement (EPERM), and logs it;
+  - each time a terminal opens Nyxian writes `opt/python/.nyxian-signing.txt`:
+    the result of signing each launcher's NXT2 entitlements and how Nyxian
+    sees python3, node and java (NXT2 blob valid/signed/cdhash, trust level,
+    may start programs). The Shell prints it when a program cannot start.
+- Preparing Python shows each step after "Installing pip…" (writing files,
+  checking packages, installing python3), so a stall shows where it is.
+
 ## 1.47.0 — 2026-11-10
 
 - `node` and `java` still could not start from Nyxian Shell ("Operation not

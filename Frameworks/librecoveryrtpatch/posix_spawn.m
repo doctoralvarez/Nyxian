@@ -509,6 +509,8 @@ skip_fileactions:
             case -104: return EBADEXEC;     /* LiveProcess did not start */
             case -105: return ECHILD;       /* ended right away */
             case -106: return EAGAIN;       /* could not be registered */
+            case -90: return ESRCH;         /* this process is unknown to the host */
+            case -91: return EPERM;         /* lacks process.spawn */
             default: return EPERM;
         }
     }

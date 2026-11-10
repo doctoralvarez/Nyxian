@@ -24,7 +24,8 @@
  Fork doctoralvarez/Nyxian — version 1.0.0
  Changelog:
   - 1.0.0 (2026-11-10): posix_spawn replies -(100 + PEProcessSpawnFailure) when
-    the spawn failed, so the caller can tell why.
+    the spawn failed, -90 when the caller's process is unknown and -91 when it
+    lacks process.spawn, so the caller can tell why.
 */
 
 #import <mach/mach.h>
@@ -102,7 +103,9 @@
         /* sanity checking proc */
         if(strongSelf.proc == NULL)
         {
-            reply(-1);
+            /* fork: -90, the caller's own process is not known to ksurface */
+            klog_log("ServerSession:spawn", "no ksurface process for pid %d", strongSelf->_processIdentifier);
+            reply(-90);
             return;
         }
         
@@ -143,7 +146,9 @@
             return;
         }
         
-        reply(-1);
+        /* fork: -91, the caller lacks process.spawn (or sent no path / arguments) */
+        klog_log("ServerSession:spawn", "pid %d may not spawn %s", strongSelf->_processIdentifier, [path isKindOfClass:NSString.class] ? path.UTF8String : "?");
+        reply(-91);
     });
 }
 
