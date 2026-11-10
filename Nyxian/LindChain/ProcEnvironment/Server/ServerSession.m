@@ -20,8 +20,16 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-10): posix_spawn replies -(100 + PEProcessSpawnFailure) when
+    the spawn failed, so the caller can tell why.
+*/
+
 #import <mach/mach.h>
 #import <LindChain/ProcEnvironment/Server/ServerSession.h>
+#import <LindChain/ProcEnvironment/PEProcess.h>
 #import <Frameworks/LiveProcessLegacy/LindChain/Services/bootstrapd/LDEApplicationWorkspace.h>
 #import <LindChain/WindowServer/NXWindowServer.h>
 #import <LindChain/ProcEnvironment/LiveContainer/LCUtils.h>
@@ -121,6 +129,13 @@
             
             /* invoking spawn */
             pid_t pid = [[PEProcessManager shared] spawnProcessWithItems:mutableItems withKernelSurfaceProcess:strongSelf->_proc];
+            
+            /* fork: on failure -(100 + reason), so posix_spawn can say why (-1 stays "not entitled") */
+            if(pid < 0 && PEProcessSpawnFailure > PEProcessSpawnFailureNone)
+            {
+                reply(-(100 + (int64_t)PEProcessSpawnFailure));
+                return;
+            }
             
             /* replying with pid of spawn */
             reply(pid);

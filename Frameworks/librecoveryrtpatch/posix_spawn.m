@@ -21,6 +21,14 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-10): posix_spawn returns an error that says why the host did not
+    start the program (EAUTH signature, EBADEXEC LiveProcess, ECHILD ended
+    right away, ...) instead of always EPERM.
+*/
+
 #import <Foundation/Foundation.h>
 #include <spawn.h>
 #include <limits.h>
@@ -491,9 +499,18 @@ skip_fileactions:
     int64_t pid = environment_proxy_spawn_process_at_path([NSString stringWithCString:resolved encoding:NSUTF8StringEncoding], NSArrayFromCArray(argv), environment, fileTable, nsCwd, spawnFlags, spawnPgroup);
     if(pid < 0)
     {
-        /* lacking entitlements? */
+        /* fork: the host says why (-(100 + reason)); -1 is still "lacking entitlements" */
         free(resolved);
-        return EPERM;
+        switch(pid)
+        {
+            case -101: return EBUSY;        /* process count / lock */
+            case -102: return EINVAL;       /* path, session or process group */
+            case -103: return EAUTH;        /* signature or entitlements refused */
+            case -104: return EBADEXEC;     /* LiveProcess did not start */
+            case -105: return ECHILD;       /* ended right away */
+            case -106: return EAGAIN;       /* could not be registered */
+            default: return EPERM;
+        }
     }
     
     /* overwriting passed process identifier pointer if applicable */

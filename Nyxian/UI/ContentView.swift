@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.28.0
+ Fork doctoralvarez/Nyxian — version 1.29.0
  Changelog:
+  - 1.29.0 (2026-11-10): Nyxian Shell hands a program only stdin, stdout and
+    stderr (POSIX_SPAWN_CLOEXEC_DEFAULT + inherit), not all of python3's
+    descriptors; when a program cannot start it says why (error number and
+    what Nyxian refused: signature, LiveProcess, ended right away, ...).
   - 1.28.0 (2026-11-10): java in Nyxian Shell ("could not start (Operation
     not permitted)"): miniJVM is now lib/libminijvm.dylib, signed like
     NodeMobile, and bin/java a tiny launcher that loads it. python3 may also
@@ -4023,6 +4027,8 @@ class _Spawner:
     kernel runs every program as a process of its own)."""
     SETPGROUP = 0x02
     SETSIGDEF = 0x04
+    CLOEXEC_DEFAULT = 0x4000   # Darwin: only the descriptors named below reach the program
+    DARWIN = sys.platform in ("darwin", "ios")
 
     def __init__(self):
         self.libc = ctypes.CDLL(None, use_errno=True)
@@ -4040,6 +4046,8 @@ class _Spawner:
             for target, fd in sorted(fds.items()):
                 if fd != target:
                     libc.posix_spawn_file_actions_adddup2(actions, fd, target)
+                elif self.DARWIN:
+                    libc.posix_spawn_file_actions_addinherit_np(actions, target)
             # the shell ignores ^Z for itself; its programs must not inherit that
             defaults = ctypes.create_string_buffer(256)
             libc.sigemptyset(defaults)
@@ -4047,7 +4055,10 @@ class _Spawner:
                 if hasattr(signal, name):
                     libc.sigaddset(defaults, int(getattr(signal, name)))
             libc.posix_spawnattr_setsigdefault(attributes, defaults)
-            libc.posix_spawnattr_setflags(attributes, ctypes.c_short(self.SETPGROUP | self.SETSIGDEF))
+            # Python's own descriptors (and the shell's pipes) are not handed to the program:
+            # Nyxian sends every inherited descriptor to the new process
+            flags = self.SETPGROUP | self.SETSIGDEF | (self.CLOEXEC_DEFAULT if self.DARWIN else 0)
+            libc.posix_spawnattr_setflags(attributes, ctypes.c_short(flags))
             libc.posix_spawnattr_setpgroup(attributes, pgid)
             c_argv = (ctypes.c_char_p * (len(argv) + 1))(*[os.fsencode(a) for a in argv], None)
             items = ["%s=%s" % pair for pair in env.items()]
@@ -5317,9 +5328,19 @@ def run_pipeline(pipeline, background, text):
                 try:
                     pid = spawner().spawn(argv[0], argv, env, {0: fd_in, 1: fd_out, 2: fd_err}, job["pgid"])
                 except OSError as error:
-                    sys.stderr.write("%s: could not start (%s)\n" % (command["argv"][0], error.strerror or error))
-                    if error.errno == errno.EPERM and command["argv"][0] in ("java", "javac", "node", "npm", "npx"):
-                        sys.stderr.write("  Nyxian did not let it start: try Reinstall %s in the Python panel, then open a new terminal\n"
+                    sys.stderr.write("%s: could not start (%s, error %s)\n" % (command["argv"][0], error.strerror or error, error.errno))
+                    why = {
+                        getattr(errno, "EAUTH", -1): "Nyxian refused its signature or entitlements",
+                        getattr(errno, "EBADEXEC", -1): "Nyxian could not open a process for it (LiveProcess)",
+                        errno.ECHILD: "it ended as soon as it started",
+                        errno.EBUSY: "too many programs are running",
+                        errno.EINVAL: "the process group was refused",
+                        errno.EPERM: "python3 may not start programs (its signature is old)",
+                    }.get(error.errno)
+                    if why:
+                        sys.stderr.write("  %s\n" % why)
+                    if command["argv"][0] in ("java", "javac", "node", "npm", "npx"):
+                        sys.stderr.write("  try Reinstall %s in the Python panel, then open a new terminal\n"
                                          % ("Java" if command["argv"][0].startswith("java") else "Node.js"))
                     status = 126
                     pid = None

@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.1
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-10): PEProcessSpawnFailure, why the last spawn failed.
   - 1.1.1 (2026-11-07): nullability of +shared and the stop dictionary.
   - 1.1.0 (2026-11-07): NXForkDebugger — attaches to a running app through
     its task port: pause / continue, stop on Swift traps, line breakpoints
@@ -44,6 +45,18 @@
 #import <LindChain/ProcEnvironment/PEProcessObserver.h>
 #import <LindChain/ProcEnvironment/Surface/proc/proc.h>
 #import <Frameworks/LiveProcessLegacy/LindChain/Services/bootstrapd/LDEApplicationWorkspace.h>
+
+/// fork: why the last -initWithItems: failed (spawns are serial), for posix_spawn's error.
+typedef NS_ENUM(int, PEProcessSpawnFailureReason) {
+    PEProcessSpawnFailureNone = 0,
+    PEProcessSpawnFailureBusy = 1,          /* process count or lock */
+    PEProcessSpawnFailureArguments = 2,     /* no path, or bad session / process group */
+    PEProcessSpawnFailureIdentity = 3,      /* the executable's signature or entitlements were refused */
+    PEProcessSpawnFailureLaunch = 4,        /* the LiveProcess extension did not start */
+    PEProcessSpawnFailureExited = 5,        /* it ended right away */
+    PEProcessSpawnFailureRegister = 6,      /* kernel surface could not register it */
+};
+extern int PEProcessSpawnFailure;
 
 @interface PEProcess : NSObject <FBProcessObserver>
 

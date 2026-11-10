@@ -4,6 +4,18 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.47.0 — 2026-11-10
+
+- `node` and `java` still could not start from Nyxian Shell ("Operation not
+  permitted"). The Shell now hands a program only stdin, stdout and stderr
+  instead of every descriptor python3 has open (Nyxian sends each one to the
+  new process).
+- When Nyxian does not start a program it now says why: posix_spawn returns
+  a telling error (signature/entitlements refused, LiveProcess did not
+  start, ended right away, too many processes, process group) instead of
+  always EPERM, and the reason is logged as `PEProcess:spawn`. The Shell
+  prints the error number and the reason.
+
 ## 1.46.1 — 2026-11-10
 
 - Java runtime build: the check that miniJVM's library exports minijvm_main

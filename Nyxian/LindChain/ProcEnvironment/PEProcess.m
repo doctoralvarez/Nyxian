@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-10): -initWithItems: records why a spawn failed
+    (PEProcessSpawnFailure, logged as PEProcess:spawn) so posix_spawn can
+    return a telling error instead of always EPERM.
   - 1.1.0 (2026-11-07): NXForkDebugger (end of file) — debugger for apps run
     from Nyxian: pause / continue, stop on traps, hardware line breakpoints,
     backtraces with file:line from DWARF line tables of the build's objects.
@@ -94,6 +97,18 @@ static void PEAttachControllingTTYForSpawn(NSDictionary *items,
     }
 }
 
+int PEProcessSpawnFailure = PEProcessSpawnFailureNone;
+
+/* fork: remembers and logs why a spawn failed, then gives nil */
+static id PEForkSpawnFailed(int reason, NSString *path)
+{
+    static const char *names[] = { "none", "busy", "arguments", "identity (signature or entitlements)", "launch (LiveProcess)", "exited right away", "register" };
+    int savedErrno = errno;
+    PEProcessSpawnFailure = reason;
+    klog_log("PEProcess:spawn", "cannot spawn %s: %s (errno %d)", [path isKindOfClass:[NSString class]] ? path.UTF8String : "?", (reason >= 0 && reason <= 6) ? names[reason] : "?", savedErrno);
+    return nil;
+}
+
 @implementation PEProcess {
     NSHashTable<id<PEProcessObserver>> *_observers;
     os_unfair_lock _lock;
@@ -104,17 +119,18 @@ static void PEAttachControllingTTYForSpawn(NSDictionary *items,
 - (instancetype)initWithItems:(NSDictionary*)items
      withKernelSurfaceProcess:(ksurface_proc_t*)proc
 {
+    PEProcessSpawnFailure = PEProcessSpawnFailureNone;
     if(proc == NULL ||
        proctil(kProctilActionCount) != KERN_SUCCESS)
     {
-        return nil;
+        return PEForkSpawnFailed(PEProcessSpawnFailureBusy, items[@"PEExecutablePath"]);
     }
     
     self = [super init];
     if(self == nil)
     {
         proctil(kProctilActionUncount);
-        return nil;
+        return PEForkSpawnFailed(PEProcessSpawnFailureBusy, items[@"PEExecutablePath"]);
     }
     atomic_store(&_counted, true);
     
@@ -124,14 +140,14 @@ static void PEAttachControllingTTYForSpawn(NSDictionary *items,
     if(proctil(kProctilActionLock) != KERN_SUCCESS)
     {
         proctil(kProctilActionUncount);
-        return nil;
+        return PEForkSpawnFailed(PEProcessSpawnFailureBusy, items[@"PEExecutablePath"]);
     }
     
     self.executablePath = items[@"PEExecutablePath"];
     if(self.executablePath == nil)
     {
         proctil(kProctilActionUnlock);
-        return nil;
+        return PEForkSpawnFailed(PEProcessSpawnFailureArguments, items[@"PEExecutablePath"]);
     }
     
     short spawnFlags = [items[@"PEPOSIXSpawnFlags"] shortValue];
@@ -141,13 +157,13 @@ static void PEAttachControllingTTYForSpawn(NSDictionary *items,
        (spawnFlags & POSIX_SPAWN_SETPGROUP))
     {
         proctil(kProctilActionUnlock);
-        return nil;
+        return PEForkSpawnFailed(PEProcessSpawnFailureArguments, items[@"PEExecutablePath"]);
     }
     
     if((spawnFlags & POSIX_SPAWN_SETPGROUP) && spawnPgroup < 0)
     {
         proctil(kProctilActionUnlock);
-        return nil;
+        return PEForkSpawnFailed(PEProcessSpawnFailureArguments, items[@"PEExecutablePath"]);
     }
     
     if((spawnFlags & POSIX_SPAWN_SETPGROUP) && spawnPgroup > 0)
@@ -159,7 +175,7 @@ static void PEAttachControllingTTYForSpawn(NSDictionary *items,
         if(!proc_pgrp_exists_in_session(spawnPgroup, parentSid))
         {
             proctil(kProctilActionUnlock);
-            return nil;
+            return PEForkSpawnFailed(PEProcessSpawnFailureArguments, items[@"PEExecutablePath"]);
         }
     }
     
@@ -169,7 +185,7 @@ static void PEAttachControllingTTYForSpawn(NSDictionary *items,
     {
         kvo_unlock(proc);
         proctil(kProctilActionUnlock);
-        return nil;
+        return PEForkSpawnFailed(PEProcessSpawnFailureIdentity, items[@"PEExecutablePath"]);
     }
     
     /* TODO: later on we need to drop allow it to become tighter by using the still not existing trust_identity_create_from_path_with_parent_identity */
@@ -211,7 +227,7 @@ static void PEAttachControllingTTYForSpawn(NSDictionary *items,
     if(self.process == nil)
     {
         proctil(kProctilActionUnlock);
-        return nil;
+        return PEForkSpawnFailed(PEProcessSpawnFailureLaunch, items[@"PEExecutablePath"]);
     }
     
     [self.process addObserver:self];
@@ -222,7 +238,7 @@ static void PEAttachControllingTTYForSpawn(NSDictionary *items,
          * and it already died then we shall handle the exit.
          */
         proctil(kProctilActionUnlock);
-        return nil;
+        return PEForkSpawnFailed(PEProcessSpawnFailureExited, items[@"PEExecutablePath"]);
     }
     
     ksurface_proc_t *child = NULL;
@@ -231,7 +247,7 @@ static void PEAttachControllingTTYForSpawn(NSDictionary *items,
     {
         [self terminate];
         proctil(kProctilActionUnlock);
-        return nil;
+        return PEForkSpawnFailed(PEProcessSpawnFailureRegister, items[@"PEExecutablePath"]);
     }
     else
     {
