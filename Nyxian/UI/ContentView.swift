@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.22.0
+ Fork doctoralvarez/Nyxian — version 1.23.0
  Changelog:
+  - 1.23.0 (2026-11-09): Python is signed once, not at every start: the date
+    kept for each signed package binary was read before signing (a cached
+    value), so the next start signed them all again; now it is the file's
+    real date after signing. Unchanged site-packages are not even scanned
+    (a stamp of the folder), and Nyxian prepares Python in the background
+    as soon as it opens, so Python, the shell, cells and pip start at once.
   - 1.22.0 (2026-11-09): Nyxian Shell (nyxian_shell: built-in ls, cd, grep,
     cat, cp, mv, rm, find…, pipes, redirection, ; && ||, variables, globs,
     programs as processes with ^Z / jobs / fg / bg / kill), in the </> menu
@@ -449,6 +455,8 @@ import UniformTypeIdentifiers
         if sessionIndex != nil {
             reloadProjectsFromDisk()
         }
+        /* fork: Python unpacked and signed now, in the background, not when it is first opened */
+        ForkPython.warmUp()
     }
     
     private var sortedSectionKeys: [String] {
@@ -5425,8 +5433,37 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         try? fm.createSymbolicLink(atPath: link.path, withDestinationPath: "../../libpython\(version).dylib")
     }
     
+    /// The file's modification time as it is on disk now (no cached URL value).
+    private static func modificationTime(_ url: URL) -> Double? {
+        var info = stat()
+        guard stat(url.path, &info) == 0 else { return nil }
+        return Double(info.st_mtimespec.tv_sec) + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000
+    }
+    
+    /// site-packages as a whole: its date and what is in it at the top (pip adds or replaces folders there).
+    private static func sitePackagesStamp() -> String {
+        let fm = FileManager.default
+        let items = ((try? fm.contentsOfDirectory(atPath: sitePackages.path)) ?? []).sorted()
+        var hasher = Hasher()
+        for item in items {
+            hasher.combine(item)
+            hasher.combine(modificationTime(sitePackages.appendingPathComponent(item)) ?? 0)
+        }
+        return "\(modificationTime(sitePackages) ?? 0)-\(items.count)-\(hasher.finalize())"
+    }
+    private static let sitePackagesStampKey = "fork.python.sitePackagesStamp"
+    
     /// Binary modules pip put in site-packages since the last run (numpy, Pillow…) get signed, or iOS refuses to load them.
     private static func signNewPackageBinaries(progress: (String) -> Void) throws {
+        let defaults = UserDefaults.standard
+        /* nothing changed since everything was signed: no need to look at thousands of files */
+        let before = sitePackagesStamp()
+        if defaults.string(forKey: sitePackagesStampKey) == before { return }
+        try signChangedPackageBinaries(progress: progress)
+        defaults.set(sitePackagesStamp(), forKey: sitePackagesStampKey)
+    }
+    
+    private static func signChangedPackageBinaries(progress: (String) -> Void) throws {
         let fm = FileManager.default
         var signed = UserDefaults.standard.dictionary(forKey: signedKey) as? [String: Double] ?? [:]
         var pending: [(URL, Double)] = []
@@ -5436,7 +5473,9 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                 let ext = url.pathExtension.lowercased()
                 guard ext == "so" || ext == "dylib" || url.path.contains(".framework/") else { continue }
                 let stamp = values.contentModificationDate?.timeIntervalSince1970 ?? 0
-                if signed[url.path] == stamp || !isMachO(url) { continue }
+                /* a little slack: dates kept by older versions were rounded differently */
+                if let known = signed[url.path], abs(known - stamp) < 0.001 { continue }
+                if !isMachO(url) { continue }
                 pending.append((url, stamp))
             }
         }
@@ -5460,9 +5499,9 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             if ok { _ = trust_nxt2_sign(entry.0.path, [String: Any]() as CFDictionary, true, nil) }
             defaults.removeObject(forKey: signingNowKey)
             guard ok else { throw Failure.signing(entry.0.lastPathComponent) }
-            /* the signature changes the file: remember its new date, file by file */
-            let date = (try? entry.0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?.timeIntervalSince1970 ?? entry.1
-            signed[entry.0.path] = date
+            /* the signature changes the file: remember its new date, file by file
+               (from the file itself — the URL keeps the date it had before signing) */
+            signed[entry.0.path] = modificationTime(entry.0) ?? entry.1
             defaults.set(signed, forKey: signedKey)
         }
     }
@@ -5479,13 +5518,71 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         return magic == 0xfeedfacf || magic == 0xcffaedfe || magic == 0xbebafeca || magic == 0xcafebabe
     }
     
+    // MARK: warm-up: Python is prepared once, in the background, when Nyxian opens
+    
+    private static var warmUpStarted = false
+    /// Every window waiting for Python sees the messages of the preparation that runs
+    /// (the background one too).
+    private static var progressSinks: [UUID: (String) -> Void] = [:]
+    private static let progressLock = NSLock()
+    
+    private static func report(_ message: String) {
+        progressLock.lock()
+        let sinks = Array(progressSinks.values)
+        progressLock.unlock()
+        sinks.forEach { $0(message) }
+    }
+    
+    /// Called when the project list first shows: unpacks/signs only if needed (a new Nyxian
+    /// version or new packages), so opening Python later starts right away.
+    static func warmUp() {
+        guard !warmUpStarted, FileManager.default.fileExists(atPath: bundledZip.path) else { return }
+        warmUpStarted = true
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
+            var announced = false
+            do {
+                _ = try prepare { _ in
+                    if !announced {
+                        announced = true
+                        DispatchQueue.main.async {
+                            NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Preparing Python in the background (once per Nyxian update)…", withDelay: 0.0)
+                        }
+                    }
+                }
+                if announced {
+                    DispatchQueue.main.async {
+                        NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Python is ready", withDelay: 0.0)
+                    }
+                }
+            } catch {
+                NSLog("[ForkPython] background preparation failed: %@", "\(error)")
+            }
+        }
+    }
+    
     /// Unpacks and signs the runtime when the bundled one changed; returns the launcher to run.
     static func prepare(progress: @escaping (String) -> Void) throws -> String {
-        try queue.sync {
+        /* the background preparation may be running: show its progress while waiting for it */
+        let token = UUID()
+        progressLock.lock()
+        progressSinks[token] = progress
+        progressLock.unlock()
+        defer {
+            progressLock.lock()
+            progressSinks[token] = nil
+            progressLock.unlock()
+        }
+        return try queue.sync {
+            let progress: (String) -> Void = { report($0) }
             let fm = FileManager.default
             guard let attributes = try? fm.attributesOfItem(atPath: bundledZip.path) else { throw Failure.notBundled }
-            /* the suffix changes whenever the way Python is signed changes, so devices sign again */
-            let stamp = "\((attributes[.size] as? NSNumber)?.intValue ?? 0)-\((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)-\(signingRevision)"
+            /* the suffix changes whenever the way Python is signed changes, so devices sign again;
+               the runtime is known by its checksum (CI writes it), so a Nyxian update that brings
+               the same runtime does not unpack and sign it all again */
+            let checksum = (try? String(contentsOf: bundledZip.appendingPathExtension("sha256"), encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let identity = (checksum?.count == 64) ? "sha256:\(checksum!)" : "\((attributes[.size] as? NSNumber)?.intValue ?? 0)-\((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)"
+            let stamp = "\(identity)-\(signingRevision)"
             let defaults = UserDefaults.standard
             if defaults.string(forKey: stampKey) == stamp,
                let launcher = defaults.string(forKey: launcherKey),
@@ -5499,6 +5596,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             
             progress("Unpacking Python \(version)…")
             defaults.removeObject(forKey: signedKey)
+            defaults.removeObject(forKey: sitePackagesStampKey)
             defaults.removeObject(forKey: skippedKey)
             let opt = home.deletingLastPathComponent()
             /* packages installed with pip survive a new runtime (every Nyxian update unpacks it again) */
@@ -5531,7 +5629,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             /* bundled packages were just signed: not again when site-packages is put together */
             var signedNow: [String: Double] = [:]
             for url in binaries where url.path.hasPrefix(sitePackages.path + "/") {
-                signedNow[url.path] = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?.timeIntervalSince1970 ?? 0
+                signedNow[url.path] = modificationTime(url) ?? 0
             }
             defaults.set(signedNow, forKey: signedKey)
             progress("Signing python3…")

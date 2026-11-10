@@ -4,6 +4,24 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.41.0 — 2026-11-09
+
+- **Python is signed once, not every time it opens.** The date kept for
+  each signed package binary was the one from *before* signing (a value the
+  file URL had cached), so every start (Python console, Shell, cells, pip)
+  found numpy, scipy, pandas… "changed" and signed them all again. Now the
+  real date after signing is kept.
+- Unchanged `site-packages` is not even scanned: a stamp of the folder says
+  whether pip changed something since the last signing.
+- **Prepared in the background when Nyxian opens**: unpacking/signing (only
+  after a Nyxian update that brings a new runtime, or new packages) starts
+  by itself a moment after the project list shows ("Preparing Python in the
+  background…" / "Python is ready"); a window opened meanwhile shows its
+  progress and waits for it instead of doing the work twice.
+- The runtime is recognised by its checksum (written by CI), so a Nyxian
+  update that brings the same Python no longer unpacks and signs it again.
+  This update itself prepares Python one last time.
+
 ## 1.40.0 — 2026-11-09
 
 Nyxian keeps building and running even if emexLabs' sites or GitHub
