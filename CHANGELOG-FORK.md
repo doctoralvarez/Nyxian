@@ -4,6 +4,11 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.46.1 — 2026-11-10
+
+- Java runtime build: the check that miniJVM's library exports minijvm_main
+  no longer fails on its own (nm's output is read from a file).
+
 ## 1.46.0 — 2026-11-10
 
 - **java in Nyxian Shell** said "could not start (Operation not permitted)".

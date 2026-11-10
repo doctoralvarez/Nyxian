@@ -1,6 +1,8 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.1.0
+# Fork doctoralvarez/Nyxian — version 1.1.1
 # Changelog:
+#  - 1.1.1 (2026-11-10): the export check reads nm's output from a file (grep -q
+#    in a pipe broke nm's output under pipefail).
 #  - 1.1.0 (2026-11-10): on iOS miniJVM is a library (lib/libminijvm.dylib,
 #    its main renamed minijvm_main) loaded by a tiny `java` launcher, like
 #    Node.js: Nyxian refused to start the big miniJVM executable from
@@ -86,7 +88,8 @@ sed -i '' 's/^int main(int argc, char \*\*argv) {/int minijvm_main(int argc, cha
 grep -q '^int minijvm_main(' "$CSRC/main.c" || { echo "main() of miniJVM not found"; exit 1; }
 IOS_CC=(xcrun -sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0)
 build "$HOME_DIR/lib/libminijvm.dylib" "" "${IOS_CC[@]}" -dynamiclib -install_name @loader_path/libminijvm.dylib
-nm -gU "$HOME_DIR/lib/libminijvm.dylib" | grep -q ' _minijvm_main$' || { echo "minijvm_main is not exported"; exit 1; }
+nm -gU "$HOME_DIR/lib/libminijvm.dylib" > "$WORK/exports.txt"
+grep ' _minijvm_main$' "$WORK/exports.txt" > /dev/null || { echo "minijvm_main is not exported"; exit 1; }
 # Nyxian signs it again on the device
 codesign --remove-signature "$HOME_DIR/lib/libminijvm.dylib" 2>/dev/null || true
 echo ">>> java launcher"
