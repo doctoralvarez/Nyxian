@@ -4,6 +4,28 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.44.0 — 2026-11-10
+
+JavaScript and Node.js (tanda B):
+- **Node.js 18** (nodejs-mobile, the standard iOS build: V8 **without JIT**)
+  comes inside Nyxian with **npm** and corepack. It is unpacked and signed
+  once, in the background after Python (once per update).
+- **▶ / ⌘R on a .js, .mjs or .cjs file** runs it with node from a copy of the
+  project; files it makes come back to the project. Run with Arguments
+  (⌥⌘R), Shell in This Project and Node.js Console in the editor's menu.
+  JavaScript is colored (tree-sitter-javascript).
+- **Python panel › Node.js**: Node.js Console (REPL), Install Package (npm
+  install -g, so `require()` finds it from any script), Installed Packages,
+  the **node NODE_MODULES** and node HOME folders, Reinstall Node.js.
+- **Nyxian Shell**: `node`, `npm`, `npx` (commands already installed),
+  commands in `node_modules/.bin` and npm's global bin; any script with
+  `#!` runs with its interpreter (node, python, sh); `sh FILE`, `source
+  FILE` / `. FILE` with `$1 $2…`; `sh -c '…'`.
+- Local servers printed as "listening at", "Local:", "Servidor en"… open in
+  Nyxian's browser. Two examples: JavaScript (Node.js) and Servidor web.
+- Limits (iOS): no JIT; `child_process` cannot start programs, so npm runs
+  with `--ignore-scripts`; packages with native code (`.node`) do not load.
+
 ## 1.43.0 — 2026-11-10
 
 - **Landscape**: console, shell, Python console and every other window now

@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.6.1
+ Fork doctoralvarez/Nyxian — version 1.6.2
  Changelog:
+  - 1.6.2 (2026-11-10): more local-server lines open the browser ("listening
+    at", "Local:" of Vite, "Servidor en", node servers).
   - 1.6.1 (2026-11-10): the key bar scrolls sideways when the slide starts on
     a key (UIScrollView did not cancel a touch on a button, and the keys
     cover the whole bar: on iPhone paste, clear, A−/A+… were out of reach).
@@ -227,7 +229,7 @@ import UIKit
     
     /* fork: "Running on http://127.0.0.1:5000" (Flask), "Starting development server at http://127.0.0.1:8000/"
        (Django), "Uvicorn running on http://127.0.0.1:8000"… — opened once per address */
-    private static let serverRegex = try! NSRegularExpression(pattern: #"(?i)(?:running on|server at|listening on|serving (?:http )?on|available on)[^\n]*?(https?://(?:127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1?\])(?::\d+)?[^\s'"]*)"#)
+    private static let serverRegex = try! NSRegularExpression(pattern: #"(?i)(?:running (?:on|at)|server (?:at|on|running)|listening (?:on|at)|serving (?:http )?on|available on|started (?:on|at)|servidor (?:en|at)|local:)[^\n]*?(https?://(?:127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1?\])(?::\d+)?[^\s'"]*)"#)
     private var forkOpenedServers = Set<String>()
     
     private func forkLocalServers(in data: Data) -> [String] {

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-# Fork doctoralvarez/Nyxian — version 1.0.0
+# Fork doctoralvarez/Nyxian — version 1.1.0
 # Changelog:
+#  - 1.1.0 (2026-11-10): scripts with #! (python, sh), sh FILE / source, and
+#    node / npm / npx when the machine has Node.js (as NYXIAN_NODE).
 #  - 1.0.0 (2026-11-09): CI test of Nyxian Shell (nyxian_shell) in a pseudo
 #    terminal set up like Nyxian's: built-in commands, pipes, redirection,
 #    && ||, variables, globs, programs as processes, ^Z / jobs / fg / bg.
@@ -9,6 +11,7 @@ import os
 import pty
 import re
 import select
+import shutil
 import sys
 import tempfile
 import termios
@@ -37,6 +40,11 @@ def spawn(helpers, work):
                     | termios.ECHOCTL | termios.ISIG | termios.IEXTEN)
         termios.tcsetattr(0, termios.TCSANOW, attrs)
         os.environ.update(NYXIAN_TERMINAL="1", PYTHONPATH=helpers, PYTHONUNBUFFERED="1", HOME=work)
+        node = shutil.which("node")
+        if node:
+            # as in Nyxian: node by path, npm's scripts under NYXIAN_NODE_HOME
+            os.environ.update(NYXIAN_NODE=node, NYXIAN_NODE_HOME=os.path.dirname(os.path.dirname(os.path.realpath(node))),
+                              npm_config_prefix=os.path.join(work, ".node"), npm_config_update_notifier="false")
         os.chdir(work)
         os.execv(sys.executable, [sys.executable, "-q", "-m", "nyxian_shell"])
     return fd
@@ -79,6 +87,13 @@ def main():
         handle.write("uno\ndos\ntres\ncuatro\n")
     with open(os.path.join(work, "hola.py"), "w") as handle:
         handle.write("import sys\nprint('hola desde python', sys.argv[1:])\n")
+    with open(os.path.join(work, "herramienta"), "w") as handle:
+        handle.write("#!/usr/bin/env python3\nimport sys\nprint('herramienta con', sys.argv[1:])\n")
+    os.chmod(os.path.join(work, "herramienta"), 0o755)
+    with open(os.path.join(work, "pasos.sh"), "w") as handle:
+        handle.write("# comentario\necho paso uno $1\ncat datos.txt | grep -c o\n")
+    with open(os.path.join(work, "hola.js"), "w") as handle:
+        handle.write("console.log('hola desde node', process.argv.slice(2).join(','));\n")
     fd = spawn(helpers, work)
     first = drain(fd, 15, b"$ ")
     failed = not first.endswith(b"$ ") and b"$ " not in first
@@ -103,7 +118,19 @@ def main():
         (b"nada\r", b"command not found"),
         (b"sort -r datos.txt | head -n 1\r", b"uno"),
         (b"find . -name '*.txt' | sort\r", b"./datos.txt"),
+        (b"./herramienta a b\r", b"herramienta con ['a', 'b']"),
+        (b"sh pasos.sh X\r", b"paso uno X"),
+        (b"source pasos.sh\r", b"\r\n3\r\n"),
+        (b"sh -c 'echo dentro'\r", b"dentro"),
     ]
+    if shutil.which("node"):
+        checks += [
+            (b"node hola.js a b\r", b"hola desde node a,b"),
+            (b"node -e \"console.log(6*7)\" | grep 42\r", b"42"),
+            (b"npm --version\r", b"."),
+            (b"which npm\r", b"npm-cli.js"),
+            (b"npx nada-instalado\r", b"is not installed here"),
+        ]
     for keys, expected in checks:
         os.write(fd, keys)
         out = drain(fd, 15, expected)

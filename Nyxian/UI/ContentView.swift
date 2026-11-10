@@ -21,8 +21,15 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.25.0
+ Fork doctoralvarez/Nyxian — version 1.26.0
  Changelog:
+  - 1.26.0 (2026-11-10): Node.js 18 (nodejs-mobile, no JIT): ForkNode unpacks
+    and signs Shared/node-ios.zip once (in the background after Python);
+    ▶ runs .js files from a copy of the project; Node.js Console, npm
+    install -g, npm ls -g and the NODE_MODULES / node HOME folders in the
+    Python panel; Nyxian Shell runs node, npm, npx, node_modules/.bin
+    commands, scripts with #! (node, python, sh) and sh FILE / source FILE
+    ($1…); node_modules stay in the run folder; two Node.js examples.
   - 1.25.0 (2026-11-10): turtle works: `import turtle` draws in memory and
     done() / the end of the script shows the drawing as PNG (iOS has no Tk);
     a turtle example.
@@ -4136,6 +4143,83 @@ def _which(name):
     return None
 
 
+# ---------------------------------------------------------------- Node.js
+
+_NODE_TOOLS = {
+    "npm": "lib/node_modules/npm/bin/npm-cli.js",
+    "npx": "lib/node_modules/npm/bin/npx-cli.js",
+    "corepack": "lib/node_modules/corepack/dist/corepack.js",
+}
+
+
+def _node():
+    path = os.environ.get("NYXIAN_NODE")
+    return path if path else None
+
+
+def _node_bin(name):
+    """A command npm installed: ./node_modules/.bin (here and above), then the global one."""
+    folder = os.getcwd()
+    while True:
+        candidate = os.path.join(folder, "node_modules", ".bin", name)
+        if os.path.exists(candidate):
+            return candidate
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            break
+        folder = parent
+    prefix = os.environ.get("npm_config_prefix")
+    if prefix:
+        candidate = os.path.join(prefix, "bin", name)
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _script_command(path, args):
+    """A script with #! (npm's commands, pip's, yours) runs with its interpreter:
+    iOS starts only programs, not scripts. None when it is a program."""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(256)
+    except OSError:
+        return None
+    if head[:4] in (b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"):
+        return None
+    first = head.split(b"\n", 1)[0]
+    lower = path.lower()
+    if b"node" in first or lower.endswith((".js", ".mjs", ".cjs")):
+        node = _node()
+        return [node, path] + args if node else "node"
+    if b"python" in first or lower.endswith(".py"):
+        return [sys.executable, path] + args
+    if first.startswith(b"#!") and (b"sh" in first) or lower.endswith(".sh"):
+        return [sys.executable, "-m", "nyxian_shell", path] + args
+    return None
+
+
+def _node_command(name, args):
+    """node, npm, npx, corepack — or a command npm installed. None if not one."""
+    node = _node()
+    home = os.environ.get("NYXIAN_NODE_HOME", "")
+    if name in ("node", "nodejs"):
+        return [node] + args if node else "node"
+    if name in _NODE_TOOLS:
+        if not node:
+            return "node"
+        if name == "npx" and args and not args[0].startswith("-"):
+            # npx NAME: a command already installed runs here (npx can not start processes on iOS)
+            found = _node_bin(args[0])
+            if found:
+                return _script_command(found, args[1:]) or [found] + args[1:]
+            return "npx:" + args[0]
+        return [node, os.path.join(home, _NODE_TOOLS[name])] + args
+    found = _node_bin(name) if node else None
+    if found:
+        return _script_command(found, args) or [found] + args
+    return None
+
+
 # ---------------------------------------------------------------- built-in commands
 
 class Exit(Exception):
@@ -4494,6 +4578,12 @@ def b_which(args, inp, out, err):
     for name in args:
         if name in BUILTINS:
             out.write("%s: built-in command of Nyxian Shell\n" % name)
+        elif name in ("node", "nodejs") and _node():
+            out.write(_node() + "\n")
+        elif name in _NODE_TOOLS and _node():
+            out.write(os.path.join(os.environ.get("NYXIAN_NODE_HOME", ""), _NODE_TOOLS[name]) + "\n")
+        elif _node() and _node_bin(name):
+            out.write(_node_bin(name) + "\n")
         elif _which(name):
             out.write(_which(name) + "\n")
         else:
@@ -4614,8 +4704,46 @@ def b_help(args, inp, out, err):
         "  shell    echo · env · export A=b · unset · which · history · clear · sleep · true · false · exit\n"
         "  jobs     jobs · fg [%%n] · bg [%%n] · kill [-9|-STOP|-CONT] PID|%%n · ^Z stops the program in front\n"
         "  programs python3 FILE.py · pip install NAME · your command line tools (by path or PATH)\n"
+        "  node     node [FILE.js] · npm install/run/ls … · npx NAME · commands in node_modules/.bin\n"
+        "  scripts  sh FILE.sh / source FILE: its lines run in Nyxian Shell · ./tool with #! runs with its interpreter\n"
         "  syntax   a | b · > file · >> file · < file · 2> file · 2>&1 · a ; b · a && b · a || b · cmd & · $VAR ~ *.py\n" % VERSION)
     return 0
+
+
+def b_source(args, inp, out, err):
+    """Runs a file's lines in this shell ($1, $2… are its arguments)."""
+    if not args:
+        return _err("source", "usage: source FILE [ARGS]", err)
+    if args[0] == "-c":
+        return run_line(" ".join(args[1:]))
+    try:
+        with open(os.path.expanduser(args[0]), encoding="utf-8", errors="replace") as handle:
+            lines = handle.read().splitlines()
+    except OSError as error:
+        return _err("source", "%s: %s" % (args[0], error.strerror or error), err)
+    saved = {}
+    for index, value in enumerate(args, start=0):
+        key = str(index)
+        saved[key] = os.environ.get(key)
+        os.environ[key] = value
+    status = 0
+    try:
+        pending = ""
+        for line in lines:
+            if line.rstrip().endswith("\\"):
+                pending += line.rstrip()[:-1] + " "
+                continue
+            line, pending = pending + line, ""
+            if line.strip().startswith("#") or not line.strip():
+                continue
+            status = run_line(line)
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    return status
 
 
 def b_pip(args, inp, out, err):
@@ -4629,10 +4757,10 @@ BUILTINS = {
     "grep": b_grep, "find": b_find, "tree": b_tree, "sort": b_sort, "env": b_env, "export": b_export,
     "unset": b_unset, "which": b_which, "clear": b_clear, "history": b_history, "sleep": b_sleep,
     "true": b_true, "false": b_false, "exit": b_exit, "jobs": b_jobs, "fg": b_fg, "bg": b_bg,
-    "kill": b_kill, "help": b_help,
+    "kill": b_kill, "help": b_help, "source": b_source, ".": b_source, "sh": b_source, "bash": b_source,
 }
 # changing the shell itself: never in a pipe's thread or the background
-_SHELL_STATE = {"cd", "export", "unset", "exit", "fg", "bg", "jobs", "kill", "history", "clear"}
+_SHELL_STATE = {"cd", "export", "unset", "exit", "fg", "bg", "jobs", "kill", "history", "clear", "source", ".", "sh", "bash"}
 
 
 # ---------------------------------------------------------------- parsing
@@ -4709,7 +4837,7 @@ def _expand_text(text, home_ok):
     def variable(match):
         name = match.group(1).strip("{}")
         return str(_status[0]) if name == "?" else os.environ.get(name, "")
-    text = re.sub(r"\$(\?|\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)", variable, text)
+    text = re.sub(r"\$(\?|\{[A-Za-z_0-9][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*|[0-9])", variable, text)
     if home_ok and (text == "~" or text.startswith("~/")):
         text = os.environ.get("HOME", "~") + text[1:]
     return text
@@ -4876,10 +5004,20 @@ def run_pipeline(pipeline, background, text):
             stages.append(("noop", command, None))
             continue
         name = argv[0]
+        node_argv = None if name in BUILTINS or name == "pip" else _node_command(name, list(argv[1:]))
         if name == "pip":
             stages.append(("program", command, [sys.executable, "-m", "nyxian_pip"] + argv[1:]))
         elif name in BUILTINS:
             stages.append(("builtin", command, None))
+        elif isinstance(node_argv, str):
+            if node_argv.startswith("npx:"):
+                sys.stderr.write("npx: %s is not installed here: npm install %s (then npx %s, or just %s)\n"
+                                 % ((node_argv[4:],) * 4))
+                return 127
+            sys.stderr.write("%s: Node.js is not ready yet (Nyxian prepares it after Python; or open </> › Node.js)\n" % name)
+            return 127
+        elif node_argv:
+            stages.append(("program", command, node_argv))
         else:
             path = _which(name)
             if path is None:
@@ -4888,7 +5026,13 @@ def run_pipeline(pipeline, background, text):
             argv = list(argv)
             if path == sys.executable:
                 argv[0] = "python3"
-            stages.append(("program", command, [path] + argv[1:]))
+                stages.append(("program", command, [path] + argv[1:]))
+                continue
+            script = _script_command(path, argv[1:])
+            if script == "node":
+                sys.stderr.write("%s: needs Node.js, which is not ready yet\n" % name)
+                return 127
+            stages.append(("program", command, script or [path] + argv[1:]))
 
     # only built-ins: text flows from one to the next
     if all(kind != "program" for kind, _, _ in stages):
@@ -5038,6 +5182,11 @@ def main():
     if len(sys.argv) > 2 and sys.argv[1] == "-c":
         try:
             return run_line(" ".join(sys.argv[2:]))
+        except Exit as code:
+            return code.args[0]
+    if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
+        try:
+            return b_source(sys.argv[1:], sys.stdin, sys.stdout, sys.stderr)
         except Exit as code:
             return code.args[0]
     _out("Nyxian Shell %s · help lists the commands · ^D or exit quits\n" % VERSION)
@@ -6215,6 +6364,8 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             } catch {
                 NSLog("[ForkPython] background preparation failed: %@", "\(error)")
             }
+            /* fork: then Node.js (one signing at a time) */
+            ForkNode.warmUp()
         }
     }
     
@@ -6385,8 +6536,14 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         let script = LiveEditorRegistry.visiblePythonFile(under: root)
             ?? [root.appendingPathComponent("main.py")].first { FileManager.default.fileExists(atPath: $0.path) }
             ?? ProjectFileIndex.files(in: root).first { $0.pathExtension.lowercased() == "py" }
+            ?? [root.appendingPathComponent("main.js"), root.appendingPathComponent("index.js")].first { FileManager.default.fileExists(atPath: $0.path) }
+            ?? ProjectFileIndex.files(in: root).first { ForkNode.isScript($0) }
         guard let script else {
-            presenter.forkGitHubAlert("Python", "This project has no .py file yet. Make one with New › File (name.py).")
+            presenter.forkGitHubAlert("Python", "This project has no .py or .js file yet. Make one with New › File (name.py or name.js).")
+            return
+        }
+        if ForkNode.isScript(script) {
+            ForkNode.run(script: script, project: project, from: presenter)
             return
         }
         run(script: script, project: project, from: presenter)
@@ -6404,7 +6561,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         let fm = FileManager.default
         let destination = mirrorFolder(project: root)
         try fm.createDirectory(at: destination, withIntermediateDirectories: true)
-        let skippedFolders: Set<String> = ["Config", ".build", "build", "Previews", "__pycache__", ".git", "DerivedData", "node_modules"]
+        let skippedFolders: Set<String> = ["Config", ".build", "build", "Previews", "__pycache__", ".git", "DerivedData"]
         let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
         guard let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else { return destination }
         for case let url as URL in enumerator {
@@ -6489,6 +6646,11 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             "PATH": pathWithPythonBin
         ]
         if let workingDirectory { environment["PYTHONPATH"] = workingDirectory.path }
+        /* fork: node, npm and npx in Nyxian Shell (and commands npm install -g puts in .node/bin) */
+        if let node = ForkNode.readyLauncher() {
+            environment.merge(ForkNode.environment(launcher: node)) { old, _ in old }
+            environment["PATH"] = ForkNode.globalPrefix.appendingPathComponent("bin").path + ":" + (environment["PATH"] ?? "")
+        }
         return environment
     }
     
@@ -6551,7 +6713,8 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         var copied: [String] = []
         guard let enumerator = fm.enumerator(at: mirror, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else { return [] }
         for case let url as URL in enumerator {
-            if url.lastPathComponent == "__pycache__" { enumerator.skipDescendants(); continue }
+            /* npm's packages stay in the run folder (thousands of files; package.json comes back) */
+            if url.lastPathComponent == "__pycache__" || url.lastPathComponent == "node_modules" { enumerator.skipDescendants(); continue }
             guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]), values.isRegularFile == true else { continue }
             let relative = ProjectFileIndex.relativePath(url, root: mirror)
             if relative.hasPrefix("Config/") { continue }
@@ -6656,7 +6819,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         alert.addAction(UIAlertAction(title: "Add a File of the Project…", style: .default) { [weak alert] _ in
             let typed = alert?.textFields?.first?.text ?? ""
             let root: URL = project.map { $0.url as URL } ?? script.deletingLastPathComponent()
-            let files = ProjectFileIndex.files(in: root).filter { $0.pathExtension.lowercased() != "py" && !$0.path.contains("/Config/") }.prefix(40)
+            let files = ProjectFileIndex.files(in: root).filter { !["py", "js", "mjs", "cjs"].contains($0.pathExtension.lowercased()) && !$0.path.contains("/Config/") }.prefix(40)
             let sheet = UIAlertController(title: "File of the Project", message: files.isEmpty ? "No data files in this project yet." : nil, preferredStyle: .actionSheet)
             for file in files {
                 let relative = ProjectFileIndex.relativePath(file, root: root)
@@ -6675,7 +6838,11 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
         alert.addAction(UIAlertAction(title: "Run", style: .default) { [weak alert] _ in
             let text = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespaces)
             UserDefaults.standard.set(text, forKey: argumentsKey(script))
-            run(script: script, project: project, from: presenter)
+            if ForkNode.isScript(script) {
+                ForkNode.run(script: script, project: project, from: presenter)
+            } else {
+                run(script: script, project: project, from: presenter)
+            }
         })
         presenter.present(alert, animated: true)
     }
@@ -6945,6 +7112,267 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     }
 }
 
+// MARK: - fork: Node.js (nodejs-mobile, no JIT) — node, npm, .js files
+
+/// Node.js for iOS (Shared/node-ios.zip: nodejs-mobile's library, npm, the
+/// `node` launcher), unpacked into opt/node and signed once, like Python.
+/// V8 runs without JIT (nodejs-mobile's standard iOS build).
+enum ForkNode {
+    static let version = "18.20.4"
+
+    enum Failure: LocalizedError {
+        case notBundled, signing(String), fastpath
+        var errorDescription: String? {
+            switch self {
+            case .notBundled: return "This build of Nyxian has no Node.js runtime (Shared/node-ios.zip)."
+            case .signing(let file): return "Could not sign \(file). Check that signing is set up (Settings > Certificate)."
+            case .fastpath: return "Nyxian could not install the node launcher."
+            }
+        }
+    }
+
+    static var rootfs: URL { NXBootstrap.shared().rootfsURL }
+    static var home: URL { rootfs.appendingPathComponent("opt/node") }
+    static var userHome: URL { rootfs.appendingPathComponent("var/mobile") }
+    /// npm install -g goes here (lib/node_modules, bin), where Node and Nyxian Shell may write.
+    static var globalPrefix: URL { userHome.appendingPathComponent(".node") }
+    static var globalModules: URL { globalPrefix.appendingPathComponent("lib/node_modules") }
+    static var npmCLI: URL { home.appendingPathComponent("lib/node_modules/npm/bin/npm-cli.js") }
+    private static var bundledZip: URL { Bundle.main.bundleURL.appendingPathComponent("Shared/node-ios.zip") }
+    private static let stampKey = "fork.node.stamp"
+    private static let launcherKey = "fork.node.launcher"
+    private static let signingRevision = 1
+    private static let queue = DispatchQueue(label: "fork.node.install")
+
+    static var isBundled: Bool { FileManager.default.fileExists(atPath: bundledZip.path) }
+
+    /// What the node process may touch (NXT2 entitlements, file-system sandbox on).
+    private static var launcherEntitlements: [String: Any] {
+        [
+            "org.emexlabs.nyxian.get-task-allow": true,
+            "org.emexlabs.nyxian.process.spawn": true,
+            "org.emexlabs.nyxian.sandbox.file.read": [
+                "$(NXROOT)/opt/node"
+            ],
+            "org.emexlabs.nyxian.sandbox.file.read-write": [
+                "$(NXROOT)/var/mobile"   /* home, projects' run folders, npm's cache and global packages */
+            ]
+        ]
+    }
+
+    private static var launcherURL: URL { home.appendingPathComponent("bin/node") }
+    private static var launcherOriginal: URL { home.appendingPathComponent("bin/.node.original") }
+
+    private static func signLauncher() -> Bool {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: launcherOriginal.path) {
+            try? fm.removeItem(at: launcherURL)
+            guard (try? fm.copyItem(at: launcherOriginal, to: launcherURL)) != nil else { return false }
+        }
+        guard LCUtils.signMachO(at: launcherURL) else { return false }
+        _ = trust_nxt2_sign(launcherURL.path, launcherEntitlements as CFDictionary, true, nil)
+        return true
+    }
+
+    private static func fastpath(progress: (String) -> Void) -> String? {
+        for attempt in 1...6 {
+            if let path = LDEApplicationWorkspace.shared().fastpathUtility(launcherURL.path) { return path }
+            progress("Installing node… (attempt \(attempt + 1))")
+            Thread.sleep(forTimeInterval: 0.5)
+            _ = signLauncher()
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        return nil
+    }
+
+    private static var identity: String? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: bundledZip.path) else { return nil }
+        let checksum = (try? String(contentsOf: bundledZip.appendingPathExtension("sha256"), encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = (checksum?.count == 64) ? "sha256:\(checksum!)" : "\((attributes[.size] as? NSNumber)?.intValue ?? 0)-\((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)"
+        return "\(base)-\(signingRevision)"
+    }
+
+    /// The signed launcher when Node.js is ready without unpacking or signing anything.
+    static func readyLauncher() -> String? {
+        let defaults = UserDefaults.standard
+        guard let stamp = defaults.string(forKey: stampKey), stamp == identity,
+              let launcher = defaults.string(forKey: launcherKey),
+              FileManager.default.fileExists(atPath: launcher),
+              FileManager.default.fileExists(atPath: home.appendingPathComponent("lib/NodeMobile").path) else { return nil }
+        return launcher
+    }
+
+    /// Unpacks and signs Node.js when the bundled one changed; returns the launcher to run.
+    static func prepare(progress: @escaping (String) -> Void) throws -> String {
+        try queue.sync {
+            if let ready = readyLauncher() { return ready }
+            guard let stamp = identity else { throw Failure.notBundled }
+            let fm = FileManager.default
+            progress("Unpacking Node.js \(version)…")
+            try? fm.removeItem(at: home)
+            let opt = home.deletingLastPathComponent()
+            try fm.createDirectory(at: opt, withIntermediateDirectories: true)
+            guard unzipArchiveAtPath(bundledZip.path, opt.path) else { throw Failure.notBundled }
+            progress("Signing Node.js…")
+            let library = home.appendingPathComponent("lib/NodeMobile")
+            guard LCUtils.signMachOWithoutPatch(at: library) else { throw Failure.signing("NodeMobile") }
+            _ = trust_nxt2_sign(library.path, [String: Any]() as CFDictionary, true, nil)
+            progress("Signing node…")
+            try? fm.removeItem(at: launcherOriginal)
+            try? fm.copyItem(at: launcherURL, to: launcherOriginal)
+            guard signLauncher() else { throw Failure.signing("node") }
+            try? fm.createDirectory(at: globalModules, withIntermediateDirectories: true)
+            try? fm.createDirectory(at: globalPrefix.appendingPathComponent("bin"), withIntermediateDirectories: true)
+            guard let launcher = fastpath(progress: progress) else { throw Failure.fastpath }
+            UserDefaults.standard.set(stamp, forKey: stampKey)
+            UserDefaults.standard.set(launcher, forKey: launcherKey)
+            return launcher
+        }
+    }
+
+    /// After Python's background preparation: Node.js too, once per Nyxian update.
+    static func warmUp() {
+        guard isBundled, readyLauncher() == nil else { return }
+        do {
+            var announced = false
+            _ = try prepare { _ in
+                if !announced {
+                    announced = true
+                    DispatchQueue.main.async {
+                        NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Preparing Node.js in the background (once per Nyxian update)…", withDelay: 0.0)
+                    }
+                }
+            }
+            DispatchQueue.main.async {
+                NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Node.js is ready: node, npm", withDelay: 0.0)
+            }
+        } catch {
+            NSLog("[ForkNode] background preparation failed: %@", "\(error)")
+        }
+    }
+
+    /// What node, npm and Nyxian Shell need to find Node.js and its packages.
+    static func environment(launcher: String) -> [String: String] {
+        let tmp = userHome.appendingPathComponent("tmp")
+        try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        return [
+            "NYXIAN_NODE": launcher,
+            "NYXIAN_NODE_HOME": home.path,
+            /* require() finds packages installed with npm install -g */
+            "NODE_PATH": globalModules.path,
+            "NODE_REPL_HISTORY": userHome.appendingPathComponent(".node_repl_history").path,
+            "npm_config_prefix": globalPrefix.path,
+            "npm_config_cache": userHome.appendingPathComponent(".npm").path,
+            /* iOS lets Node start no processes of its own: install scripts can not run */
+            "npm_config_ignore_scripts": "true",
+            "npm_config_update_notifier": "false",
+            "npm_config_fund": "false",
+            "npm_config_audit": "false",
+            "npm_config_progress": "false",
+            "TMPDIR": tmp.path,
+        ]
+    }
+
+    static func launch(from presenter: UIViewController, arguments: [String], workingDirectory: URL?, title: String, closeOnExit: Bool = false, beforeLaunch: (() throws -> Void)? = nil, onExit: ((Int32) -> String?)? = nil) {
+        let progress = UIAlertController(title: "Node.js \(version)", message: "Preparing…", preferredStyle: .alert)
+        var host: UIViewController = presenter.viewIfLoaded?.window != nil ? presenter : (presenter.view.window?.rootViewController ?? presenter)
+        while let shown = host.presentedViewController, !shown.isBeingDismissed, !(shown is UIAlertController) { host = shown }
+        host.present(progress, animated: true)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let launcher = try prepare { message in
+                    DispatchQueue.main.async { progress.message = message }
+                }
+                if let beforeLaunch {
+                    DispatchQueue.main.async { progress.message = "Copying the project…" }
+                    try beforeLaunch()
+                }
+                DispatchQueue.main.async {
+                    progress.dismiss(animated: true) {
+                        guard let session = NXWindowSessionTerminal(utilityPath: launcher) else { return }
+                        session.arguments = [launcher] + arguments
+                        var environment = ForkPython.baseEnvironment(workingDirectory: nil)
+                        environment.merge(self.environment(launcher: launcher)) { _, new in new }
+                        environment["NYXIAN_TERMINAL"] = "1"
+                        environment["HOME"] = userHome.path
+                        session.extraEnvironment = environment
+                        session.workingDirectory = (workingDirectory ?? userHome).path
+                        session.title = title
+                        session.closeOnExit = closeOnExit
+                        session.fontSize = CGFloat(ForkPython.fontSize)
+                        session.fontSizeDefaultsKey = ForkPython.fontSizeKey
+                        if let onExit { session.exitHandler = { code in onExit(code) } }
+                        NXWindowServer.shared().openWindow(with: session, withCompletion: nil)
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    progress.dismiss(animated: true) {
+                        host.forkGitHubAlert("Node.js", error.localizedDescription)
+                    }
+                }
+            }
+        }
+    }
+
+    static func isScript(_ url: URL) -> Bool { ["js", "mjs", "cjs"].contains(url.pathExtension.lowercased()) }
+
+    /// ▶ on a .js file: node runs it from a copy of its project (files it makes come back).
+    static func run(script: URL, project: NXProject?, from presenter: UIViewController) {
+        presenter.view.window?.endEditing(true)
+        let root: URL = project.map { $0.url as URL } ?? script.deletingLastPathComponent()
+        let relative = ProjectFileIndex.relativePath(script, root: root)
+        let openTexts = LiveEditorRegistry.openTexts()
+        let runFolder = ForkPython.mirrorFolder(project: root)
+        let scriptArguments = ForkPython.splitArguments(ForkPython.savedArguments(for: script))
+        let title = "node \(script.lastPathComponent)" + (scriptArguments.isEmpty ? "" : " " + scriptArguments.joined(separator: " "))
+        launch(from: presenter, arguments: [relative] + scriptArguments, workingDirectory: runFolder, title: title, beforeLaunch: {
+            _ = try ForkPython.mirror(project: root, openTexts: openTexts)
+        }, onExit: { _ in
+            let copied = ForkPython.copyOutput(project: root)
+            DispatchQueue.main.async { NotificationCenter.default.post(name: Notification.Name("FileListRefresh"), object: nil) }
+            guard !copied.isEmpty else { return nil }
+            let list = copied.prefix(10).joined(separator: ", ") + (copied.count > 10 ? " … (+\(copied.count - 10))" : "")
+            return "[copied to the project: \(list)]"
+        })
+    }
+
+    /// The Node.js REPL (.help, .editor, Tab completion).
+    static func openConsole(from presenter: UIViewController) {
+        launch(from: presenter, arguments: [], workingDirectory: userHome, title: "Node.js \(version)", closeOnExit: true)
+    }
+
+    /// npm install -g NAME…: require() finds them from any script.
+    static func promptInstallPackage(from presenter: UIViewController) {
+        let alert = UIAlertController(title: "Install Package (npm)", message: "Package names, separated by spaces. Pure JavaScript packages work; ones that compile native code (.node) or need install scripts do not.", preferredStyle: .alert)
+        alert.addTextField {
+            $0.placeholder = "lodash dayjs chalk@4"
+            $0.autocapitalizationType = .none
+            $0.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Install", style: .default) { [weak alert] _ in
+            let names = (alert?.textFields?.first?.text ?? "").split(separator: " ").map(String.init).filter { !$0.isEmpty }
+            guard !names.isEmpty else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                launch(from: presenter, arguments: [npmCLI.path, "install", "-g"] + names, workingDirectory: userHome, title: "npm install")
+            }
+        })
+        presenter.present(alert, animated: true)
+    }
+
+    /// npm ls -g: what is installed globally.
+    static func listPackages(from presenter: UIViewController) {
+        launch(from: presenter, arguments: [npmCLI.path, "ls", "-g", "--depth=0"], workingDirectory: userHome, title: "npm ls -g")
+    }
+
+    static func reinstall(from presenter: UIViewController) {
+        UserDefaults.standard.removeObject(forKey: stampKey)
+        launch(from: presenter, arguments: ["-e", "console.log('Node.js', process.version, '· V8', process.versions.v8, '· npm in', process.env.NYXIAN_NODE_HOME)"], workingDirectory: userHome, title: "Node.js")
+    }
+}
+
 /// One-time edits of Nyxian's own copy of the iOS SDK so it builds without Xcode-only compiler plugins.
 enum ForkSDKPatches {
     private static let markerName = ".nyxian-fork-sdk-patches"
@@ -7016,6 +7444,7 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
 
     private enum Row {
         case console, shell, shellHome, packages, install, examples, notebook, browser, arguments
+        case nodeConsole, npmInstall, npmList, nodeReinstall
         case folder(String, String, URL)     /* title, symbol, folder */
         case about, changelog, reinstall
     }
@@ -7039,16 +7468,20 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
             ("Python \(ForkPython.version)", nil, [.console, .packages, .install, .examples, .notebook]),
             ("Terminal", "Shell: ls, cd, grep, pipes, python3, pip, jobs (^Z, fg, bg). Arguments: what sys.argv gets for each script (⌥⌘R in the editor).",
              [.shell, .shellHome, .arguments]),
-            ("Web", "Flask, Django and webbrowser.open() open here by themselves.", [.browser]),
+            ("Node.js \(ForkNode.version)", "JavaScript without JIT (iOS). ▶ runs .js files; in Shell: node, npm, npx. Packages with native code (.node) or install scripts do not work.",
+             [.nodeConsole, .npmInstall, .npmList]),
+            ("Web", "Flask, Django, node servers and webbrowser.open() open here by themselves.", [.browser]),
             ("Folders", "Read-only views of the folders Python and the compiler use (inside Nyxian's root).", [
                 .folder("python HOME", "folder", python),
                 .folder("python SITE-PACKAGES", "shippingbox", ForkPython.sitePackages),
                 .folder("python STDLIB", "books.vertical", python.appendingPathComponent("lib/python\(ForkPython.version)")),
+                .folder("node NODE_MODULES (npm install -g)", "shippingbox.fill", ForkNode.globalModules),
+                .folder("node HOME (npm, corepack)", "folder", ForkNode.home),
                 .folder("Home (var/mobile)", "house", ForkPython.rootfs.appendingPathComponent("var/mobile")),
                 .folder("clang / swift SYSROOT (iOS SDK)", "hammer", NXBootstrap.shared().sdkURL),
                 .folder("Projects", "folder.badge.gearshape", NXBootstrap.shared().rootURL.appendingPathComponent("Projects")),
             ]),
-            ("This Fork", nil, [.about, .changelog, .reinstall]),
+            ("This Fork", nil, [.about, .changelog, .reinstall, .nodeReinstall]),
         ]
     }
 
@@ -7081,6 +7514,10 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
         case .about: return ("About This Fork", "info.circle", "doctoralvarez/Nyxian · GitHub · backups · report a problem")
         case .changelog: return ("What's New", "sparkles", nil)
         case .reinstall: return ("Reinstall Python Runtime", "arrow.clockwise", "Unpacks and signs Python again (your packages stay)")
+        case .nodeConsole: return ("Node.js Console", "curlybraces", ForkNode.readyLauncher() == nil ? "Prepared on first use (once per update)" : "The REPL: .help, .editor, Tab")
+        case .npmInstall: return ("Install Package (npm)…", "shippingbox", "npm install -g: require() finds it from any script")
+        case .npmList: return ("Installed Packages (npm ls -g)", "list.bullet", nil)
+        case .nodeReinstall: return ("Reinstall Node.js", "arrow.clockwise", "Unpacks and signs Node.js again (your packages stay)")
         }
     }
 
@@ -7094,6 +7531,7 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
         cell.detailTextLabel?.numberOfLines = 2
         cell.imageView?.image = UIImage(systemName: symbol)
         if case .reinstall = row { cell.textLabel?.textColor = .systemRed }
+        if case .nodeReinstall = row { cell.textLabel?.textColor = .systemRed }
         if case .folder = row { cell.detailTextLabel?.font = .monospacedSystemFont(ofSize: 11, weight: .regular) }
         cell.accessoryType = .disclosureIndicator
         return cell
@@ -7125,6 +7563,10 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
         case .about: navigationController?.pushViewController(ForkAboutViewController(style: .insetGrouped), animated: true)
         case .changelog: navigationController?.pushViewController(ForkTextViewController(title: "What's New", text: ForkAboutViewController.changelog()), animated: true)
         case .reinstall: ForkPython.reinstall(from: self)
+        case .nodeConsole: ForkNode.openConsole(from: self)
+        case .npmInstall: ForkNode.promptInstallPackage(from: self)
+        case .npmList: ForkNode.listPackages(from: self)
+        case .nodeReinstall: ForkNode.reinstall(from: self)
         }
     }
 
@@ -7618,6 +8060,81 @@ t.write("Hola desde Nyxian", align="center", font=("Arial", 18, "bold"))
 t.hideturtle()
 turtle.done()
 """#], open: "main.py"),
+        ForkPythonExample(title: "JavaScript (Node.js)", detail: "Funciones, clases, async/await, archivos con fs; ▶ corre main.js", symbol: "curlybraces", files: ["main.js": #"""
+// JavaScript con Node.js en Nyxian: ▶ (o ⌘R) corre este archivo.
+// En el Shell del proyecto: node main.js, npm install NOMBRE, npm run …
+const fs = require("fs");
+const os = require("os");
+const { saludar, Contador } = require("./util");
+
+console.log(saludar("Nyxian"), "— Node", process.version, "en", os.platform());
+
+const c = new Contador();
+[3, 1, 4, 1, 5, 9].forEach((n) => c.sumar(n));
+console.log("total:", c.total, "promedio:", c.promedio().toFixed(2));
+
+const datos = { fecha: new Date().toISOString(), valores: c.valores };
+fs.writeFileSync("datos.json", JSON.stringify(datos, null, 2));
+console.log("guardado datos.json (llega al proyecto al terminar)");
+
+const esperar = (ms) => new Promise((listo) => setTimeout(listo, ms));
+(async () => {
+  for (let i = 3; i > 0; i--) {
+    console.log("…", i);
+    await esperar(300);
+  }
+  console.log("¡listo!");
+})();
+"""#, "util.js": #"""
+// Un módulo propio: module.exports y require("./util")
+function saludar(nombre) {
+  return `Hola, ${nombre}`;
+}
+
+class Contador {
+  constructor() {
+    this.valores = [];
+  }
+  sumar(n) {
+    this.valores.push(n);
+  }
+  get total() {
+    return this.valores.reduce((a, b) => a + b, 0);
+  }
+  promedio() {
+    return this.valores.length ? this.total / this.valores.length : 0;
+  }
+}
+
+module.exports = { saludar, Contador };
+"""#], open: "main.js"),
+        ForkPythonExample(title: "Servidor web (Node.js)", detail: "http.createServer: la página se abre sola en el navegador de Nyxian", symbol: "network", files: ["server.js": #"""
+// Un servidor web con el módulo http de Node (sin paquetes).
+// Al arrancar imprime su dirección y Nyxian la abre en su navegador.
+// ■ (Ctrl-C) en la ventana lo detiene.
+const http = require("http");
+
+let visitas = 0;
+const servidor = http.createServer((req, res) => {
+  if (req.url === "/api") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ visitas, hora: new Date().toLocaleTimeString() }));
+    return;
+  }
+  visitas++;
+  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+  res.end(`<!doctype html><meta name="viewport" content="width=device-width">
+<body style="font-family:-apple-system;padding:2em">
+<h1>Hola desde Node.js ${process.version}</h1>
+<p>Visitas: ${visitas}</p>
+<p><a href="/api">/api</a> devuelve JSON</p></body>`);
+  console.log(new Date().toLocaleTimeString(), req.method, req.url);
+});
+
+servidor.listen(3000, "127.0.0.1", () => {
+  console.log("Servidor en http://127.0.0.1:3000");
+});
+"""#], open: "server.js"),
         ForkPythonExample(title: "SciPy", detail: "Ajuste de curvas, optimización e integración", symbol: "function", files: ["main.py": #"""
 import numpy as np
 from scipy import optimize, integrate, stats

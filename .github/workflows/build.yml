@@ -184,12 +184,53 @@ jobs:
         run: |
           ./tools/fork/backup_asset.sh save python-runtime "python-ios-3.14-b14-${{ hashFiles('tools/fork/build_python_runtime.sh', 'tools/fork/python_launcher.c') }}.zip" Shared/python-ios.zip || true
 
+      # fork: Node.js for iOS (nodejs-mobile, no JIT), npm and the node launcher: Shared/node-ios.zip
+      - name: Restore Node.js runtime cache
+        id: node-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: Shared/node-ios.zip
+          key: node-ios-18.20.4-${{ hashFiles('tools/fork/build_node_runtime.sh', 'tools/fork/node_launcher.c') }}
+
+      - name: Restore Node.js runtime from the backup (cache miss)
+        id: node-backup
+        if: steps.node-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+        run: |
+          name="node-ios-18.20.4-${{ hashFiles('tools/fork/build_node_runtime.sh', 'tools/fork/node_launcher.c') }}.zip"
+          ./tools/fork/backup_asset.sh restore node-runtime "$name"
+          mv "$name" Shared/node-ios.zip
+
+      - name: Pack Node.js runtime (cache miss)
+        if: steps.node-cache.outputs.cache-hit != 'true' && steps.node-backup.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./tools/fork/build_node_runtime.sh
+
+      - name: Save Node.js runtime cache
+        if: steps.node-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: Shared/node-ios.zip
+          key: node-ios-18.20.4-${{ hashFiles('tools/fork/build_node_runtime.sh', 'tools/fork/node_launcher.c') }}
+
+      - name: Back up the Node.js runtime (once per version)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+        run: |
+          ./tools/fork/backup_asset.sh save node-runtime "node-ios-18.20.4-${{ hashFiles('tools/fork/build_node_runtime.sh', 'tools/fork/node_launcher.c') }}.zip" Shared/node-ios.zip || true
+
       # fork: the app knows the runtime by its checksum (an update with the same runtime does not unpack it again)
       - name: What's New inside the app
         run: cp CHANGELOG-FORK.md Shared/CHANGELOG-FORK.md
 
-      - name: Checksum of the Python runtime
-        run: shasum -a 256 Shared/python-ios.zip | cut -c1-64 > Shared/python-ios.zip.sha256 && cat Shared/python-ios.zip.sha256
+      - name: Checksum of the Python and Node.js runtimes
+        run: |
+          shasum -a 256 Shared/python-ios.zip | cut -c1-64 > Shared/python-ios.zip.sha256 && cat Shared/python-ios.zip.sha256
+          shasum -a 256 Shared/node-ios.zip | cut -c1-64 > Shared/node-ios.zip.sha256 && cat Shared/node-ios.zip.sha256
 
       # fork: the emexLabs root CA public key goes inside the app, so a new install
       # does not need nyxian.app for it (from nyxian.app, else from the backup)
