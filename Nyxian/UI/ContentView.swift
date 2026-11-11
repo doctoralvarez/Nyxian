@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.30.0
+ Fork doctoralvarez/Nyxian — version 1.31.0
  Changelog:
+  - 1.31.0 (2026-11-10): when a program cannot start, Nyxian Shell also
+    prints what the host saw (opt/python/.nyxian-spawn.txt: python3's
+    entitlements now, at most, and from its signature).
   - 1.30.0 (2026-11-10): ForkSigningReport: the result of signing each
     launcher's NXT2 entitlements, and how Nyxian sees python3, node and java
     (NXT2 blob, trust level, may start programs), written to
@@ -5345,11 +5348,13 @@ def run_pipeline(pipeline, background, text):
                     }.get(error.errno)
                     if why:
                         sys.stderr.write("  %s\n" % why)
-                    report = os.environ.get("NYXIAN_SIGNING_REPORT", "")
-                    if report and os.path.isfile(report):
-                        sys.stderr.write("  --- signatures (send this to fix it) ---\n")
-                        with open(report, encoding="utf-8", errors="replace") as handle:
-                            sys.stderr.write("".join("  " + line for line in handle))
+                    reports = [("what Nyxian saw", os.path.join(os.environ.get("PYTHONHOME", ""), ".nyxian-spawn.txt")),
+                               ("signatures", os.environ.get("NYXIAN_SIGNING_REPORT", ""))]
+                    for title, report in reports:
+                        if report and os.path.isfile(report):
+                            sys.stderr.write("  --- %s (send this to fix it) ---\n" % title)
+                            with open(report, encoding="utf-8", errors="replace") as handle:
+                                sys.stderr.write("".join("  " + line for line in handle))
                     if command["argv"][0] in ("java", "javac", "node", "npm", "npx"):
                         sys.stderr.write("  try Reinstall %s in the Python panel, then open a new terminal\n"
                                          % ("Java" if command["argv"][0].startswith("java") else "Node.js"))

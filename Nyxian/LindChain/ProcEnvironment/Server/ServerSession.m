@@ -25,7 +25,9 @@
  Changelog:
   - 1.0.0 (2026-11-10): posix_spawn replies -(100 + PEProcessSpawnFailure) when
     the spawn failed, -90 when the caller's process is unknown and -91 when it
-    lacks process.spawn, so the caller can tell why.
+    lacks process.spawn, so the caller can tell why; on a refusal it writes
+    what it saw (caller's entitlements now / max / from its signature) to
+    opt/python/.nyxian-spawn.txt.
 */
 
 #import <mach/mach.h>
@@ -38,6 +40,25 @@
 #import <LindChain/WindowServer/Session/NXWindowSessionApplication.h>
 #import <LindChain/ProcEnvironment/Surface/libkern/klog.h>
 #import <LindChain/ProcEnvironment/Surface/proc/list.h>
+#import <LindChain/ProcEnvironment/Surface/trust/trust.h>
+
+/* fork: what the host saw when it refused a spawn, for Nyxian Shell (python3 may read opt/python) */
+static void PEForkWriteSpawnRefusal(ksurface_proc_t *proc, pid_t pid, NSString *path, BOOL hasArguments, BOOL hasEnvironment, BOOL hasDirectory)
+{
+    ksurface_trust_identity_t *identity = proc->nyx.identity;
+    PEEntitlementFlags identityFlags = (identity != NULL && identity->entitlements != NULL) ? trust_identity_entitlement_flags_from_entitlements(identity->entitlements) : 0;
+    NSString *text = [NSString stringWithFormat:
+        @"host refused a spawn at %@\n"
+        @"  caller pid %d, executable %s, trust level %d\n"
+        @"  caller entitlements now 0x%llx, max 0x%llx, from its signature 0x%llx (process.spawn is 0x%llx)\n"
+        @"  program %@, arguments %d, environment %d, directory %d\n",
+        [NSDate date], pid, identity != NULL ? identity->path : "?", identity != NULL ? (int)identity->trustLevel : -1,
+        (unsigned long long)proc_getentitlements(proc), (unsigned long long)proc_getmaxentitlements(proc), (unsigned long long)identityFlags,
+        (unsigned long long)kPEEntitlementFlagProcessSpawn,
+        [path isKindOfClass:NSString.class] ? path : @"?", hasArguments, hasEnvironment, hasDirectory];
+    NSString *file = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/rootfs/opt/python/.nyxian-spawn.txt"];
+    [text writeToFile:file atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
 #import <LindChain/ProcEnvironment/Surface/proc/proc.h>
 #import <LindChain/ProcEnvironment/Surface/proc/permit.h>
 #import <ksurface_config.h>
@@ -148,6 +169,7 @@
         
         /* fork: -91, the caller lacks process.spawn (or sent no path / arguments) */
         klog_log("ServerSession:spawn", "pid %d may not spawn %s", strongSelf->_processIdentifier, [path isKindOfClass:NSString.class] ? path.UTF8String : "?");
+        PEForkWriteSpawnRefusal(strongSelf->_proc, strongSelf->_processIdentifier, path, arguments != nil, environment != nil, workingDirectory != nil);
         reply(-91);
     });
 }

@@ -4,6 +4,17 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.49.0 — 2026-11-10
+
+- The signing report showed python3's signature is fine and grants
+  `process.spawn`, yet the host still refuses its spawns. When it refuses,
+  the host now writes what it saw — python3's entitlements now, at most, and
+  from its signature — to `opt/python/.nyxian-spawn.txt`, and Nyxian Shell
+  prints it ("what Nyxian saw").
+- Notices are shown one at a time: "Node.js is ready" and "Java is ready"
+  arriving together could freeze Nyxian. A notice that arrives while another
+  is open, or while a screen is appearing or going away, now waits.
+
 ## 1.48.0 — 2026-11-10
 
 - Still investigating why Nyxian Shell cannot start `node`, `java` (any

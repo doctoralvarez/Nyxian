@@ -20,6 +20,15 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-10): notices are shown one at a time: one that arrives while
+    another is showing (or while a screen is appearing or going away) waits for
+    it to close. Two notices at once ("Node.js is ready", "Java is ready")
+    could freeze Nyxian.
+*/
+
 #import <LindChain/IDEFoundation/NXAlertDiagnosticPresenter.h>
 #import <LindChain/WindowServer/NXWindowServer.h>
 
@@ -65,14 +74,57 @@ static NSString *NXStringForNXAlertDiagnosticPresenterLevel(NXAlertDiagnosticPre
                 withMessage:(NSString*)message
                   withDelay:(double)delay
 {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, delay), dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        dispatch_async(dispatch_get_main_queue(), ^{
-            UIViewController *viewController = NXTopViewController(NXWindowServer.shared.rootViewController);
-            UIAlertController *alertController = [UIAlertController alertControllerWithTitle:NXStringForNXAlertDiagnosticPresenterLevel(level) message:message preferredStyle:UIAlertControllerStyleAlert];
-            [alertController addAction:[UIAlertAction actionWithTitle:@"Close" style:UIAlertActionStyleCancel handler:nil]];
-            [viewController presentViewController:alertController animated:YES completion:nil];
-        });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self forkEnqueueTitle:NXStringForNXAlertDiagnosticPresenterLevel(level) message:(message ?: @"")];
     });
+}
+
+/* fork: one notice at a time (main queue only) */
+static NSMutableArray<NSArray<NSString *> *> *NXForkPendingNotices;
+static BOOL NXForkNoticeShowing = NO;
+static __weak UIAlertController *NXForkCurrentNotice;
+
++ (void)forkEnqueueTitle:(NSString *)title message:(NSString *)message
+{
+    if(NXForkPendingNotices == nil) NXForkPendingNotices = [NSMutableArray array];
+    NSArray<NSString *> *notice = @[title, message];
+    if(![NXForkPendingNotices containsObject:notice]) [NXForkPendingNotices addObject:notice];
+    [self forkShowNextNotice];
+}
+
++ (void)forkShowNextNotice
+{
+    /* the notice was closed some other way */
+    if(NXForkNoticeShowing && (NXForkCurrentNotice == nil || NXForkCurrentNotice.presentingViewController == nil)) NXForkNoticeShowing = NO;
+    if(NXForkNoticeShowing || NXForkPendingNotices.count == 0) return;
+    UIViewController *viewController = NXTopViewController(NXWindowServer.shared.rootViewController);
+    if(viewController == nil || viewController.isBeingPresented || viewController.isBeingDismissed ||
+       viewController.view.window == nil || viewController.transitionCoordinator != nil)
+    {
+        /* a screen is appearing or going away: try again in a moment */
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self forkShowNextNotice];
+        });
+        return;
+    }
+    NSArray<NSString *> *notice = NXForkPendingNotices.firstObject;
+    [NXForkPendingNotices removeObjectAtIndex:0];
+    NXForkNoticeShowing = YES;
+    UIAlertController *alertController = [UIAlertController alertControllerWithTitle:notice[0] message:notice[1] preferredStyle:UIAlertControllerStyleAlert];
+    NXForkCurrentNotice = alertController;
+    [alertController addAction:[UIAlertAction actionWithTitle:@"Close" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+        NXForkNoticeShowing = NO;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self forkShowNextNotice];
+        });
+    }]];
+    [viewController presentViewController:alertController animated:YES completion:^{
+        if(alertController.presentingViewController == nil)
+        {
+            /* UIKit did not show it: let the next one through */
+            NXForkNoticeShowing = NO;
+        }
+    }];
 }
 
 @end
