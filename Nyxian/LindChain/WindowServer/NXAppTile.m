@@ -20,7 +20,16 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-11): tiles take NXAppTileScale (the app switcher makes
+    them smaller in landscape, where 380 pt tall tiles did not fit).
+*/
+
 #import <LindChain/WindowServer/NXAppTile.h>
+
+CGFloat NXAppTileScale = 1.0;
 
 @implementation NXAppTile
 
@@ -79,18 +88,19 @@
     [self addSubview:tileWrapper];
     [self addSubview:title];
     
+    const CGFloat k = NXAppTileScale;
     [NSLayoutConstraint activateConstraints:@[
-        [self.widthAnchor constraintEqualToConstant:150],
-        [self.heightAnchor constraintEqualToConstant:380],
+        [self.widthAnchor constraintEqualToConstant:150 * k],
+        [self.heightAnchor constraintEqualToConstant:380 * k],
         
         [title.topAnchor constraintEqualToAnchor:self.topAnchor],
         [title.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
-        [title.widthAnchor constraintEqualToConstant:140],
+        [title.widthAnchor constraintEqualToConstant:140 * k],
         
         [tileWrapper.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:8],
         [tileWrapper.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
-        [tileWrapper.widthAnchor constraintEqualToConstant:150],
-        [tileWrapper.heightAnchor constraintEqualToConstant:280],
+        [tileWrapper.widthAnchor constraintEqualToConstant:150 * k],
+        [tileWrapper.heightAnchor constraintEqualToConstant:280 * k],
         
         [tileMaterial.topAnchor constraintEqualToAnchor:tileWrapper.topAnchor],
         [tileMaterial.leadingAnchor constraintEqualToAnchor:tileWrapper.leadingAnchor],
@@ -109,8 +119,8 @@
         
         [reflection.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
         [reflection.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
-        [reflection.widthAnchor constraintEqualToConstant:150],
-        [reflection.heightAnchor constraintEqualToConstant:60]
+        [reflection.widthAnchor constraintEqualToConstant:150 * k],
+        [reflection.heightAnchor constraintEqualToConstant:60 * k]
     ]];
     
     dispatch_async(dispatch_get_main_queue(), ^{

@@ -4,6 +4,21 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.55.0 — 2026-11-11
+
+- **App switcher in landscape**: it rises from the bottom up to just below
+  the top safe area and its tiles get smaller so they fit (they were cut
+  off); rotating with it open closes it.
+- **Credentials > Username** defaults to `mioftalmologo` (the old default
+  "Anonym" / "Anonymous" or an empty name is replaced once).
+- **.swiftpm icons both ways**: a package whose icon is Swift Playgrounds'
+  placeholder (`appIcon: .placeholder(icon: .leaf)` with
+  `accentColor: .presetColor(.green)`) gets that icon drawn like Playgrounds
+  (white glyph on the accent color) instead of none; projects imported
+  before get it the first time the list shows them. On export it goes back
+  as the same placeholder unless the icon was changed in Nyxian (then as
+  the picture, `appIcon: .asset("AppIcon")`).
+
 ## 1.54.0 — 2026-11-11
 
 - **File pickers in apps Nyxian runs** (SwiftUI `.fileImporter`,

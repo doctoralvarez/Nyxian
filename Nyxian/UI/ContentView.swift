@@ -21,8 +21,15 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.35.0
+ Fork doctoralvarez/Nyxian — version 1.36.0
  Changelog:
+  - 1.36.0 (2026-11-11): .swiftpm icons both ways — a package whose icon is
+    Swift Playgrounds' placeholder (appIcon: .placeholder(icon: .leaf) with
+    accentColor: .presetColor(.green)) now gets that icon drawn like
+    Playgrounds (glyph on the accent color) instead of none; it is exported
+    back as the same placeholder unless the icon was changed in Nyxian
+    (then as the picture, appIcon: .asset("AppIcon")). Projects imported
+    before get theirs drawn the first time the list shows them.
   - 1.35.0 (2026-11-10): the "Preparing…" window of Python and Node.js has
     "Hide (keeps preparing)": no more closing Nyxian when it takes long; a
     notice says when it is ready. The signing report is written in the
@@ -581,7 +588,7 @@ import Network
         let cell: ProjectTableCell = self.tableView.dequeueReusableCell(withIdentifier: ProjectTableCell.reuseIdentifier) as! ProjectTableCell
         let icon: UIImage? = {
             switch project.projectConfig.schemeKind {
-            case .app: return ForkAppIcon.sourceImage(of: project) /* fork: the project's own icon, if it has one */
+            case .app: return ForkAppIcon.sourceImage(of: project) ?? ForkAppIcon.placeholderFromOriginalManifest(project) /* fork: the project's own icon, if it has one */
             case .kSurfaceKext: return UIImage(systemName: "puzzlepiece.extension.fill")
             default: return UIImage(named: "UtilityIcon")
             }
@@ -1223,6 +1230,10 @@ enum SwiftPlaygroundsImporter {
                     iconImported = (try? ForkAppIcon.install(image, in: project)) != nil
                 }
             }
+            /* fork: no picture — Swift Playgrounds' placeholder icon (glyph on the accent color) */
+            if !iconImported {
+                iconImported = ForkAppIcon.installPlaceholder(manifest: manifest, in: project)
+            }
             
             for catalog in assetCatalogs {
                 let converted = convertAssetCatalogImages(catalog, into: project.resourcesURL)
@@ -1545,7 +1556,10 @@ enum SwiftPlaygroundsExporter {
         let hasResources = resourceCount > 0
         let original = (try? String(contentsOf: root.appendingPathComponent("Config/\(originalManifestName)"), encoding: .utf8)) ?? ""
         var appIcon = firstMatch(in: original, pattern: #"\.placeholder\s*\(\s*icon\s*:\s*\.[A-Za-z]+\s*\)"#) ?? ".placeholder(icon: .leaf)"
-        if let iconImage = ForkAppIcon.sourceImage(of: project) {
+        if let placeholder = ForkAppIcon.placeholderExpression(of: project) {
+            /* fork: still Playgrounds' placeholder icon (not changed in Nyxian): write it back as such */
+            appIcon = placeholder
+        } else if let iconImage = ForkAppIcon.sourceImage(of: project) {
             try ForkAppIcon.writeAppIconSet(iconImage, into: package.appendingPathComponent("Assets.xcassets"))
             appIcon = ".asset(\"AppIcon\")"
         }
@@ -1752,6 +1766,8 @@ enum ForkAppIcon {
     }
     
     static func install(_ image: UIImage, in project: NXProject) throws {
+        /* a new picture replaces a Swift Playgrounds placeholder icon */
+        try? FileManager.default.removeItem(at: placeholderMarkerURL(of: project))
         guard let source = render(image, pixels: 1024) else { throw CocoaError(.fileWriteUnknown) }
         try source.write(to: sourceURL(of: project), options: .atomic)
         let resources: URL = project.resourcesURL
@@ -1766,6 +1782,110 @@ enum ForkAppIcon {
         ], project: project)
     }
     
+    // MARK: fork — Swift Playgrounds placeholder icons (appIcon: .placeholder(icon: .leaf))
+
+    /// Holds the manifest's `.placeholder(icon: …)` while the project's icon is still that placeholder.
+    static func placeholderMarkerURL(of project: NXProject) -> URL {
+        let root: URL = project.url
+        return root.appendingPathComponent("Config/AppIcon.placeholder")
+    }
+
+    /// The `.placeholder(icon: .x)` to write back on export, when the icon was not changed in Nyxian.
+    static func placeholderExpression(of project: NXProject) -> String? {
+        guard let text = try? String(contentsOf: placeholderMarkerURL(of: project), encoding: .utf8) else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func firstGroup(_ pattern: String, in text: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              match.numberOfRanges > 1, let range = Range(match.range(at: 1), in: text) else { return nil }
+        return String(text[range])
+    }
+
+    /// Playgrounds' placeholder glyphs as SF Symbols (closest match).
+    private static let placeholderSymbols: [String: String] = [
+        "bandage": "bandage.fill", "barChart": "chart.bar.fill", "beachball": "beach.umbrella.fill", "beachBall": "beach.umbrella.fill",
+        "bicycle": "bicycle", "binoculars": "binoculars.fill", "bird": "bird.fill", "boat": "sailboat.fill",
+        "bowl": "takeoutbag.and.cup.and.straw.fill", "box": "shippingbox.fill", "bunny": "hare.fill",
+        "butterfly": "ladybug.fill", "calculator": "plus.forwardslash.minus", "calendar": "calendar",
+        "camera": "camera.fill", "car": "car.fill", "carrot": "carrot.fill", "cat": "cat.fill",
+        "chatMessage": "message.fill", "checkmark": "checkmark", "clock": "clock.fill", "cloud": "cloud.fill",
+        "coffee": "cup.and.saucer.fill", "coins": "dollarsign.circle.fill", "dog": "dog.fill",
+        "earth": "globe.americas.fill", "flower": "camera.macro", "gamepad": "gamecontroller.fill",
+        "gift": "gift.fill", "heart": "heart.fill", "images": "photo.on.rectangle.angled", "leaf": "leaf.fill",
+        "lightningBolt": "bolt.fill", "location": "location.fill", "magicWand": "wand.and.stars",
+        "map": "map.fill", "mic": "mic.fill", "moon": "moon.fill", "movieReel": "film.fill",
+        "note": "music.note", "openBook": "book.fill", "palette": "paintpalette.fill", "paper": "doc.fill",
+        "pencil": "pencil", "plant": "leaf.fill", "running": "figure.run", "sandwich": "fork.knife",
+        "shoppingCart": "cart.fill", "sparkle": "sparkles", "star": "star.fill", "sun": "sun.max.fill",
+        "tv": "tv.fill", "twoPeople": "person.2.fill", "weights": "dumbbell.fill"
+    ]
+
+    private static let presetColors: [String: UIColor] = [
+        "blue": .systemBlue, "brown": .systemBrown, "cyan": .systemCyan, "green": .systemGreen,
+        "indigo": .systemIndigo, "mint": .systemMint, "orange": .systemOrange, "pink": .systemPink,
+        "purple": .systemPurple, "red": .systemRed, "teal": .systemTeal, "yellow": .systemYellow
+    ]
+
+    /// A Playgrounds-style placeholder icon: the accent color with a white glyph.
+    static func placeholderImage(icon: String, color: String) -> UIImage {
+        let base = (presetColors[color] ?? .systemBlue).resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+        let size = CGSize(width: 1024, height: 1024)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        return UIGraphicsImageRenderer(size: size, format: format).image { context in
+            var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
+            base.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+            let top = UIColor(hue: hue, saturation: max(0, saturation - 0.12), brightness: min(1, brightness + 0.10), alpha: 1)
+            let bottom = UIColor(hue: hue, saturation: min(1, saturation + 0.06), brightness: max(0, brightness - 0.12), alpha: 1)
+            let colors = [top.cgColor, bottom.cgColor] as CFArray
+            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) {
+                context.cgContext.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: 0, y: size.height), options: [])
+            } else {
+                base.setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+            }
+            let configuration = UIImage.SymbolConfiguration(pointSize: 470, weight: .medium)
+            let name = placeholderSymbols[icon] ?? "app.fill"
+            if let glyph = (UIImage(systemName: name, withConfiguration: configuration) ?? UIImage(systemName: "app.fill", withConfiguration: configuration))?
+                .withTintColor(.white, renderingMode: .alwaysOriginal) {
+                let glyphSize = glyph.size
+                let scale = min(560 / glyphSize.width, 560 / glyphSize.height, 1.4)
+                let drawn = CGSize(width: glyphSize.width * scale, height: glyphSize.height * scale)
+                glyph.draw(in: CGRect(x: (size.width - drawn.width) / 2, y: (size.height - drawn.height) / 2,
+                                      width: drawn.width, height: drawn.height))
+            }
+        }
+    }
+
+    /// Imports a manifest's `appIcon: .placeholder(icon: .x)` as the project's icon (drawn like
+    /// Swift Playgrounds does, with `accentColor: .presetColor(.y)`), remembering the placeholder
+    /// so an export writes it back unchanged.
+    @discardableResult
+    static func installPlaceholder(manifest: String, in project: NXProject) -> Bool {
+        guard let icon = firstGroup(#"appIcon\s*:\s*\.placeholder\s*\(\s*icon\s*:\s*\.([A-Za-z]+)\s*\)"#, in: manifest) else { return false }
+        let color = firstGroup(#"accentColor\s*:\s*\.presetColor\s*\(\s*\.([A-Za-z]+)\s*\)"#, in: manifest) ?? "blue"
+        do {
+            try install(placeholderImage(icon: icon, color: color), in: project)
+            try ".placeholder(icon: .\(icon))".write(to: placeholderMarkerURL(of: project), atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Projects imported before placeholder icons were drawn: draw it once from the kept manifest.
+    static func placeholderFromOriginalManifest(_ project: NXProject) -> UIImage? {
+        let root: URL = project.url
+        let kept = root.appendingPathComponent("Config/\(SwiftPlaygroundsExporter.originalManifestName)")
+        guard let manifest = try? String(contentsOf: kept, encoding: .utf8),
+              installPlaceholder(manifest: manifest, in: project) else { return nil }
+        return sourceImage(of: project)
+    }
+
     /// A single-size (1024) AppIcon.appiconset for a Swift Playgrounds package.
     static func writeAppIconSet(_ image: UIImage, into catalog: URL) throws {
         let fm = FileManager.default

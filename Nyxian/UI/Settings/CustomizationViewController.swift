@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.5.0
+ Fork doctoralvarez/Nyxian — version 1.6.0
  Changelog:
+  - 1.6.0 (2026-11-11): Credentials > Username defaults to "mioftalmologo"
+    (the old default "Anonym" is replaced).
   - 1.5.0 (2026-11-09): "SDK Backup" (owner/repo) and "GitHub Token" — where
     the iOS SDK comes from when nyxian.app fails twice.
   - 1.4.1 (2026-11-08): Debugger off by default ("breakpoints; slower builds").
@@ -111,7 +113,8 @@ class CustomizationViewController: NXUITableViewController {
         
         if indexPath.section == 0 {
             if indexPath.row == 0 {
-                cell = NXTextFieldTableCell(title: "Username", hint: "Anonym", key: "LDEUsername", defaultValue: "Anonym")
+                _ = NXUserDefaultUsernameApplied()
+                cell = NXTextFieldTableCell(title: "Username", hint: "mioftalmologo", key: "LDEUsername", defaultValue: "mioftalmologo")
             } else if indexPath.row == 1 {
                 cell = NXTextFieldTableCell(title: "Hostname", hint: "localhost", key: "LDEHostname", defaultValue: "localhost") { newValue in
                     ksurface_sethostname(newValue)

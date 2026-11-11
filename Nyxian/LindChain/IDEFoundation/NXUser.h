@@ -20,10 +20,19 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-11): NXUserDefaultUsernameApplied().
+*/
+
 #ifndef NXUSER_H
 #define NXUSER_H
 
 #import <Foundation/Foundation.h>
+
+/// fork: the username, "mioftalmologo" when none (or the old default) is set
+NSString *NXUserDefaultUsernameApplied(void);
 
 @interface NXUser : NSObject
 

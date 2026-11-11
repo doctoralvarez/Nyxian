@@ -20,12 +20,21 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-11): NXAppTileScale.
+*/
+
 #ifndef NXAPPTILE_H
 #define NXAPPTILE_H
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <LindChain/WindowServer/Window/NXWindow.h>
+
+/// fork: size of the next tiles (1 = 150 x 380 pt); the switcher lowers it in landscape
+extern CGFloat NXAppTileScale;
 
 @interface NXAppTile : UIView
 

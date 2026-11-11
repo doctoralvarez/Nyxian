@@ -21,13 +21,29 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-11): the default username is "mioftalmologo" (also
+    replacing the old defaults "Anonym" / "Anonymous" or an empty name).
   - 1.0.0 (2026-11-07): new .py files start with a header in Python
     comments (#).
 */
 
 #import <LindChain/IDEFoundation/NXUser.h>
+
+/* fork: the owner's default username; replaces the old defaults once */
+NSString *NXUserDefaultUsernameApplied(void)
+{
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSString *username = [defaults stringForKey:@"LDEUsername"];
+    NSString *trimmed = [username stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if(trimmed.length == 0 || [trimmed isEqualToString:@"Anonym"] || [trimmed isEqualToString:@"Anonymous"])
+    {
+        username = @"mioftalmologo";
+        [defaults setObject:username forKey:@"LDEUsername"];
+    }
+    return username;
+}
 
 @implementation NXUser {
     NSDateFormatter *_formatter;
@@ -53,9 +69,7 @@
 
 - (NSString*)username
 {
-    NSString *username = [[NSUserDefaults standardUserDefaults] valueForKey:@"LDEUsername"];
-    if(username == nil)
-        username = @"Anonymous";
+    NSString *username = NXUserDefaultUsernameApplied();
     return username;
 }
 

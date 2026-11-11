@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-11): the app switcher fits landscape: there it rises from
+    the bottom up to just below the top safe area and its tiles get smaller
+    (NXAppTileScale) so they are not cut off; rotating with it open closes it.
   - 1.0.0 (2026-11-10): windows follow a rotation on iPhone and iPad: when
     the screen's size or safe area changes (landscape ↔ portrait, also with
     the orientation lock of Settings), every window is laid out again —
@@ -50,6 +53,8 @@
 @end
 
 @implementation NXWindowServer {
+    BOOL _forkSwitcherLandscape;
+    CGFloat _forkSwitcherHeight;
     /* fork: the size and safe area the windows were laid out for */
     CGSize _forkLaidOutSize;
     UIEdgeInsets _forkLaidOutInsets;
@@ -98,6 +103,14 @@
 {
     [super layoutSubviews];
     _windowLayer.frame = self.bounds;
+    /* fork: rotated with the switcher open — close it (it was laid out for the other orientation) */
+    if(self.appSwitcherView != nil && (self.bounds.size.width > self.bounds.size.height) != _forkSwitcherLandscape)
+    {
+        _forkSwitcherLandscape = (self.bounds.size.width > self.bounds.size.height);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if(self.appSwitcherView != nil) [self hideAppSwitcher];
+        });
+    }
     [self forkRelayoutWindowsIfNeeded];
 }
 
@@ -446,6 +459,21 @@
 
 - (void)buildAppSwitcherView
 {
+    /* fork: landscape — the switcher takes the height there is and its tiles shrink to fit */
+    CGRect area = self.rootViewController.view.bounds;
+    _forkSwitcherLandscape = area.size.width > area.size.height;
+    if(_forkSwitcherLandscape)
+    {
+        _forkSwitcherHeight = area.size.height - self.safeAreaInsets.top - 8;
+        /* tile (380) + the scroll view's insets (20 + 20) and a little air */
+        NXAppTileScale = MIN(1.0, MAX(0.45, (_forkSwitcherHeight - 56) / 380.0));
+    }
+    else
+    {
+        _forkSwitcherHeight = area.size.height * 0.55;
+        NXAppTileScale = 1.0;
+    }
+
     UIView *container = [[UIView alloc] init];
     container.translatesAutoresizingMaskIntoConstraints = NO;
     container.layer.shadowColor = [UIColor blackColor].CGColor;
@@ -505,7 +533,9 @@
     [NSLayoutConstraint activateConstraints:@[
         [self.appSwitcherView.leadingAnchor constraintEqualToAnchor:self.rootViewController.view.leadingAnchor],
         [self.appSwitcherView.trailingAnchor constraintEqualToAnchor:self.rootViewController.view.trailingAnchor],
-        [self.appSwitcherView.heightAnchor constraintEqualToAnchor:self.rootViewController.view.heightAnchor multiplier:0.55]
+        (_forkSwitcherLandscape
+            ? [self.appSwitcherView.heightAnchor constraintEqualToConstant:_forkSwitcherHeight]
+            : [self.appSwitcherView.heightAnchor constraintEqualToAnchor:self.rootViewController.view.heightAnchor multiplier:0.55])
     ]];
     
     self.appSwitcherTopConstraint = [self.appSwitcherView.topAnchor constraintEqualToAnchor:self.rootViewController.view.bottomAnchor];
@@ -805,7 +835,15 @@
 - (void)showAppSwitcher
 {
     self.appSwitcherTopConstraint.active = NO;
-    self.appSwitcherTopConstraint = [self.appSwitcherView.topAnchor constraintEqualToAnchor:self.centerYAnchor];
+    if(_forkSwitcherLandscape)
+    {
+        /* fork: landscape — from the bottom up, its full height on screen */
+        self.appSwitcherTopConstraint = [self.appSwitcherView.topAnchor constraintEqualToAnchor:self.bottomAnchor constant:-_forkSwitcherHeight];
+    }
+    else
+    {
+        self.appSwitcherTopConstraint = [self.appSwitcherView.topAnchor constraintEqualToAnchor:self.centerYAnchor];
+    }
     self.appSwitcherTopConstraint.active = YES;
 
     [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0.6 options:UIViewAnimationOptionCurveEaseInOut animations:^{
@@ -855,7 +893,8 @@
         case UIGestureRecognizerStateChanged:
         {
             CGFloat offset = MAX(0, translation.y);
-            self.appSwitcherTopConstraint.constant = offset;
+            /* fork: in landscape the switcher's top sits -height above the bottom */
+            self.appSwitcherTopConstraint.constant = (_forkSwitcherLandscape ? -_forkSwitcherHeight : 0) + offset;
             [self layoutIfNeeded];
             break;
         }
@@ -863,7 +902,7 @@
         case UIGestureRecognizerStateCancelled:
         {
             CGFloat velocityY = [pan velocityInView:self].y;
-            CGFloat offset = self.appSwitcherTopConstraint.constant;
+            CGFloat offset = self.appSwitcherTopConstraint.constant - (_forkSwitcherLandscape ? -_forkSwitcherHeight : 0);
             
             if(offset > 100 || velocityY > 500)
             {
@@ -871,7 +910,7 @@
             }
             else
             {
-                self.appSwitcherTopConstraint.constant = 0;
+                self.appSwitcherTopConstraint.constant = _forkSwitcherLandscape ? -_forkSwitcherHeight : 0;
                 [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.7 options:UIViewAnimationOptionCurveEaseInOut animations:^{
                     [self layoutIfNeeded];
                 } completion:nil];
