@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.37.1
+ Fork doctoralvarez/Nyxian — version 1.37.2
  Changelog:
+  - 1.37.2 (2026-11-11): Projects selection: the bar (Delete, Duplicate,
+    Export…) shows after a two-finger slide (UIKit turns editing on before
+    telling us, so the bar now follows a flag of its own) and the title goes
+    back to "Projects" after any action. Template identifiers come from
+    Credentials › Username: com.<username> (com.mioftalmologo), and follow it
+    when it changes.
   - 1.37.1 (2026-11-11): runProject looks for the file to run one lookup
     after another (one long ?? chain was too slow for the compiler).
   - 1.37.0 (2026-11-11): Projects: pull down to read the list and icons
@@ -614,7 +620,7 @@ import Network
     
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         /* fork: while selecting, a tap only (de)selects */
-        if tableView.isEditing {
+        if tableView.isEditing || forkSelecting {
             forkUpdateSelectionBar()
             return
         }
@@ -645,7 +651,7 @@ import Network
     }
 
     override func tableView(_ tableView: UITableView, didDeselectRowAt indexPath: IndexPath) {
-        if tableView.isEditing { forkUpdateSelectionBar() }
+        if tableView.isEditing || forkSelecting { forkUpdateSelectionBar() }
     }
 
     override func tableView(_ tableView: UITableView, shouldBeginMultipleSelectionInteractionAt indexPath: IndexPath) -> Bool {
@@ -653,13 +659,15 @@ import Network
     }
 
     override func tableView(_ tableView: UITableView, didBeginMultipleSelectionInteractionAt indexPath: IndexPath) {
-        if !tableView.isEditing { forkSetSelecting(true) }
+        /* UIKit has already turned editing on by now: the bar depends on our own flag */
+        if !forkSelecting { forkSetSelecting(true) }
     }
 
     override func tableViewDidEndMultipleSelectionInteraction(_ tableView: UITableView) {
         forkUpdateSelectionBar()
     }
 
+    private var forkSelecting = false
     private var forkSavedLeftItems: [UIBarButtonItem]?
     private weak var forkSelectAllItem: UIBarButtonItem?
 
@@ -667,10 +675,17 @@ import Network
         (tableView.indexPathsForSelectedRows ?? []).sorted().compactMap { forkProject(at: $0) }
     }
 
-    @objc private func forkToggleSelecting() { forkSetSelecting(!tableView.isEditing) }
+    @objc private func forkToggleSelecting() { forkSetSelecting(!forkSelecting) }
 
     private func forkSetSelecting(_ selecting: Bool) {
+        let wasSelecting = forkSelecting
+        forkSelecting = selecting
         if tableView.isEditing != selecting { tableView.setEditing(selecting, animated: true) }
+        if selecting && wasSelecting { forkUpdateSelectionBar(); return }
+        if !selecting && !wasSelecting {
+            title = "Projects"
+            return
+        }
         if selecting {
             forkSavedLeftItems = navigationItem.leftBarButtonItems
             navigationItem.setLeftBarButtonItems([UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(forkToggleSelecting))], animated: true)
@@ -718,7 +733,10 @@ import Network
     }
 
     private func forkUpdateSelectionBar() {
-        guard tableView.isEditing else { return }
+        guard forkSelecting else {
+            title = "Projects"
+            return
+        }
         let count = tableView.indexPathsForSelectedRows?.count ?? 0
         let total = projectsList.values.reduce(0) { $0 + $1.count }
         for item in toolbarItems ?? [] where item !== forkSelectAllItem {
@@ -1061,7 +1079,25 @@ final class ProjectTemplateOptionsModel: ObservableObject {
 
     init(schemeKind: NXProjectSchemeKind) {
         self.schemeKind = schemeKind
-        self.organizationIdentifier = UserDefaults.standard.string(forKey: Self.organizationIdentifierDefaultsKey) ?? Self.defaultOrganizationIdentifier
+        /* fork: com.<Credentials username> (com.mioftalmologo), following the username when it
+           changes — unless another identifier was typed and kept on purpose */
+        let automatic = Self.organizationIdentifierFromUsername()
+        let saved = UserDefaults.standard.string(forKey: Self.organizationIdentifierDefaultsKey)
+        let savedWasAutomatic = UserDefaults.standard.bool(forKey: Self.organizationIdentifierAutomaticKey)
+        if let saved, !saved.isEmpty, saved != Self.defaultOrganizationIdentifier, !savedWasAutomatic {
+            self.organizationIdentifier = saved
+        } else {
+            self.organizationIdentifier = automatic
+        }
+    }
+
+    private static let organizationIdentifierAutomaticKey = "fork.organizationIdentifier.automatic"
+
+    /// fork: "com." + the username of Settings › Customization › Credentials.
+    static func organizationIdentifierFromUsername() -> String {
+        let username = NXUserDefaultUsernameApplied().lowercased()
+        let part = productIdentifier(from: username)
+        return part.isEmpty ? defaultOrganizationIdentifier : "com.\(part)"
     }
 
     var showsAppOptions: Bool {
@@ -1159,6 +1195,8 @@ final class ProjectTemplateOptionsModel: ObservableObject {
         guard !value.isEmpty else { return }
         organizationIdentifier = value
         UserDefaults.standard.set(value, forKey: Self.organizationIdentifierDefaultsKey)
+        /* fork: still the one made from the username? then it follows the username */
+        UserDefaults.standard.set(value == Self.organizationIdentifierFromUsername(), forKey: Self.organizationIdentifierAutomaticKey)
     }
 
     private func selectLanguage(id: String) {

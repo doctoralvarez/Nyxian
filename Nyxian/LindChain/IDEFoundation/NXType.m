@@ -20,6 +20,13 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-11): Library projects are a valid configuration (no
+    interface): creating one hit the assert and crashed.
+*/
+
 #import <Foundation/Foundation.h>
 #import <LindChain/IDEFoundation/NXType.h>
 
@@ -189,6 +196,14 @@ BOOL NXProjectConfigurationIsValid(NXProjectSchemeKind schemeKind,
     }
     else if(schemeKind == NXProjectSchemeKindKSurfaceKext)
     {
+        if(interfaceKind == NXProjectInterfaceKindUnknown)
+        {
+            return YES;
+        }
+    }
+    else if(schemeKind == NXProjectSchemeKindLibrary)
+    {
+        /* fork: a dynamic library has no interface (Swift, ObjC, C or C++) */
         if(interfaceKind == NXProjectInterfaceKindUnknown)
         {
             return YES;

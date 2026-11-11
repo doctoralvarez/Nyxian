@@ -4,6 +4,20 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.57.1 — 2026-11-11
+
+- **Library projects** no longer crash Nyxian when created: a library was
+  not among the valid project configurations, so creating one hit an
+  assertion.
+- **Projects selection**: the bottom bar (Delete, Duplicate, Export, Show in
+  Files, Select All) now shows after a two-finger slide, and the title goes
+  back to "Projects" after deleting or any other action (it stayed on
+  "N Selected").
+- **Organization identifier** of new projects (App, Command Line Tool,
+  Python, Java, Node.js, Library…) is `com.<Credentials username>` —
+  `com.mioftalmologo` — so only the Product Name is needed; it follows the
+  username when it changes, unless another identifier was typed on purpose.
+
 ## 1.57.0 — 2026-11-11
 
 - **New app icon** (code braces, a prompt and an orange gear on dark navy)
