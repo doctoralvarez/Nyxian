@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-10): the refusal report goes to Python's home as ForkPython
+    saved it (fork.python.home): inside LiveContainer NSHomeDirectory() differs.
   - 1.0.0 (2026-11-10): posix_spawn replies -(100 + PEProcessSpawnFailure) when
     the spawn failed, -90 when the caller's process is unknown and -91 when it
     lacks process.spawn, so the caller can tell why; on a refusal it writes
