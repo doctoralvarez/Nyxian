@@ -25,7 +25,8 @@
  Changelog:
   - 1.0.0 (2026-11-10): posix_spawn returns an error that says why the host did not
     start the program (EAUTH signature, EBADEXEC LiveProcess, ECHILD ended
-    right away, ...) instead of always EPERM.
+    right away, ...) instead of always EPERM. A program this process cannot
+    read gives EACCES, one it would have to sign but may not write EROFS.
 */
 
 #import <Foundation/Foundation.h>
@@ -191,11 +192,14 @@ LIBKERN_PATCH(int, posix_spawn, (pid_t *process_identifier,
      */
     LCMachO *machO = LCMapMachO(resolved, true);
     bool cs_valid = false;
-    if(machO != nil)
+    if(machO == nil)
     {
-        cs_valid = LCCheckCodeSignature(machO);
-        LCUnmapMachO(machO);
+        /* fork: this process cannot read the program (its file sandbox) */
+        free(resolved);
+        return EACCES;
     }
+    cs_valid = LCCheckCodeSignature(machO);
+    LCUnmapMachO(machO);
     if(!cs_valid)
     {
         /* attempt signing */
@@ -212,6 +216,8 @@ LIBKERN_PATCH(int, posix_spawn, (pid_t *process_identifier,
         }
         else
         {
+            /* fork: it needs signing but this process may not write it */
+            errno = EROFS;
             goto out_free_resolved;
         }
         

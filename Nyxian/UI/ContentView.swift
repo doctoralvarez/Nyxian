@@ -5394,6 +5394,8 @@ def run_pipeline(pipeline, background, text):
                         errno.EBUSY: "too many programs are running",
                         errno.EINVAL: "the process group was refused",
                         errno.EPERM: "Nyxian refused it (python3's sandbox or permission to start programs)",
+                        errno.EACCES: "python3's sandbox does not let it read the program",
+                        errno.EROFS: "its signature is not valid here and python3 may not sign it again",
                     }.get(error.errno)
                     if why:
                         sys.stderr.write("  %s\n" % why)
