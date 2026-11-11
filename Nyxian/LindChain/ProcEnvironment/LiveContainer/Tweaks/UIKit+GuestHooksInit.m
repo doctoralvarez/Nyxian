@@ -20,6 +20,17 @@
  along with Nyxian. If not, see <https://www.gnu.org/licenses/>.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-11): file pickers in apps Nyxian runs (SwiftUI .fileImporter,
+    UIDocumentPickerViewController) open files as a copy. Opening "in place"
+    hands the app a security-scoped URL issued for Nyxian, not for the app
+    running inside it, so picking failed or hung (it works in Swift
+    Playgrounds). Folders are still opened in place (they cannot be copied
+    by the picker). Same idea as LiveContainer's "Fix File Picker".
+*/
+
 #import <UIKit/UIKit.h>
 #import "../LCUtils.h"
 #import "UIKitPrivate.h"
@@ -27,6 +38,7 @@
 #import <LocalAuthentication/LocalAuthentication.h>
 #import <LindChain/Utils/Swizzle.h>
 #import <objc/message.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 // Handler for AppDelegate
 @implementation UIApplication(LiveContainerHook)
@@ -142,6 +154,46 @@
 
 @end
 
+/* fork: pickers hand over copies (see the changelog above) */
+@implementation UIDocumentPickerViewController (NyxianForkHook)
+
+static BOOL NXForkOnlyFolders(NSArray<UTType *> *types)
+{
+    if(types.count == 0) return NO;
+    for(UTType *type in types)
+    {
+        if(![type conformsToType:UTTypeFolder] && ![type conformsToType:UTTypeDirectory]) return NO;
+    }
+    return YES;
+}
+
+- (instancetype)hook_initForOpeningContentTypes:(NSArray<UTType *> *)contentTypes asCopy:(BOOL)asCopy
+{
+    BOOL copy = asCopy || !NXForkOnlyFolders(contentTypes);
+    return [self hook_initForOpeningContentTypes:contentTypes asCopy:copy];
+}
+
+- (instancetype)hook_initForOpeningContentTypes:(NSArray<UTType *> *)contentTypes
+{
+    return [self initForOpeningContentTypes:contentTypes asCopy:NO];
+}
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+- (instancetype)hook_initWithDocumentTypes:(NSArray<NSString *> *)allowedUTIs inMode:(UIDocumentPickerMode)mode
+{
+    BOOL folders = allowedUTIs.count > 0;
+    for(NSString *uti in allowedUTIs)
+    {
+        if(![uti isEqualToString:@"public.folder"] && ![uti isEqualToString:@"public.directory"]) { folders = NO; break; }
+    }
+    if(mode == UIDocumentPickerModeOpen && !folders) mode = UIDocumentPickerModeImport;
+    return [self hook_initWithDocumentTypes:allowedUTIs inMode:mode];
+}
+#pragma clang diagnostic pop
+
+@end
+
 void UIKitGuestHooksInit(void)
 {
     static dispatch_once_t onceToken;
@@ -154,5 +206,12 @@ void UIKitGuestHooksInit(void)
         SwizzleObjCMethod(@selector(shouldAutorotateToInterfaceOrientation:), [UIViewController class], @selector(hook_shouldAutorotateToInterfaceOrientation:), nil, kSwizzleMethodTypeInstance);
         SwizzleObjCMethod(@selector(setAutorotates:forceUpdateInterfaceOrientation:), [UIWindow class], @selector(hook_setAutorotates:forceUpdateInterfaceOrientation:), nil, kSwizzleMethodTypeInstance);
         SwizzleObjCMethod(@selector(setDelegate:), [UIApplication class], @selector(hook_setDelegate:), nil, kSwizzleMethodTypeInstance);
+        /* fork: file pickers hand over copies */
+        SwizzleObjCMethod(@selector(initForOpeningContentTypes:asCopy:), [UIDocumentPickerViewController class], @selector(hook_initForOpeningContentTypes:asCopy:), nil, kSwizzleMethodTypeInstance);
+        SwizzleObjCMethod(@selector(initForOpeningContentTypes:), [UIDocumentPickerViewController class], @selector(hook_initForOpeningContentTypes:), nil, kSwizzleMethodTypeInstance);
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        SwizzleObjCMethod(@selector(initWithDocumentTypes:inMode:), [UIDocumentPickerViewController class], @selector(hook_initWithDocumentTypes:inMode:), nil, kSwizzleMethodTypeInstance);
+#pragma clang diagnostic pop
     });
 }

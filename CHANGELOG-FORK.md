@@ -4,6 +4,17 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.54.0 — 2026-11-11
+
+- **File pickers in apps Nyxian runs** (SwiftUI `.fileImporter`,
+  `UIDocumentPickerViewController`) could fail, hang or not let you pick
+  several files, while the same app worked in Swift Playgrounds. Picking
+  "in place" hands the app a security-scoped URL issued for Nyxian, not for
+  the app running inside it. Pickers now hand over copies (like
+  LiveContainer's "Fix File Picker"); folders are still opened in place.
+  Apps need no change: `startAccessingSecurityScopedResource()` simply
+  returns false for a copy.
+
 ## 1.53.0 — 2026-11-10
 
 - Python could still stay on "Installing python3…" until Nyxian was closed
