@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.10.0
+ Fork doctoralvarez/Nyxian — version 1.10.1
  Changelog:
+  - 1.10.1 (2026-11-11): pull to refresh works in every folder, also short
+    ones (the list always bounces); the refresh control is set in viewDidLoad.
   - 1.10.0 (2026-11-11): selection bar (also after a two-finger slide) has
     icons for Delete, Copy, Cut (move on Paste), Duplicate, Compress (.zip
     in this folder) and Share/Export, plus Select All.
@@ -186,6 +188,13 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
         self.tableView.register(FileListCell.self, forCellReuseIdentifier: FileListCell.reuseIdentifier)
         /* fork: needed before a two-finger slide can start selecting */
         self.tableView.allowsMultipleSelectionDuringEditing = !self.isReadOnly
+        /* fork: pull down to read the folder again, also when it has few files
+           (a list shorter than the screen did not bounce, so it could not be pulled) */
+        self.tableView.alwaysBounceVertical = true
+        if self.refreshControl == nil, !self.isSelecting {
+            self.refreshControl = UIRefreshControl()
+            self.refreshControl?.addTarget(self, action: #selector(performRefresh), for: .valueChanged)
+        }
 
         if let project = self.project {
             if !self.isSublink {

@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.57.0 — 2026-11-11
+
+- **New app icon** (code braces, a prompt and an orange gear on dark navy)
+  is the fork's default icon. Nyxian's original icon stays as an option,
+  "Classic", in Settings › Customization › App Icon (with Drawn, Nyxcat…).
+- Pull down to refresh works in every folder of a project, also in short
+  lists (they did not bounce, so they could not be pulled).
+
 ## 1.56.1 — 2026-11-11
 
 - Builds again: the search for the file ▶ runs in a script project is
