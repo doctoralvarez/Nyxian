@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.37.0
+ Fork doctoralvarez/Nyxian — version 1.37.1
  Changelog:
+  - 1.37.1 (2026-11-11): runProject looks for the file to run one lookup
+    after another (one long ?? chain was too slow for the compiler).
   - 1.37.0 (2026-11-11): Projects: pull down to read the list and icons
     again; a two-finger slide selects several projects, with a bar for
     Delete, Duplicate (own name and bundle id), Export (.zip of each, or one
@@ -7393,14 +7395,24 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                 return nil
             }
         }()
-        let script = LiveEditorRegistry.visiblePythonFile(under: root)
-            ?? preferred
-            ?? [root.appendingPathComponent("main.py")].first { FileManager.default.fileExists(atPath: $0.path) }
-            ?? ProjectFileIndex.files(in: root).first { $0.pathExtension.lowercased() == "py" }
-            ?? [root.appendingPathComponent("main.js"), root.appendingPathComponent("index.js")].first { FileManager.default.fileExists(atPath: $0.path) }
-            ?? ProjectFileIndex.files(in: root).first { ForkNode.isScript($0) }
-            ?? [root.appendingPathComponent("Main.java")].first { FileManager.default.fileExists(atPath: $0.path) }
-            ?? ProjectFileIndex.files(in: root).first { ForkJava.isSource($0) }
+        /* fork: one lookup after another (a single ?? chain was too slow to type-check) */
+        let existing: ([String]) -> URL? = { names in
+            names.map { root.appendingPathComponent($0) }.first { fm.fileExists(atPath: $0.path) }
+        }
+        let lookups: [() -> URL?] = [
+            { LiveEditorRegistry.visiblePythonFile(under: root) },
+            { preferred },
+            { existing(["main.py"]) },
+            { ProjectFileIndex.files(in: root).first { $0.pathExtension.lowercased() == "py" } },
+            { existing(["main.js", "index.js"]) },
+            { ProjectFileIndex.files(in: root).first { ForkNode.isScript($0) } },
+            { existing(["Main.java"]) },
+            { ProjectFileIndex.files(in: root).first { ForkJava.isSource($0) } }
+        ]
+        var script: URL? = nil
+        for lookup in lookups where script == nil {
+            script = lookup()
+        }
         guard let script else {
             presenter.forkGitHubAlert("Python", "This project has no .py or .js file yet. Make one with New › File (name.py or name.js).")
             return

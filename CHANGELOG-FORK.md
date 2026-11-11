@@ -4,6 +4,12 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.56.1 — 2026-11-11
+
+- Builds again: the search for the file ▶ runs in a script project is
+  written as one lookup after another (the compiler gave up on one long
+  `??` chain).
+
 ## 1.56.0 — 2026-11-11
 
 - **Projects list**
