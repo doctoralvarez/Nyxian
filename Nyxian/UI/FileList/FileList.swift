@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.9.0
+ Fork doctoralvarez/Nyxian — version 1.10.0
  Changelog:
+  - 1.10.0 (2026-11-11): selection bar (also after a two-finger slide) has
+    icons for Delete, Copy, Cut (move on Paste), Duplicate, Compress (.zip
+    in this folder) and Share/Export, plus Select All.
   - 1.9.0 (2026-11-10): .jar files: tap or hold › Run (java -jar, miniJVM),
     Run in Browser (CheerpJ), Open Contents (NAME.jar.contents, to edit);
     hold that folder › Pack into NAME.jar (the old one stays as .bak).
@@ -230,16 +233,27 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
         navigationItem.rightBarButtonItem?.isEnabled = !isSelecting
 
         if isSelecting {
-            let deleteButton = UIBarButtonItem(title: "Delete", style: .plain, target: self, action: #selector(deleteSelected))
+            /* fork: the usual actions for what is selected — delete, copy, cut (move),
+               duplicate, compress (.zip here) and share */
+            let deleteButton = UIBarButtonItem(image: UIImage(systemName: "trash"), style: .plain, target: self, action: #selector(deleteSelected))
             deleteButton.tintColor = .systemRed
-            let copyButton = UIBarButtonItem(title: "Copy", style: .plain, target: self, action: #selector(copySelected))
-            let shareButton = UIBarButtonItem(title: "Share", style: .plain, target: self, action: #selector(shareSelected))
+            deleteButton.accessibilityLabel = "Delete"
+            let copyButton = UIBarButtonItem(image: UIImage(systemName: "doc.on.doc"), style: .plain, target: self, action: #selector(copySelected))
+            copyButton.accessibilityLabel = "Copy"
+            let cutButton = UIBarButtonItem(image: UIImage(systemName: "scissors"), style: .plain, target: self, action: #selector(forkCutSelected))
+            cutButton.accessibilityLabel = "Move (paste it in another folder)"
+            let duplicateButton = UIBarButtonItem(image: UIImage(systemName: "plus.square.on.square"), style: .plain, target: self, action: #selector(forkDuplicateSelected))
+            duplicateButton.accessibilityLabel = "Duplicate"
+            let zipButton = UIBarButtonItem(image: UIImage(systemName: "archivebox"), style: .plain, target: self, action: #selector(forkCompressSelected))
+            zipButton.accessibilityLabel = "Compress"
+            let shareButton = UIBarButtonItem(image: UIImage(systemName: "square.and.arrow.up"), style: .plain, target: self, action: #selector(shareSelected))
+            shareButton.accessibilityLabel = "Share / Export"
             let selectAllButton = UIBarButtonItem(title: "Select All", style: .plain, target: self, action: #selector(toggleSelectAll))
             self.selectAllButton = selectAllButton
             self.updateSelectAllButton()
             let spacer = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
             
-            setToolbarItems([deleteButton, spacer, selectAllButton, spacer, copyButton, spacer, shareButton], animated: true)
+            setToolbarItems([deleteButton, spacer, copyButton, spacer, cutButton, spacer, duplicateButton, spacer, zipButton, spacer, shareButton, spacer, selectAllButton], animated: true)
             navigationController?.setToolbarHidden(false, animated: true)
             tabBarController?.tabBar.isHidden = true
             
@@ -349,6 +363,80 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
     @objc func copySelected() {
         PasteBoardServices.copy(mode: .copy, paths:selectedPaths)
         toggleSelectionMode()
+        NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Copied: use Paste in another folder", withDelay: 0.0)
+    }
+
+    /* fork: cut — the items move when they are pasted in another folder */
+    @objc func forkCutSelected() {
+        guard !selectedPaths.isEmpty else { return }
+        let moved = selectedPaths
+        PasteBoardServices.onMove = { [weak self] in
+            guard let self else { return }
+            self.entries.removeAll { moved.contains($0.path) }
+            self.tableView.reloadData()
+        }
+        PasteBoardServices.copy(mode: .move, paths: moved)
+        toggleSelectionMode()
+        NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Cut: use Paste in the folder to move them to", withDelay: 0.0)
+    }
+
+    /* fork: "name copy.ext", "name copy 2.ext"… next to each one */
+    @objc func forkDuplicateSelected() {
+        guard !selectedPaths.isEmpty else { return }
+        let fm = FileManager.default
+        for path in selectedPaths.sorted() {
+            let source = URL(fileURLWithPath: path)
+            let folder = source.deletingLastPathComponent()
+            let ext = source.pathExtension
+            let stem = ext.isEmpty ? source.lastPathComponent : source.deletingPathExtension().lastPathComponent
+            var n = 1
+            var destination: URL
+            repeat {
+                let name = n == 1 ? "\(stem) copy" : "\(stem) copy \(n)"
+                destination = folder.appendingPathComponent(ext.isEmpty ? name : "\(name).\(ext)")
+                n += 1
+            } while fm.fileExists(atPath: destination.path)
+            if (try? fm.copyItem(at: source, to: destination)) != nil, folder.path == URL(fileURLWithPath: self.path).path {
+                entries.append(FileListEntry.getEntry(ofPath: destination.path))
+            }
+        }
+        toggleSelectionMode()
+    }
+
+    /* fork: one .zip with everything selected, in this folder */
+    @objc func forkCompressSelected() {
+        guard !selectedPaths.isEmpty else { return }
+        let fm = FileManager.default
+        let items = selectedPaths.sorted().map { URL(fileURLWithPath: $0) }
+        let folder = URL(fileURLWithPath: self.path)
+        let baseName = items.count == 1 ? items[0].deletingPathExtension().lastPathComponent : "Archive"
+        var destination = folder.appendingPathComponent("\(baseName).zip")
+        var n = 2
+        while fm.fileExists(atPath: destination.path) {
+            destination = folder.appendingPathComponent("\(baseName) \(n).zip")
+            n += 1
+        }
+        toggleSelectionMode()
+        DispatchQueue.global(qos: .userInitiated).async {
+            /* a folder with copies of the items, zipped with them at its top */
+            let staging = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("Compress-\(UUID().uuidString)")
+            try? fm.createDirectory(at: staging, withIntermediateDirectories: true)
+            for item in items {
+                try? fm.copyItem(at: item, to: staging.appendingPathComponent(item.lastPathComponent))
+            }
+            zipDirectoryAtPath(staging.path, destination.path, false)
+            try? fm.removeItem(at: staging)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if fm.fileExists(atPath: destination.path) {
+                    self.entries.append(FileListEntry.getEntry(ofPath: destination.path))
+                    self.tableView.reloadData()
+                    NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Made \(destination.lastPathComponent)", withDelay: 0.0)
+                } else {
+                    NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Could not make the .zip", withDelay: 0.0)
+                }
+            }
+        }
     }
 
     func createEntry(mode: FileListEntry.FileListEntryType) {

@@ -20,6 +20,13 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-11): Library projects: clang links with -dynamiclib, Swift with -emit-library
+    (install name @rpath/libNAME.dylib).
+*/
+
 #import <LindChain/IDEFoundation/NXCodeTemplate.h>
 #import <LindChain/IDEFoundation/NXUser.h>
 #import <LindChain/IDEFoundation/NXUtils.h>
@@ -119,6 +126,20 @@ NSArray<NSString*> *NXCompilerFlagsForCodeTemplateLanguage(NXProjectSchemeKind s
             ]];
         }
     }
+    else if(schemeKind == NXProjectSchemeKindLibrary)
+    {
+        /* fork: a dynamic library — the driver links it with -dylib */
+        NSArray *libraryFlags = @[
+            @"-dynamiclib",
+            @"-install_name",
+            @"@rpath/lib$(NXExecutable).dylib",
+        ];
+        if(languageKind == NXProjectLanguageKindCXX)
+        {
+            return [[baseFlags arrayByAddingObject:@"-lc++"] arrayByAddingObjectsFromArray:libraryFlags];
+        }
+        return [[baseFlags arrayByAddingObject:@"-fobjc-arc"] arrayByAddingObjectsFromArray:libraryFlags];
+    }
     else
     {
         return @[
@@ -171,6 +192,17 @@ NSArray<NSString*> *NXSwiftFlagsForCodeTemplateLanguage(NXProjectSchemeKind sche
         @"-module-cache-path",
         @"$(BSROOT)/ModuleCache",
     ];
+    
+    if(schemeKind == NXProjectSchemeKindLibrary)
+    {
+        /* fork: a Swift dynamic library */
+        return [baseFlags arrayByAddingObjectsFromArray:@[
+            @"-parse-as-library",
+            @"-emit-library",
+            @"-Xlinker", @"-install_name",
+            @"-Xlinker", @"@rpath/lib$(NXExecutable).dylib",
+        ]];
+    }
     
     if(schemeKind == NXProjectSchemeKindApp ||
        languageKind != NXProjectLanguageKindSwift)  /* parse as library because swift is not the main language */

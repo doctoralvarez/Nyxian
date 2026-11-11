@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-11): Library projects build (headsup lets them through);
+    Run signs the .dylib and says it was built (a library is not run).
   - 1.3.0 (2026-11-09): forkQuietFailure: a failed build that will be tried
     again another way (the preview's quick build) shows no issue list.
   - 1.2.0 (2026-11-08): Cancel button (top left) while a project builds: the
@@ -116,7 +118,8 @@ final class NXBuilder: NSObject {
     
     func headsup(buildType: NXBuilder.BuildType) throws {
         let type = project.projectConfig.schemeKind
-        if(type != .app && type != .utility && type != .kSurfaceKext) {
+        /* fork: libraries build too */
+        if(type != .app && type != .utility && type != .kSurfaceKext && type != .library) {
             throw NSError(domain: "com.cr4zy.nyxian.builder.headsup", code: 1, userInfo: [NSLocalizedDescriptionKey:"Project type \(type) is unknown."])
         }
         
@@ -245,6 +248,14 @@ final class NXBuilder: NSObject {
                     throw NSError(domain: "com.cr4zy.nyxian.builder.install", code: 1, userInfo: [NSLocalizedDescriptionKey:"Failed to fastpath install utility"])
                 }
                 executablePathCallback(path)
+            } else if self.project.projectConfig.schemeKind == .library {
+                /* fork: a library is not run — signed, and its place shown */
+                LCUtils.signMachOWithoutPatch(at: self.project.machoURL)
+                let name = self.project.machoURL.lastPathComponent
+                DispatchQueue.main.async {
+                    NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Built \(name) (a library is not run: use Export to share it)", withDelay: 0.0)
+                }
+                executablePathCallback(nil)
             } else if self.project.projectConfig.schemeKind == .kSurfaceKext {
                 if let ptr = LCMapMachO(self.project.machoURL.path, false) {
                     ptr.pointee.header.pointee.filetype = UInt32(MH_KEXT_BUNDLE)

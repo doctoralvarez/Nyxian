@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.5.0
+ Fork doctoralvarez/Nyxian — version 1.6.0
  Changelog:
+  - 1.6.0 (2026-11-11): Library projects build to $(CACHEROOT)/lib$(NXExecutable).dylib.
   - 1.5.0 (2026-11-08): faster Swift builds — cross-import overlays only for
     projects whose code uses one (SceneView, SpriteView, Map, VideoPlayer…),
     and line-table debug info only with the debugger turned on.
@@ -434,6 +435,12 @@ static NSArray<NSString*> *NXForkOverlayImports(NSString *sourceRoot)
         case NXProjectSchemeKindUtility:
             [projConfigPlist setValuesForKeysWithDictionary:@{
                 @"NXOutputPath": @"$(CACHEROOT)/$(NXExecutable)"
+            }];
+            break;
+        case NXProjectSchemeKindLibrary:
+            /* fork: a dynamic library */
+            [projConfigPlist setValuesForKeysWithDictionary:@{
+                @"NXOutputPath": @"$(CACHEROOT)/lib$(NXExecutable).dylib"
             }];
             break;
         case NXProjectSchemeKindKSurfaceKext:

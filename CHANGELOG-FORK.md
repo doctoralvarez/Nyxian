@@ -4,6 +4,27 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.56.0 — 2026-11-11
+
+- **Projects list**
+  - Pull down to read the projects and their icons again.
+  - A two-finger slide selects several projects (as in Files or Mail); a bar
+    at the bottom has Delete, Duplicate (with its own name and bundle
+    identifier), Export (a .zip of each project, or one app as .swiftpm),
+    Show in Files and Select All; Done ends it.
+- **Files list**: the selection bar (also after a two-finger slide) has
+  icons for Delete, Copy, Cut (moves on Paste), Duplicate, Compress (a .zip
+  in this folder) and Share/Export, plus Select All.
+- **Templates**
+  - **Library** can be chosen: Swift, Objective-C, C or C++, built as
+    `libNAME.dylib` (Run signs it and says where it is; Export shares it).
+  - **Java**: a project with `Main.java` and a README; ▶ compiles and runs
+    with miniJVM; `.jar` tools in the Shell and the file list.
+  - **Node.js**: a project with `main.js` and `package.json`; ▶ runs it with
+    Node 18; npm in the Shell.
+  - Java and Node.js projects get sections ("Java", "Node.js") and icons of
+    their own in the list; Libraries too.
+
 ## 1.55.0 — 2026-11-11
 
 - **App switcher in landscape**: it rises from the bottom up to just below

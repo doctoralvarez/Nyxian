@@ -21,8 +21,15 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.36.0
+ Fork doctoralvarez/Nyxian — version 1.37.0
  Changelog:
+  - 1.37.0 (2026-11-11): Projects: pull down to read the list and icons
+    again; a two-finger slide selects several projects, with a bar for
+    Delete, Duplicate (own name and bundle id), Export (.zip of each, or one
+    app as .swiftpm), Show in Files and Select All. Templates: Library
+    (Swift, Objective-C, C, C++ → libNAME.dylib), Java (Main.java, run with
+    miniJVM; .jar tools) and Node.js (main.js + package.json); Java and
+    Node.js projects get sections and icons of their own.
   - 1.36.0 (2026-11-11): .swiftpm icons both ways — a package whose icon is
     Swift Playgrounds' placeholder (appIcon: .placeholder(icon: .leaf) with
     accentColor: .presetColor(.green)) now gets that icon drawn like
@@ -283,6 +290,11 @@ import Network
         self.tableView.register(ProjectTableCell.self, forCellReuseIdentifier: ProjectTableCell.reuseIdentifier)
         self.tableView.register(UITableViewCell.self, forCellReuseIdentifier: "Cell")
         self.title = "Projects"
+        /* fork: pull down to read the projects (and their icons) again */
+        self.refreshControl = UIRefreshControl()
+        self.refreshControl?.addTarget(self, action: #selector(forkRefreshProjects), for: .valueChanged)
+        /* fork: a two-finger slide selects several projects */
+        self.tableView.allowsMultipleSelectionDuringEditing = true
 
         let createItem = UIBarButtonItem(
             barButtonSystemItem: .add,
@@ -391,16 +403,8 @@ import Network
     }
     
     func addProject(_ project: NXProject) {
-        let key = {
-            /* fork: Python projects have a section of their own */
-            if ForkPython.isPythonProject(project) { return "python" }
-            switch project.projectConfig.schemeKind {
-            case .app: return "applications"
-            case .utility: return "utilities"
-            case .kSurfaceKext: return "kernel extension"
-            default: return "unknown"
-            }
-        }()
+        /* fork: Python, Java and Node.js projects have sections of their own */
+        let key = Self.sectionKey(for: project)
         
         let oldSections = projectsList.keys.sorted { sortKeys($0, $1) }
         let oldSectionForKey = oldSections.firstIndex(of: key)
@@ -437,15 +441,9 @@ import Network
     }
 
     func removeProject(_ project: NXProject) {
+        /* fork: the section the project is listed in (Python, Java, Node.js, Libraries…) */
+        let key = Self.sectionKey(for: project)
         project.remove()
-        let key = {
-            switch project.projectConfig.schemeKind {
-            case .app: return "applications"
-            case .utility: return "utilities"
-            case .kSurfaceKext: return "kernel extension"
-            default: return "unknown"
-            }
-        }()
         
         guard var list = self.projectsList[key] else { return }
         
@@ -523,9 +521,12 @@ import Network
             return false
         }
         
-        /* fork: Python template */
-        if optionsModel.isPython {
-            ForkPython.makePythonProject(project, name: name)
+        /* fork: Python, Java and Node.js templates */
+        switch optionsModel.scriptKind {
+        case "python": ForkPython.makePythonProject(project, name: name)
+        case "java": ForkPython.makeJavaProject(project, name: name)
+        case "node": ForkPython.makeNodeProject(project, name: name)
+        default: break
         }
         
         addProject(project)
@@ -546,10 +547,11 @@ import Network
     }
     
     private static func sectionKey(for project: NXProject) -> String {
-        if ForkPython.isPythonProject(project) { return "python" }
+        if let kind = ForkPython.scriptKind(of: project) { return kind }
         switch project.projectConfig.schemeKind {
         case .app: return "applications"
         case .utility: return "utilities"
+        case .library: return "libraries"
         case .kSurfaceKext: return "kernel extension"
         default: return "unknown"
         }
@@ -561,6 +563,9 @@ import Network
         case "utilities": return "Utilities"
         case "kernel extension": return "Kernel Extensions"
         case "python": return "Python"
+        case "java": return "Java"
+        case "node": return "Node.js"
+        case "libraries": return "Libraries"
         default: return key.capitalized
         }
     }
@@ -587,9 +592,17 @@ import Network
         let project: NXProject = sectionProjects[indexPath.row]
         let cell: ProjectTableCell = self.tableView.dequeueReusableCell(withIdentifier: ProjectTableCell.reuseIdentifier) as! ProjectTableCell
         let icon: UIImage? = {
+            /* fork: Python, Java and Node.js projects */
+            switch ForkPython.scriptKind(of: project) {
+            case "python": return UIImage(systemName: "chevron.left.forwardslash.chevron.right")
+            case "java": return UIImage(systemName: "cup.and.saucer.fill")
+            case "node": return UIImage(systemName: "curlybraces.square.fill")
+            default: break
+            }
             switch project.projectConfig.schemeKind {
             case .app: return ForkAppIcon.sourceImage(of: project) ?? ForkAppIcon.placeholderFromOriginalManifest(project) /* fork: the project's own icon, if it has one */
             case .kSurfaceKext: return UIImage(systemName: "puzzlepiece.extension.fill")
+            case .library: return UIImage(systemName: "building.columns.fill")
             default: return UIImage(named: "UtilityIcon")
             }
         }()
@@ -598,6 +611,11 @@ import Network
     }
     
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        /* fork: while selecting, a tap only (de)selects */
+        if tableView.isEditing {
+            forkUpdateSelectionBar()
+            return
+        }
         tableView.deselectRow(at: indexPath, animated: true)
         
         sessionIndex = indexPath
@@ -617,6 +635,202 @@ import Network
         }
     }
     
+    // MARK: fork — pull to refresh, select several (two fingers) and act on them
+
+    @objc private func forkRefreshProjects() {
+        reloadProjectsFromDisk()
+        refreshControl?.endRefreshing()
+    }
+
+    override func tableView(_ tableView: UITableView, didDeselectRowAt indexPath: IndexPath) {
+        if tableView.isEditing { forkUpdateSelectionBar() }
+    }
+
+    override func tableView(_ tableView: UITableView, shouldBeginMultipleSelectionInteractionAt indexPath: IndexPath) -> Bool {
+        return true
+    }
+
+    override func tableView(_ tableView: UITableView, didBeginMultipleSelectionInteractionAt indexPath: IndexPath) {
+        if !tableView.isEditing { forkSetSelecting(true) }
+    }
+
+    override func tableViewDidEndMultipleSelectionInteraction(_ tableView: UITableView) {
+        forkUpdateSelectionBar()
+    }
+
+    private var forkSavedLeftItems: [UIBarButtonItem]?
+    private weak var forkSelectAllItem: UIBarButtonItem?
+
+    private var forkSelectedProjects: [NXProject] {
+        (tableView.indexPathsForSelectedRows ?? []).sorted().compactMap { forkProject(at: $0) }
+    }
+
+    @objc private func forkToggleSelecting() { forkSetSelecting(!tableView.isEditing) }
+
+    private func forkSetSelecting(_ selecting: Bool) {
+        if tableView.isEditing != selecting { tableView.setEditing(selecting, animated: true) }
+        if selecting {
+            forkSavedLeftItems = navigationItem.leftBarButtonItems
+            navigationItem.setLeftBarButtonItems([UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(forkToggleSelecting))], animated: true)
+            navigationItem.rightBarButtonItems?.forEach { $0.isEnabled = false }
+            let delete = UIBarButtonItem(image: UIImage(systemName: "trash"), style: .plain, target: self, action: #selector(forkDeleteSelectedProjects))
+            delete.tintColor = .systemRed
+            delete.accessibilityLabel = "Delete"
+            let duplicate = UIBarButtonItem(image: UIImage(systemName: "plus.square.on.square"), style: .plain, target: self, action: #selector(forkDuplicateSelectedProjects))
+            duplicate.accessibilityLabel = "Duplicate"
+            let export = UIBarButtonItem(image: UIImage(systemName: "square.and.arrow.up"), menu: UIMenu(children: [
+                UIAction(title: "Nyxian Projects (.zip)", image: UIImage(systemName: "doc.zipper")) { [weak self] _ in self?.forkExportSelectedProjects() },
+                UIAction(title: "Swift Playgrounds App (.swiftpm)", image: UIImage(systemName: "swift")) { [weak self] _ in
+                    guard let self else { return }
+                    let projects = self.forkSelectedProjects
+                    guard projects.count == 1, let project = projects.first else {
+                        NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Select one app to export it as .swiftpm", withDelay: 0.0)
+                        return
+                    }
+                    self.forkSetSelecting(false)
+                    self.forkExportSwiftPlaygrounds(project)
+                }
+            ]))
+            export.accessibilityLabel = "Export"
+            let showInFiles = UIBarButtonItem(image: UIImage(systemName: "folder"), style: .plain, target: self, action: #selector(forkShowSelectedInFiles))
+            showInFiles.accessibilityLabel = "Show in Files"
+            let selectAll = UIBarButtonItem(title: "Select All", style: .plain, target: self, action: #selector(forkToggleSelectAll))
+            forkSelectAllItem = selectAll
+            let spacer = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
+            setToolbarItems([delete, spacer, duplicate, spacer, export, spacer, showInFiles, spacer, selectAll], animated: true)
+            navigationController?.setToolbarHidden(false, animated: true)
+            tabBarController?.tabBar.isHidden = true
+            refreshControl = nil
+        } else {
+            navigationItem.setLeftBarButtonItems(forkSavedLeftItems, animated: true)
+            forkSavedLeftItems = nil
+            navigationItem.rightBarButtonItems?.forEach { $0.isEnabled = true }
+            setToolbarItems(nil, animated: true)
+            navigationController?.setToolbarHidden(true, animated: true)
+            tabBarController?.tabBar.isHidden = false
+            refreshControl = UIRefreshControl()
+            refreshControl?.addTarget(self, action: #selector(forkRefreshProjects), for: .valueChanged)
+            title = "Projects"
+        }
+        forkUpdateSelectionBar()
+    }
+
+    private func forkUpdateSelectionBar() {
+        guard tableView.isEditing else { return }
+        let count = tableView.indexPathsForSelectedRows?.count ?? 0
+        let total = projectsList.values.reduce(0) { $0 + $1.count }
+        for item in toolbarItems ?? [] where item !== forkSelectAllItem {
+            item.isEnabled = count > 0
+        }
+        forkSelectAllItem?.isEnabled = total > 0
+        forkSelectAllItem?.title = (count == total && total > 0) ? "Deselect All" : "Select All"
+        title = count == 0 ? "Select Projects" : "\(count) Selected"
+    }
+
+    @objc private func forkToggleSelectAll() {
+        let total = projectsList.values.reduce(0) { $0 + $1.count }
+        let selectEverything = (tableView.indexPathsForSelectedRows?.count ?? 0) < total
+        for section in 0..<tableView.numberOfSections {
+            for row in 0..<tableView.numberOfRows(inSection: section) {
+                let indexPath = IndexPath(row: row, section: section)
+                if selectEverything {
+                    tableView.selectRow(at: indexPath, animated: false, scrollPosition: .none)
+                } else {
+                    tableView.deselectRow(at: indexPath, animated: false)
+                }
+            }
+        }
+        forkUpdateSelectionBar()
+    }
+
+    private func forkFinishSelecting() {
+        forkSetSelecting(false)
+        title = "Projects"
+        reloadProjectsFromDisk()
+    }
+
+    @objc private func forkDeleteSelectedProjects() {
+        let projects = forkSelectedProjects
+        guard !projects.isEmpty else { return }
+        let names = projects.prefix(4).compactMap { $0.projectConfig.displayName }.joined(separator: ", ") + (projects.count > 4 ? "…" : "")
+        presentConfirmationAlert(
+            title: "Remove \(projects.count) project\(projects.count == 1 ? "" : "s")?",
+            message: "\(names)\n\nThis cannot be undone.",
+            confirmTitle: "Remove",
+            confirmStyle: .destructive)
+        { [weak self] in
+            for project in projects { project.remove() }
+            self?.forkFinishSelecting()
+        }
+    }
+
+    @objc private func forkDuplicateSelectedProjects() {
+        let projects = forkSelectedProjects
+        guard !projects.isEmpty else { return }
+        let fm = FileManager.default
+        let folder = NXBootstrap.shared().rootURL.appendingPathComponent("Projects")
+        var made = 0
+        for project in projects {
+            let destination = folder.appendingPathComponent(UUID().uuidString)
+            guard (try? fm.copyItem(at: project.url, to: destination)) != nil else { continue }
+            /* a name and bundle identifier of its own, so both can be installed */
+            let plistURL = destination.appendingPathComponent("Config/Project.plist")
+            if let data = try? Data(contentsOf: plistURL),
+               var plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] {
+                let name = (plist["NXDisplayName"] as? String) ?? project.projectConfig.displayName ?? "Project"
+                plist["NXDisplayName"] = name + " copy"
+                if let bundle = plist["NXBundleIdentifier"] as? String {
+                    plist["NXBundleIdentifier"] = bundle + ".copy" + String(UUID().uuidString.prefix(4)).lowercased()
+                }
+                if let out = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) {
+                    try? out.write(to: plistURL, options: .atomic)
+                }
+            }
+            /* build products stay with the original */
+            try? fm.removeItem(at: destination.appendingPathComponent("Cache"))
+            made += 1
+        }
+        forkFinishSelecting()
+        NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Duplicated \(made) project\(made == 1 ? "" : "s")", withDelay: 0.0)
+    }
+
+    private func forkExportSelectedProjects() {
+        let projects = forkSelectedProjects
+        guard !projects.isEmpty else { return }
+        forkSetSelecting(false)
+        title = "Projects"
+        let temp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ProjectsExport-\(UUID().uuidString)")
+        DispatchQueue.global(qos: .userInitiated).async {
+            try? FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+            var zips: [URL] = []
+            var used = Set<String>()
+            for project in projects {
+                var name = (project.projectConfig.displayName ?? "Project").replacingOccurrences(of: "/", with: "-")
+                while used.contains(name) { name += " 2" }
+                used.insert(name)
+                let zip = temp.appendingPathComponent("\(name).zip")
+                if zipDirectoryAtPath(project.url.path, zip.path, true) { zips.append(zip) }
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !zips.isEmpty else { return }
+                let activity = UIActivityViewController(activityItems: zips, applicationActivities: nil)
+                activity.completionWithItemsHandler = { _, _, _, _ in try? FileManager.default.removeItem(at: temp) }
+                if let popover = activity.popoverPresentationController {
+                    popover.sourceView = self.view
+                    popover.sourceRect = CGRect(x: self.view.bounds.midX, y: self.view.bounds.maxY - 40, width: 0, height: 0)
+                }
+                self.present(activity, animated: true)
+            }
+        }
+    }
+
+    @objc private func forkShowSelectedInFiles() {
+        guard let project = forkSelectedProjects.first else { return }
+        forkSetSelecting(false)
+        title = "Projects"
+        ForkFilesApp.open(project.url, from: self)
+    }
+
     /* fork: the project shown at a row */
     private func forkProject(at indexPath: IndexPath) -> NXProject? {
         let keys = sortedSectionKeys
@@ -815,8 +1029,11 @@ final class ProjectTemplateOptionsModel: ObservableObject {
 
     @Published var step: ProjectCreationStep = .template
     @Published private(set) var schemeKind: NXProjectSchemeKind
-    /* fork: the "Python" template (made as a command line tool without sources) */
-    @Published private(set) var isPython = false
+    /* fork: the "Python", "Java" and "Node.js" templates (made as command line tools
+       without sources); nil for the others */
+    @Published private(set) var scriptKind: String? = nil
+    var isPython: Bool { scriptKind == "python" }
+    private static let scriptDefaultNames = ["python": "Pythons", "java": "JavaApp", "node": "NodeApp"]
     private let appLanguages: [ProjectTemplatePickerOption] = [
         ProjectTemplatePickerOption(id: "Swift", title: "Swift"),
         ProjectTemplatePickerOption(id: "ObjC", title: "Objective-C")
@@ -846,18 +1063,23 @@ final class ProjectTemplateOptionsModel: ObservableObject {
     }
 
     var showsAppOptions: Bool {
-        return schemeKind == .app && !isPython
+        return schemeKind == .app && scriptKind == nil
     }
     
     var showLanguageOptions: Bool {
-        return schemeKind != .kSurfaceKext && !isPython
+        return schemeKind != .kSurfaceKext && scriptKind == nil
     }
     
-    func selectPython() {
-        isPython = true
+    func selectPython() { selectScript("python") }
+
+    /// fork: Python, Java or Node.js — a command line tool project whose sources are scripts.
+    func selectScript(_ kind: String) {
+        let previousDefault = scriptKind.flatMap { Self.scriptDefaultNames[$0] }
+        if let previousDefault, productName == previousDefault { productName = "" }
+        scriptKind = kind
         schemeKind = .utility
         selectedLanguageID = "C"
-        if productName.trimmingCharacters(in: .whitespaces).isEmpty { productName = "Pythons" }
+        if productName.trimmingCharacters(in: .whitespaces).isEmpty { productName = Self.scriptDefaultNames[kind] ?? "" }
     }
 
     var normalizedOrganizationIdentifier: String {
@@ -896,7 +1118,7 @@ final class ProjectTemplateOptionsModel: ObservableObject {
     }
 
     var languageOptions: [ProjectTemplatePickerOption] {
-        if schemeKind == .utility {
+        if schemeKind == .utility || schemeKind == .library {
             return utilityLanguages
         } else if schemeKind == .kSurfaceKext {
             return kextLanguages
@@ -913,8 +1135,8 @@ final class ProjectTemplateOptionsModel: ObservableObject {
     }
 
     func selectProjectType(_ schemeKind: NXProjectSchemeKind) {
-        if isPython, productName == "Pythons" { productName = "" }
-        isPython = false
+        if let kind = scriptKind, productName == Self.scriptDefaultNames[kind] { productName = "" }
+        scriptKind = nil
         self.schemeKind = schemeKind
         if schemeKind == .app {
             switch selectedLanguageID {
@@ -7002,6 +7224,126 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     static func isPythonProject(_ project: NXProject) -> Bool {
         FileManager.default.fileExists(atPath: (project.url as URL).appendingPathComponent(projectMarker).path)
     }
+
+    /// fork: a script project's language — "python", "java" or "node" (the marker's text) — or nil.
+    static func scriptKind(of project: NXProject) -> String? {
+        let marker = (project.url as URL).appendingPathComponent(projectMarker)
+        guard let data = FileManager.default.contents(atPath: marker.path) else { return nil }
+        let kind = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["java", "node"].contains(kind) ? kind : "python"
+    }
+
+    /// fork: a new command line tool project turned into a Java project (Main.java, run
+    /// with miniJVM: ▶ compiles and runs the file on screen; .jar tools in the Shell).
+    static func makeJavaProject(_ project: NXProject, name: String) {
+        removeTemplateSources(project)
+        let root = project.url as URL
+        let className = "Main"
+        let main = """
+        // \(name) — Main.java
+        //
+        // Java en Nyxian (miniJVM: Java 8, sin Swing ni AWT).
+        //   ▶ (o ⌘R) compila y corre el .java abierto (o Main.java).
+        //   Shell: java Main.java · javac -d out *.java · java -cp out Main
+        //          jar cfe app.jar Main -C out .   ·   java -jar app.jar
+        //   Un .jar con ventanas (Swing): mantenlo presionado › Run in Browser (CheerpJ).
+
+        import java.util.ArrayList;
+        import java.util.List;
+        import java.util.Scanner;
+
+        public class \(className) {
+            public static void main(String[] args) {
+                System.out.println("Hola desde Java " + System.getProperty("java.version"));
+                List<Integer> cuadrados = new ArrayList<>();
+                for (int i = 1; i <= 5; i++) cuadrados.add(i * i);
+                System.out.println("Cuadrados: " + cuadrados);
+
+                Scanner entrada = new Scanner(System.in);
+                System.out.print("Como te llamas? ");
+                if (entrada.hasNextLine()) {
+                    System.out.println("Hola, " + entrada.nextLine() + "!");
+                }
+            }
+        }
+
+        """
+        try? main.write(to: root.appendingPathComponent("\(className).java"), atomically: true, encoding: .utf8)
+        let readme = """
+        # \(name)
+
+        Proyecto Java para Nyxian (miniJVM, Java 8).
+
+        - ▶ / ⌘R: compila y ejecuta el .java abierto, o Main.java.
+        - En el Shell (carpeta del proyecto):
+          - `java Main.java` — compila y ejecuta en un paso
+          - `javac -d out *.java` y `java -cp out Main`
+          - `jar cfe app.jar Main -C out .` y `java -jar app.jar`
+        - Un .jar: tócalo para Run (java -jar), Run in Browser (CheerpJ, con Swing) u Open Contents.
+
+        """
+        try? readme.write(to: root.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+        FileManager.default.createFile(atPath: root.appendingPathComponent(projectMarker).path, contents: Data("java\n".utf8))
+    }
+
+    /// fork: a new command line tool project turned into a Node.js project (main.js, package.json).
+    static func makeNodeProject(_ project: NXProject, name: String) {
+        removeTemplateSources(project)
+        let root = project.url as URL
+        let packageName = name.lowercased().replacingOccurrences(of: " ", with: "-").filter { $0.isLetter || $0.isNumber || $0 == "-" }
+        let main = """
+        // \(name) — main.js
+        //
+        // Node.js en Nyxian (Node 18, sin JIT).
+        //   ▶ (o ⌘R) corre el .js abierto (o main.js).
+        //   Shell: node main.js · npm install PAQUETE (sin scripts de instalacion) · npx
+        //   Un servidor (http) se abre en el navegador interno.
+
+        const os = require('os');
+        const readline = require('readline');
+
+        console.log(`Hola desde Node.js ${process.version} en ${os.platform()}`);
+        const cuadrados = [1, 2, 3, 4, 5].map(n => n * n);
+        console.log('Cuadrados:', cuadrados.join(', '));
+
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        rl.question('Como te llamas? ', nombre => {
+          console.log(`Hola, ${nombre}!`);
+          rl.close();
+        });
+
+        """
+        try? main.write(to: root.appendingPathComponent("main.js"), atomically: true, encoding: .utf8)
+        let package = """
+        {
+          "name": "\(packageName.isEmpty ? "proyecto" : packageName)",
+          "version": "1.0.0",
+          "description": "\(name) (Node.js en Nyxian)",
+          "main": "main.js",
+          "scripts": {
+            "start": "node main.js"
+          },
+          "license": "UNLICENSED",
+          "private": true
+        }
+
+        """
+        try? package.write(to: root.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
+        FileManager.default.createFile(atPath: root.appendingPathComponent(projectMarker).path, contents: Data("node\n".utf8))
+    }
+
+    /// The command line tool template's sources (C, Swift…) — a script project has none.
+    private static func removeTemplateSources(_ project: NXProject) {
+        let fm = FileManager.default
+        let root = project.url as URL
+        let sources: Set<String> = ["c", "h", "m", "mm", "cpp", "cc", "cxx", "hpp", "swift"]
+        if let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]) {
+            for case let url as URL in enumerator {
+                if url.lastPathComponent == "Config" { enumerator.skipDescendants(); continue }
+                if sources.contains(url.pathExtension.lowercased()) { try? fm.removeItem(at: url) }
+            }
+        }
+    }
     
     /// Turns a new command line tool project into a Python one: its template
     /// sources go, main.py comes, and a marker says what it is.
@@ -7037,7 +7379,22 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     /// ▶ / ⌘R in a Python project: the .py on screen, else main.py, else the first .py.
     static func runProject(_ project: NXProject, from presenter: UIViewController) {
         let root = project.url as URL
+        let fm = FileManager.default
+        /* fork: a Java or Node.js project starts with its own files */
+        let preferred: URL? = {
+            switch scriptKind(of: project) {
+            case "java":
+                return [root.appendingPathComponent("Main.java")].first { fm.fileExists(atPath: $0.path) }
+                    ?? ProjectFileIndex.files(in: root).first { ForkJava.isSource($0) }
+            case "node":
+                return [root.appendingPathComponent("main.js"), root.appendingPathComponent("index.js")].first { fm.fileExists(atPath: $0.path) }
+                    ?? ProjectFileIndex.files(in: root).first { ForkNode.isScript($0) }
+            default:
+                return nil
+            }
+        }()
         let script = LiveEditorRegistry.visiblePythonFile(under: root)
+            ?? preferred
             ?? [root.appendingPathComponent("main.py")].first { FileManager.default.fileExists(atPath: $0.path) }
             ?? ProjectFileIndex.files(in: root).first { $0.pathExtension.lowercased() == "py" }
             ?? [root.appendingPathComponent("main.js"), root.appendingPathComponent("index.js")].first { FileManager.default.fileExists(atPath: $0.path) }

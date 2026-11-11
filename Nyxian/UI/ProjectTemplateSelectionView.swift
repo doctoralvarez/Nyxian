@@ -22,8 +22,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-11): "Library" can be chosen (libNAME.dylib); new "Java"
+    (miniJVM, .jar) and "Node.js" (JavaScript) templates.
   - 1.0.0 (2026-11-08): "Python" template (a project of Python scripts).
 */
 
@@ -47,8 +49,12 @@ struct ProjectTemplateSelectionView: View {
             templateRow(title: "App", subtitle: "UI app for iPhone & iPad", systemImage: "appstore.app.fill", schemeKind: .app, scale: .large, flavour: .first)
             templateRow(title: "Command Line Tool", subtitle: "Headless iOS app", systemImage: "terminal.fill", schemeKind: .utility)
             /* fork: a folder of Python scripts, run with ▶ — no app to build */
-            templateRow(title: "Python", subtitle: "Python 3 scripts, run with ▶ (main.py to start)", systemImage: "chevron.left.forwardslash.chevron.right", schemeKind: .utility, python: true)
-            templateRow(title: "Library", subtitle: "Library project", systemImage: "building.columns.fill", schemeKind: .library, isEnabled: false)
+            templateRow(title: "Python", subtitle: "Python 3 scripts, run with ▶ (main.py to start)", systemImage: "chevron.left.forwardslash.chevron.right", schemeKind: .utility, script: "python")
+            /* fork: Java (miniJVM; .jar files) and Node.js (JavaScript) projects */
+            templateRow(title: "Java", subtitle: "Java 8 with miniJVM, run with ▶ (Main.java); .jar tools", systemImage: "cup.and.saucer.fill", schemeKind: .utility, script: "java")
+            templateRow(title: "Node.js", subtitle: "JavaScript with Node 18, run with ▶ (main.js); npm", systemImage: "curlybraces.square.fill", schemeKind: .utility, script: "node")
+            /* fork: a dynamic library (libNAME.dylib) */
+            templateRow(title: "Library", subtitle: "Dynamic library (libNAME.dylib) in Swift, ObjC, C or C++", systemImage: "building.columns.fill", schemeKind: .library)
             templateRow(title: "Ksurface Kernel Extension", subtitle: "Extend the ksurface microkernel your self", systemImage: "puzzlepiece.extension.fill", schemeKind: .kSurfaceKext, isEnabled: true, flavour: .last)
         }
         .padding(.top, 2)
@@ -63,9 +69,9 @@ struct ProjectTemplateSelectionView: View {
                              schemeKind: NXProjectSchemeKind,
                              scale: UIImage.SymbolScale = .default,
                              isEnabled: Bool = true,
-                             python: Bool = false,
+                             script: String? = nil,
                              flavour: templateRowFlavour = .generic) -> some View {
-        let isSelected = python ? model.isPython : (model.schemeKind == schemeKind && !model.isPython)
+        let isSelected = script != nil ? model.scriptKind == script : (model.schemeKind == schemeKind && model.scriptKind == nil)
         
         let clipTop: CGFloat = flavour == .first ? 16 : 0
         let clipBottom: CGFloat = flavour == .last ? 16 : 0
@@ -73,8 +79,8 @@ struct ProjectTemplateSelectionView: View {
         let strokeBottom: CGFloat = flavour == .last ? 16 : 4
         
         return Button {
-            if python {
-                model.selectPython()
+            if let script {
+                model.selectScript(script)
             } else {
                 model.selectProjectType(schemeKind)
             }
