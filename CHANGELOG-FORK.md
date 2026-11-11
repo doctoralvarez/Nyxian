@@ -4,6 +4,22 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.53.0 — 2026-11-10
+
+- Python could still stay on "Installing python3…" until Nyxian was closed
+  (and then unpack again on the next launch). Installing a launcher in
+  `usr/bin` through Nyxian's service now waits at most 12 s per attempt; a
+  call that does not answer counts as a failed attempt (retried, then
+  reported as an error instead of waiting forever).
+- The "Preparing…" window of Python and Node.js has **Hide (keeps
+  preparing)**: no need to close Nyxian; a notice says when it is ready.
+- The signing report is written in the background and only reads the
+  signatures (building an identity could sign a file again and hold up a
+  launch).
+- **Java in Shell** opens an interactive Shell that starts with
+  `java -version` and a tip, instead of a window that printed the version
+  and ended (it looked like an error).
+
 ## 1.52.0 — 2026-11-10
 
 - `node` and `java` now start from Nyxian Shell (confirmed on the iPhone).

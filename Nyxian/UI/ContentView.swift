@@ -21,8 +21,16 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.34.0
+ Fork doctoralvarez/Nyxian — version 1.35.0
  Changelog:
+  - 1.35.0 (2026-11-10): the "Preparing…" window of Python and Node.js has
+    "Hide (keeps preparing)": no more closing Nyxian when it takes long; a
+    notice says when it is ready. The signing report is written in the
+    background and only reads the NXT2 blobs (it could hang a launch).
+    "Java in Shell" is an interactive Shell that starts with java -version
+    (NYXIAN_SHELL_INIT) instead of a window that ended at once.
+    ForkFastpath: installing a launcher in usr/bin waits at most 12 s per
+    attempt (a call that never answered kept Python on "Installing python3…").
   - 1.34.0 (2026-11-10): ForkRuntimeLock: Python, Node.js and Java are
     prepared (unpacked, signed) one at a time; opening Python while Node.js or
     Java was signing in the background could leave it stuck on "Preparing…"
@@ -5532,6 +5540,15 @@ def main():
         except Exit as code:
             return code.args[0]
     _out("Nyxian Shell %s · help lists the commands · ^D or exit quits\n" % VERSION)
+    # a command to run first, then the prompt (Java in Shell: java -version)
+    first = os.environ.pop("NYXIAN_SHELL_INIT", "")
+    if first:
+        try:
+            run_line(first)
+        except Exit:
+            pass
+        except Exception as error:
+            _out("%s\n" % error)
     while True:
         _reap()
         try:
@@ -6541,7 +6558,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
      */
     private static func fastpath(_ launcher: URL, progress: (String) -> Void) -> String? {
         for attempt in 1...6 {
-            if let path = LDEApplicationWorkspace.shared().fastpathUtility(launcher.path) { return path }
+            if let path = ForkFastpath.install(launcher.path) { return path }
             progress("Installing python3… (attempt \(attempt + 1))")
             Thread.sleep(forTimeInterval: 0.5)
             _ = signLauncher(launcher)
@@ -7045,6 +7062,8 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     
     static func launch(from presenter: UIViewController, arguments: [String], workingDirectory: URL?, title: String, closeOnExit: Bool = false, extraEnvironment: [String: String] = [:], beforeLaunch: (() throws -> Void)? = nil, onExit: ((Int32) -> String?)? = nil, onSession: ((NXWindowSessionTerminal) -> Void)? = nil) {
         let progress = UIAlertController(title: "Python \(version)", message: "Preparing…", preferredStyle: .alert)
+        let hidden = ForkHiddenFlag()
+        progress.addAction(UIAlertAction(title: "Hide (keeps preparing)", style: .cancel) { _ in hidden.value = true })
         let host = host(for: presenter)
         host.present(progress, animated: true)
         DispatchQueue.global(qos: .userInitiated).async {
@@ -7052,7 +7071,12 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                 let launcher = try prepare { message in
                     DispatchQueue.main.async { progress.message = message }
                 }
-                ForkSigningReport.write()
+                if hidden.value {
+                    /* the window was hidden: say it is ready instead of opening a terminal later by surprise */
+                    DispatchQueue.main.async { NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Python is ready: open it again", withDelay: 0.0) }
+                    return
+                }
+                DispatchQueue.global(qos: .utility).async { ForkSigningReport.write() }
                 UserDefaults.standard.set(ForkPython.home.path, forKey: "fork.python.home")
                 if let beforeLaunch {
                     DispatchQueue.main.async { progress.message = "Copying the project…" }
@@ -7500,6 +7524,29 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
 /// Node.js for iOS (Shared/node-ios.zip: nodejs-mobile's library, npm, the
 /// `node` launcher), unpacked into opt/node and signed once, like Python.
 /// V8 runs without JIT (nodejs-mobile's standard iOS build).
+/// fork: installs a launcher in usr/bin through Nyxian's service, but never waits more than
+/// `timeout` seconds: a call that does not come back (Python stayed on "Installing python3…"
+/// until Nyxian was closed) counts as a failed attempt, so the caller retries or reports it.
+enum ForkFastpath {
+    static func install(_ path: String, timeout: TimeInterval = 12) -> String? {
+        final class Box { var path: String? }
+        let box = Box()
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            box.path = LDEApplicationWorkspace.shared().fastpathUtility(path)
+            done.signal()
+        }
+        if done.wait(timeout: .now() + timeout) == .timedOut {
+            NSLog("[Fork] installing %@ did not answer in %.0f s", path, timeout)
+            return nil
+        }
+        return box.path
+    }
+}
+
+/// fork: set when the person hides a "Preparing…" window (the work goes on).
+final class ForkHiddenFlag { var value = false }
+
 /// fork: Python, Node.js and Java are unpacked and signed one at a time (the signer is
 /// not made for two at once). Recursive, so a preparation may start another.
 enum ForkRuntimeLock {
@@ -7603,7 +7650,7 @@ enum ForkNode {
 
     private static func fastpath(progress: (String) -> Void) -> String? {
         for attempt in 1...6 {
-            if let path = LDEApplicationWorkspace.shared().fastpathUtility(launcherURL.path) { return path }
+            if let path = ForkFastpath.install(launcherURL.path) { return path }
             progress("Installing node… (attempt \(attempt + 1))")
             Thread.sleep(forTimeInterval: 0.5)
             _ = signLauncher()
@@ -7705,6 +7752,8 @@ enum ForkNode {
 
     static func launch(from presenter: UIViewController, arguments: [String], workingDirectory: URL?, title: String, closeOnExit: Bool = false, beforeLaunch: (() throws -> Void)? = nil, onExit: ((Int32) -> String?)? = nil) {
         let progress = UIAlertController(title: "Node.js \(version)", message: "Preparing…", preferredStyle: .alert)
+        let hidden = ForkHiddenFlag()
+        progress.addAction(UIAlertAction(title: "Hide (keeps preparing)", style: .cancel) { _ in hidden.value = true })
         var host: UIViewController = presenter.viewIfLoaded?.window != nil ? presenter : (presenter.view.window?.rootViewController ?? presenter)
         while let shown = host.presentedViewController, !shown.isBeingDismissed, !(shown is UIAlertController) { host = shown }
         host.present(progress, animated: true)
@@ -7713,7 +7762,11 @@ enum ForkNode {
                 let launcher = try prepare { message in
                     DispatchQueue.main.async { progress.message = message }
                 }
-                ForkSigningReport.write()
+                if hidden.value {
+                    DispatchQueue.main.async { NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Node.js is ready: open it again", withDelay: 0.0) }
+                    return
+                }
+                DispatchQueue.global(qos: .utility).async { ForkSigningReport.write() }
                 UserDefaults.standard.set(ForkPython.home.path, forKey: "fork.python.home")
                 if let beforeLaunch {
                     DispatchQueue.main.async { progress.message = "Copying the project…" }
@@ -7899,7 +7952,7 @@ enum ForkJava {
             guard signLauncher() else { throw ForkNode.Failure.signing("java") }
             var found: String?
             for _ in 1...6 {
-                found = LDEApplicationWorkspace.shared().fastpathUtility(launcherURL.path)
+                found = ForkFastpath.install(launcherURL.path)
                 if found != nil { break }
                 Thread.sleep(forTimeInterval: 0.5)
                 _ = signLauncher()
@@ -8548,7 +8601,10 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
         case .npmInstall: ForkNode.promptInstallPackage(from: self)
         case .npmList: ForkNode.listPackages(from: self)
         case .nodeReinstall: ForkNode.reinstall(from: self)
-        case .javaShell: ForkPython.launch(from: self, arguments: ["-m", "nyxian_shell", "-c", "java -version; echo; echo 'java FILE.java · javac -d DIR FILES · java -jar APP.jar · jar tf APP.jar'"], workingDirectory: ForkJava.userHome, title: "Java")
+        case .javaShell:
+            /* an interactive Shell (it used to run java -version and end, which looked like a failure) */
+            ForkPython.launch(from: self, arguments: ["-m", "nyxian_shell"], workingDirectory: ForkJava.userHome, title: "Java",
+                              extraEnvironment: ["NYXIAN_SHELL_INIT": "java -version; echo 'Try: java FILE.java · javac -d DIR FILES · java -jar APP.jar · jar tf APP.jar'"])
         case .javaReinstall: ForkJava.reinstall(from: self)
         }
     }

@@ -25,7 +25,9 @@
  Changelog:
   - 1.2.0 (2026-11-10): -initWithItems: records why a spawn failed
     (PEProcessSpawnFailure, logged as PEProcess:spawn) so posix_spawn can
-    return a telling error instead of always EPERM. PEForkSigningReport.
+    return a telling error instead of always EPERM. PEForkSigningReport
+    (only reads the NXT2 blobs: building an identity could sign the file again
+    while Nyxian was signing a runtime).
   - 1.1.0 (2026-11-07): NXForkDebugger (end of file) — debugger for apps run
     from Nyxian: pause / continue, stop on traps, hardware line breakpoints,
     backtraces with file:line from DWARF line tables of the build's objects.
@@ -137,17 +139,6 @@ NSString *PEForkSigningReport(NSArray<NSString *> *paths)
                  [[entitlements.allKeys sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@", "] ?: @"-"];
             if(blob.entitlements != NULL) CFRelease(blob.entitlements);
         }
-        errno = 0;
-        ksurface_trust_identity_t *identity = trust_identity_create_from_path(path.fileSystemRepresentation);
-        if(identity == NULL)
-        {
-            [text appendFormat:@"  identity: refused (errno %d)\n", errno];
-            continue;
-        }
-        PEEntitlementFlags flags = trust_identity_entitlement_flags_from_entitlements(identity->entitlements);
-        [text appendFormat:@"  identity: trust level %u (0 fallback, 1 signature, 2 trusted), may start programs %d\n",
-             (unsigned)identity->trustLevel, entitlement_got_entitlement(flags, kPEEntitlementFlagProcessSpawn) ? 1 : 0];
-        trust_identity_destroy(identity);
     }
     return text;
 }
