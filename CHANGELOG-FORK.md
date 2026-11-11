@@ -4,6 +4,16 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.51.0 — 2026-11-10
+
+- Nyxian Shell used Nyxian's posix_spawn but programs still did not start,
+  and the host still never saw the request. Nyxian's posix_spawn first reads
+  the program (inside python3) to check its signature; python3's file sandbox
+  did not include `usr/bin`, where node and java live, so the check failed
+  and the request was refused right there. python3 may now read `usr/bin`
+  (only its launcher is signed again, once). Programs the Shell starts
+  inherit this sandbox, so they can read their own executable too.
+
 ## 1.50.0 — 2026-11-10
 
 - **Probable cause of "could not start (Operation not permitted)"** in

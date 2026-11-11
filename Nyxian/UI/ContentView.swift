@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.32.0
+ Fork doctoralvarez/Nyxian — version 1.33.0
  Changelog:
+  - 1.33.0 (2026-11-10): python3 may also read usr/bin (launcherRevision 2):
+    Nyxian's posix_spawn maps the program from inside python3 to check its
+    signature, and python3's file sandbox did not include usr/bin, so every
+    program the Shell started was refused (EPERM) before Nyxian saw it.
   - 1.32.0 (2026-11-10): Nyxian Shell starts programs through Nyxian's own
     posix_spawn (posix_spawn__ptr; else os.posix_spawn). ctypes found the
     system's posix_spawn with dlsym, which skips Nyxian's dyld interposing, and
@@ -3034,7 +3038,7 @@ enum ForkPython {
     private static let signedKey = "fork.python.signedPackageBinaries"
     private static let signingRevision = 4  /* 3: pip may write all of opt/python; 4: may start processes (Nyxian Shell) */
     /// Only python3's own entitlements changed: sign the launcher again, without unpacking Python.
-    private static let launcherRevision = 1  /* 1: may read opt/node and opt/java (for the programs Nyxian Shell starts) */
+    private static let launcherRevision = 2  /* 1: may read opt/node and opt/java (for the programs Nyxian Shell starts); 2: and usr/bin */
     private static let launcherRevisionKey = "fork.python.launcherRevision"
 
     /// Python files Nyxian adds to site-packages: the line editor, the REPL, input() with echo.
@@ -5389,7 +5393,7 @@ def run_pipeline(pipeline, background, text):
                         errno.ECHILD: "it ended as soon as it started",
                         errno.EBUSY: "too many programs are running",
                         errno.EINVAL: "the process group was refused",
-                        errno.EPERM: "python3 may not start programs (its signature is old)",
+                        errno.EPERM: "Nyxian refused it (python3's sandbox or permission to start programs)",
                     }.get(error.errno)
                     if why:
                         sys.stderr.write("  %s\n" % why)
@@ -6553,7 +6557,10 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                 /* programs Nyxian Shell starts get python3's file sandbox: node loads
                    opt/node/lib/NodeMobile, java opt/java/lib/libminijvm.dylib and its jars */
                 "$(NXROOT)/opt/node",
-                "$(NXROOT)/opt/java"
+                "$(NXROOT)/opt/java",
+                /* the programs themselves (node, java, …): Nyxian's posix_spawn reads the
+                   executable to check its signature, and the program inherits this sandbox */
+                "$(NXROOT)/usr/bin"
             ],
             "org.emexlabs.nyxian.sandbox.file.read-write": [
                 /* pip writes site-packages and also bin/ (command scripts), share/, include/ */
