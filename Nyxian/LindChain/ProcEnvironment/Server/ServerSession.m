@@ -56,7 +56,9 @@ static void PEForkWriteSpawnRefusal(ksurface_proc_t *proc, pid_t pid, NSString *
         (unsigned long long)proc_getentitlements(proc), (unsigned long long)proc_getmaxentitlements(proc), (unsigned long long)identityFlags,
         (unsigned long long)kPEEntitlementFlagProcessSpawn,
         [path isKindOfClass:NSString.class] ? path : @"?", hasArguments, hasEnvironment, hasDirectory];
-    NSString *file = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/rootfs/opt/python/.nyxian-spawn.txt"];
+    /* Nyxian Shell's Python home (written by ForkPython): NSHomeDirectory() differs inside LiveContainer */
+    NSString *home = [[NSUserDefaults standardUserDefaults] stringForKey:@"fork.python.home"] ?: [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/rootfs/opt/python"];
+    NSString *file = [home stringByAppendingPathComponent:@".nyxian-spawn.txt"];
     [text writeToFile:file atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 #import <LindChain/ProcEnvironment/Surface/proc/proc.h>

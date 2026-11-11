@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.31.0
+ Fork doctoralvarez/Nyxian — version 1.32.0
  Changelog:
+  - 1.32.0 (2026-11-10): Nyxian Shell starts programs through Nyxian's own
+    posix_spawn (posix_spawn__ptr; else os.posix_spawn). ctypes found the
+    system's posix_spawn with dlsym, which skips Nyxian's dyld interposing, and
+    iOS refuses that one: every program failed with "Operation not permitted".
   - 1.31.0 (2026-11-10): when a program cannot start, Nyxian Shell also
     prints what the host saw (opt/python/.nyxian-spawn.txt: python3's
     entitlements now, at most, and from its signature).
@@ -4039,10 +4043,40 @@ class _Spawner:
     CLOEXEC_DEFAULT = 0x4000   # Darwin: only the descriptors named below reach the program
     DARWIN = sys.platform in ("darwin", "ios")
 
+    ARGTYPES = [ctypes.POINTER(ctypes.c_int), ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_char_p)]
+
     def __init__(self):
         self.libc = ctypes.CDLL(None, use_errno=True)
-        self.libc.posix_spawn.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p,
-                                          ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_char_p)]
+        self.libc.posix_spawn.argtypes = self.ARGTYPES
+        # Nyxian starts programs through its own posix_spawn, which it puts in place of the
+        # system's with dyld interposing; ctypes looks symbols up with dlsym, which does not
+        # see that, and the system's posix_spawn is refused on iOS ("Operation not permitted").
+        # Nyxian keeps a pointer to its version in posix_spawn__ptr.
+        self.nyxian = []
+        self.used = "?"
+        handles = [None]
+        if self.DARWIN:
+            handles.append(ctypes.c_void_p(-2).value)   # RTLD_DEFAULT: every loaded image
+        for handle in handles:
+            try:
+                library = ctypes.CDLL(None, handle=handle) if handle is not None else self.libc
+                self.nyxian.append(ctypes.c_void_p.in_dll(library, "posix_spawn__ptr"))
+                break
+            except (ValueError, OSError, AttributeError):
+                continue
+
+    def _posix_spawn(self):
+        """Nyxian's posix_spawn when there is one, else the system's."""
+        for pointer in self.nyxian:
+            if pointer.value:
+                self.used = "Nyxian's posix_spawn"
+                return ctypes.CFUNCTYPE(ctypes.c_int, *self.ARGTYPES, use_errno=True)(pointer.value)
+        if hasattr(os, "posix_spawn") and self.DARWIN:
+            self.used = "os.posix_spawn"
+            return None   # caller uses os.posix_spawn (CPython's own call is interposed)
+        self.used = "the system's posix_spawn"
+        return self.libc.posix_spawn
 
     def spawn(self, path, argv, env, fds, pgid=0):
         """fds: {0: fd, 1: fd, 2: fd}; pgid 0 = a new process group led by the child."""
@@ -4073,13 +4107,24 @@ class _Spawner:
             items = ["%s=%s" % pair for pair in env.items()]
             c_env = (ctypes.c_char_p * (len(items) + 1))(*[os.fsencode(e) for e in items], None)
             pid = ctypes.c_int(0)
-            error = libc.posix_spawn(ctypes.byref(pid), os.fsencode(path), actions, attributes, c_argv, c_env)
+            function = self._posix_spawn()
+            if function is None:
+                return self._os_spawn(path, argv, env, fds, pgid)
+            error = function(ctypes.byref(pid), os.fsencode(path), actions, attributes, c_argv, c_env)
             if error:
                 raise OSError(error, os.strerror(error))
             return pid.value
         finally:
             libc.posix_spawn_file_actions_destroy(actions)
             libc.posix_spawnattr_destroy(attributes)
+
+    def _os_spawn(self, path, argv, env, fds, pgid):
+        """os.posix_spawn: no CLOEXEC_DEFAULT there, so the shell's other descriptors are closed."""
+        actions = [(os.POSIX_SPAWN_DUP2, fd, target) for target, fd in sorted(fds.items()) if fd != target]
+        defaults = [getattr(signal, name) for name in ("SIGTSTP", "SIGTTIN", "SIGTTOU", "SIGINT", "SIGQUIT", "SIGPIPE")
+                    if hasattr(signal, name)]
+        return os.posix_spawn(path, list(argv), dict(env), file_actions=actions or None,
+                              setpgroup=pgid, setsigdef=defaults)
 
 
 _spawner = None
@@ -5348,6 +5393,7 @@ def run_pipeline(pipeline, background, text):
                     }.get(error.errno)
                     if why:
                         sys.stderr.write("  %s\n" % why)
+                    sys.stderr.write("  (started with %s)\n" % spawner().used)
                     reports = [("what Nyxian saw", os.path.join(os.environ.get("PYTHONHOME", ""), ".nyxian-spawn.txt")),
                                ("signatures", os.environ.get("NYXIAN_SIGNING_REPORT", ""))]
                     for title, report in reports:
@@ -6989,6 +7035,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                     DispatchQueue.main.async { progress.message = message }
                 }
                 ForkSigningReport.write()
+                UserDefaults.standard.set(ForkPython.home.path, forKey: "fork.python.home")
                 if let beforeLaunch {
                     DispatchQueue.main.async { progress.message = "Copying the project…" }
                     try beforeLaunch()
@@ -7633,6 +7680,7 @@ enum ForkNode {
                     DispatchQueue.main.async { progress.message = message }
                 }
                 ForkSigningReport.write()
+                UserDefaults.standard.set(ForkPython.home.path, forKey: "fork.python.home")
                 if let beforeLaunch {
                     DispatchQueue.main.async { progress.message = "Copying the project…" }
                     try beforeLaunch()

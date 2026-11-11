@@ -4,6 +4,18 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.50.0 — 2026-11-10
+
+- **Probable cause of "could not start (Operation not permitted)"** in
+  Nyxian Shell: the host never even saw the request (no "what Nyxian saw").
+  The Shell called posix_spawn through ctypes, which looks it up with dlsym
+  and so gets the system's posix_spawn — iOS refuses it — instead of
+  Nyxian's, which Nyxian puts in place with dyld interposing (dlsym does not
+  see that). The Shell now calls Nyxian's own posix_spawn (through its
+  `posix_spawn__ptr`), else `os.posix_spawn`; the error says which it used.
+- The host's refusal report goes to Python's home as Nyxian sees it (inside
+  LiveContainer NSHomeDirectory() is another folder).
+
 ## 1.49.0 — 2026-11-10
 
 - The signing report showed python3's signature is fine and grants
