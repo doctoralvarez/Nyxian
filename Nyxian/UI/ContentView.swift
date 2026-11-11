@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.33.0
+ Fork doctoralvarez/Nyxian — version 1.34.0
  Changelog:
+  - 1.34.0 (2026-11-10): ForkRuntimeLock: Python, Node.js and Java are
+    prepared (unpacked, signed) one at a time; opening Python while Node.js or
+    Java was signing in the background could leave it stuck on "Preparing…"
+    or "Installing…". Java's environment asks mimalloc for 64 MiB
+    reservations and no warnings.
   - 1.33.0 (2026-11-10): python3 may also read usr/bin (launcherRevision 2):
     Nyxian's posix_spawn maps the program from inside python3 to check its
     signature, and python3's file sandbox did not include usr/bin, so every
@@ -6726,6 +6731,10 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             progressSinks[token] = nil
             progressLock.unlock()
         }
+        /* fork: one runtime is signed at a time (Python, Node.js, Java): signing two at once
+           could leave Python stuck on "Preparing…" / "Installing…" */
+        ForkRuntimeLock.acquire(waiting: { progress("Waiting for Node.js / Java to finish signing…") })
+        defer { ForkRuntimeLock.release() }
         return try queue.sync {
             let progress: (String) -> Void = { report($0) }
             let fm = FileManager.default
@@ -7491,6 +7500,20 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
 /// Node.js for iOS (Shared/node-ios.zip: nodejs-mobile's library, npm, the
 /// `node` launcher), unpacked into opt/node and signed once, like Python.
 /// V8 runs without JIT (nodejs-mobile's standard iOS build).
+/// fork: Python, Node.js and Java are unpacked and signed one at a time (the signer is
+/// not made for two at once). Recursive, so a preparation may start another.
+enum ForkRuntimeLock {
+    private static let lock = NSRecursiveLock()
+
+    static func acquire(waiting: () -> Void) {
+        if lock.try() { return }
+        waiting()
+        lock.lock()
+    }
+
+    static func release() { lock.unlock() }
+}
+
 /// fork: how Nyxian sees the launchers' signatures (NXT2 blob, identity, may start
 /// programs), written next to the runtimes; Nyxian Shell shows it when a program
 /// cannot start.
@@ -7609,7 +7632,9 @@ enum ForkNode {
 
     /// Unpacks and signs Node.js when the bundled one changed; returns the launcher to run.
     static func prepare(progress: @escaping (String) -> Void) throws -> String {
-        try queue.sync {
+        ForkRuntimeLock.acquire(waiting: { progress("Waiting for another runtime to finish signing…") })
+        defer { ForkRuntimeLock.release() }
+        return try queue.sync {
             if let ready = readyLauncher() { return ready }
             guard let stamp = identity else { throw Failure.notBundled }
             let fm = FileManager.default
@@ -7854,7 +7879,9 @@ enum ForkJava {
     }
 
     static func prepare(progress: @escaping (String) -> Void) throws -> String {
-        try queue.sync {
+        ForkRuntimeLock.acquire(waiting: { progress("Waiting for another runtime to finish signing…") })
+        defer { ForkRuntimeLock.release() }
+        return try queue.sync {
             if let ready = readyLauncher() { return ready }
             guard let stamp = identity else { throw Failure.notBundled }
             let fm = FileManager.default
@@ -7905,6 +7932,9 @@ enum ForkJava {
             "NYXIAN_JAVA": launcher,
             "NYXIAN_JAVA_HOME": home.path,
             "TMPDIR": tmp.path,   /* java FILE.java compiles there */
+            /* miniJVM's allocator: iOS refuses its 1 GiB reservations (it then warns and falls back) */
+            "MIMALLOC_ARENA_RESERVE": "64MiB",
+            "MIMALLOC_SHOW_ERRORS": "0",
         ]
     }
 

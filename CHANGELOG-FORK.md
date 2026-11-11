@@ -4,6 +4,18 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.52.0 — 2026-11-10
+
+- `node` and `java` now start from Nyxian Shell (confirmed on the iPhone).
+- Java no longer prints mimalloc's "unable to allocate aligned OS memory
+  directly" warning: the `java` launcher (and Java's environment) asks
+  miniJVM's allocator for 64 MiB reservations instead of 1 GiB, which iOS
+  refuses, and not to print warnings.
+- Python could stay on "Preparing…" or "Installing…" until Nyxian was
+  closed: it could be signing while Node.js or Java were signing in the
+  background. Python, Node.js and Java are now prepared one at a time; while
+  waiting it says so.
+
 ## 1.51.0 — 2026-11-10
 
 - Nyxian Shell used Nyxian's posix_spawn but programs still did not start,
