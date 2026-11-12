@@ -4,6 +4,11 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.62.4 — 2026-11-12
+
+- Settings › Management › Memory: a `get-task-allow` row that checks the
+  entitlement reading itself works.
+
 ## 1.62.3 — 2026-11-12
 
 - Fixes the build of 1.62.x: a missing brace in the new Memory row of

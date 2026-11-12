@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.1
+ Fork doctoralvarez/Nyxian — version 1.3.2
  Changelog:
+  - 1.3.2 (2026-11-12): Memory: a get-task-allow row to check that reading
+    the entitlements works (development signatures almost always have it).
   - 1.3.1 (2026-11-12): fixes the Memory row (a missing brace broke the build).
   - 1.3.0 (2026-11-12): "Memory" — how much memory iOS lets Nyxian use (limit,
     in use, available), the device's RAM, and whether Nyxian was signed with
@@ -1306,7 +1308,16 @@ final class ForkMemoryViewController: UITableViewController {
             case .none: return Row(title: name, value: "Unknown", color: .secondaryLabel)
             }
         }
-        sections = [usage, [state(ForkMemoryInfo.increasedLimit), state(ForkMemoryInfo.extendedAddressing)]]
+        /* get-task-allow is granted by almost every development signature: if it
+           also reads "Not active", the check itself is not working */
+        let control: Row = {
+            switch ForkMemoryInfo.entitlement("get-task-allow") {
+            case .some(true): return Row(title: "get-task-allow (check)", value: "Active", color: .systemGreen)
+            case .some(false): return Row(title: "get-task-allow (check)", value: "Not active", color: .systemOrange)
+            case .none: return Row(title: "get-task-allow (check)", value: "Unknown", color: .secondaryLabel)
+            }
+        }()
+        sections = [usage, [state(ForkMemoryInfo.increasedLimit), state(ForkMemoryInfo.extendedAddressing), control]]
         tableView.reloadData()
     }
 
