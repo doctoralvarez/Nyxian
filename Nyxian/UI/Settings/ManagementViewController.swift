@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.3.1
  Changelog:
+  - 1.3.1 (2026-11-12): fixes the Memory row (a missing brace broke the build).
   - 1.3.0 (2026-11-12): "Memory" — how much memory iOS lets Nyxian use (limit,
     in use, available), the device's RAM, and whether Nyxian was signed with
     Increased Memory Limit and Extended Virtual Addressing (read from its
@@ -110,7 +111,7 @@ class ManagementViewController: NXUITableViewController {
                     tableViewCell.textLabel?.text = "Permissions"
                     tableViewCell.imageView?.image = UIImage(systemName: "lock.shield")
                     tableViewCell.accessoryType = .disclosureIndicator
-                 else if indexPath.row == 5 {
+                } else if indexPath.row == 5 {
                     /* fork: memory limit and the memory entitlements */
                     tableViewCell.textLabel?.text = "Memory"
                     tableViewCell.imageView?.image = UIImage(systemName: "memorychip")

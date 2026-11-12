@@ -4,6 +4,11 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.62.3 — 2026-11-12
+
+- Fixes the build of 1.62.x: a missing brace in the new Memory row of
+  Settings › Management.
+
 ## 1.62.2 — 2026-11-12
 
 - The memory entitlements are written into the IPA by a workflow step after
