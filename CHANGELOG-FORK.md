@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.58.0 — 2026-11-11
+
+- **Swipe actions in the file list** of a project (files and folders):
+  swipe to the left shows **Delete** (it asks before deleting; a long swipe
+  does not delete by itself); swipe to the right shows **Export** (share
+  sheet) and **Edit** (a file opens in the code editor, a folder is
+  renamed). Not shown in read-only lists, and Delete is hidden there too.
+
 ## 1.57.1 — 2026-11-11
 
 - **Library projects** no longer crash Nyxian when created: a library was

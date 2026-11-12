@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.10.1
+ Fork doctoralvarez/Nyxian — version 1.11.0
  Changelog:
+  - 1.11.0 (2026-11-11): swipe a file or folder to the left › Delete (asks
+    first); swipe to the right › Export (share sheet) and Edit (a file opens
+    in the code editor, a folder is renamed).
   - 1.10.1 (2026-11-11): pull to refresh works in every folder, also short
     ones (the list always bounces); the refresh control is set in viewDidLoad.
   - 1.10.0 (2026-11-11): selection bar (also after a two-finger slide) has
@@ -841,6 +844,119 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
         }
     }
     
+    // MARK: - Fork: swipe a row — left: Delete; right: Export and Edit
+
+    /// Asks before deleting one entry (swipe left), then removes it like the context menu's Remove.
+    private func forkConfirmDelete(_ entry: FileListEntry) {
+        let alert = UIAlertController(
+            title: "Delete \(entry.type == .dir ? "folder" : "file") \"\(entry.name)\"?",
+            message: "This action cannot be undone.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Delete", style: .destructive) { [weak self] _ in
+            guard let self = self else { return }
+            let fileUrl = URL(fileURLWithPath: entry.path)
+            guard (try? FileManager.default.removeItem(at: fileUrl)) != nil else {
+                NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Could not delete \(entry.name)", withDelay: 0.0)
+                return
+            }
+            if let project = self.project {
+                let database: DebugDatabase = DebugDatabase.getDatabase(ofPath: project.cacheURL.appendingPathComponent("debug.json").path)
+                NotificationCenter.default.post(name: Notification.Name("FileListAct"), object: ["close", fileUrl.path])
+                database.removeFileDebug(ofPath: fileUrl.path)
+                database.saveDatabase(toPath: project.cacheURL.appendingPathComponent("debug.json").path)
+            }
+            self.entries.removeAll { $0.path == entry.path }
+            self.tableView.reloadData()
+        })
+        present(alert, animated: true)
+    }
+
+    /// Edit: a file opens in the code editor (whatever its type); a folder is renamed.
+    private func forkEdit(_ entry: FileListEntry, sourceView: UIView?) {
+        switch entry.type {
+        case .file:
+            if NXApplicationState.fileListRequiresToSendRequests {
+                NotificationCenter.default.post(name: Notification.Name("FileListAct"), object: ["open", entry.path, "0", "0", self.isReadOnly ? "1" : "0"])
+            } else {
+                guard let codeEditor = CodeEditorViewController(project: project, url: URL(fileURLWithPath: entry.path), isReadOnly: self.isReadOnly) else {
+                    NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "\(entry.name) cannot be opened as text", withDelay: 0.0)
+                    return
+                }
+                let nav = UINavigationController(rootViewController: codeEditor)
+                nav.modalPresentationStyle = .overFullScreen
+                present(nav, animated: true)
+            }
+        case .dir:
+            guard !isReadOnly else { return }
+            let alert = UIAlertController(title: "Rename Folder", message: nil, preferredStyle: .alert)
+            alert.addTextField { textField in
+                textField.placeholder = "Folder name"
+                textField.text = entry.name
+            }
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            alert.addAction(UIAlertAction(title: "Rename", style: .default) { [weak self] _ in
+                guard let self = self else { return }
+                let newName = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !newName.isEmpty, newName != entry.name, !newName.contains("/") else { return }
+                let destination = URL(fileURLWithPath: self.path).appendingPathComponent(newName)
+                guard !FileManager.default.fileExists(atPath: destination.path),
+                      (try? FileManager.default.moveItem(atPath: entry.path, toPath: destination.path)) != nil else {
+                    NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Could not rename to \(newName)", withDelay: 0.0)
+                    return
+                }
+                self.entries.removeAll { $0.path == entry.path }
+                self.entries.append(FileListEntry.getEntry(ofPath: destination.path))
+                self.tableView.reloadData()
+            })
+            present(alert, animated: true)
+        }
+    }
+
+    /// Swipe to the left: Delete (not in read-only lists, not while selecting).
+    override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        if isSelecting || isReadOnly || indexPath.row >= entries.count { return nil }
+        let entry = entries[indexPath.row]
+        let delete = UIContextualAction(style: .destructive, title: "Delete") { [weak self] _, _, completion in
+            self?.forkConfirmDelete(entry)
+            completion(true)
+        }
+        delete.image = UIImage(systemName: "trash.fill")
+        let configuration = UISwipeActionsConfiguration(actions: [delete])
+        /* a long swipe must not delete by itself: it asks first */
+        configuration.performsFirstActionWithFullSwipe = false
+        return configuration
+    }
+
+    /// Swipe to the right: Export (share sheet) and Edit.
+    override func tableView(_ tableView: UITableView, leadingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        if isSelecting || indexPath.row >= entries.count { return nil }
+        let entry = entries[indexPath.row]
+        let cell = tableView.cellForRow(at: indexPath)
+
+        let export = UIContextualAction(style: .normal, title: "Export") { _, _, completion in
+            share(url: URL(fileURLWithPath: entry.path), remove: false)
+            completion(true)
+        }
+        export.image = UIImage(systemName: "square.and.arrow.up")
+        export.backgroundColor = .systemBlue
+
+        var actions: [UIContextualAction] = [export]
+        if !(isReadOnly && entry.type == .dir) {
+            let edit = UIContextualAction(style: .normal, title: "Edit") { [weak self] _, _, completion in
+                self?.forkEdit(entry, sourceView: cell)
+                completion(true)
+            }
+            edit.image = UIImage(systemName: entry.type == .dir ? "pencil" : "square.and.pencil")
+            edit.backgroundColor = .systemOrange
+            actions.append(edit)
+        }
+        let configuration = UISwipeActionsConfiguration(actions: actions)
+        configuration.performsFirstActionWithFullSwipe = false
+        return configuration
+    }
+
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         return entries.count
     }
