@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-12): "Memory" — how much memory iOS lets Nyxian use (limit,
+    in use, available), the device's RAM, and whether Nyxian was signed with
+    Increased Memory Limit and Extended Virtual Addressing (read from its
+    own entitlements).
   - 1.2.0 (2026-11-09): Processes keeps a minute of CPU and memory of every
     process: "Activity…" shows it as the profiler's graphs, live; each row
     has a small CPU line.
@@ -37,6 +41,7 @@
 */
 
 import UIKit
+import os
 
 class NXManagementUISingleFlight {
     private static let slot = DispatchSemaphore(value: 1)
@@ -70,7 +75,7 @@ class ManagementViewController: NXUITableViewController {
             case 1:
                 return 1
             case 2:
-                return 5
+                return 6
             default:
                 return 6
         }
@@ -104,6 +109,11 @@ class ManagementViewController: NXUITableViewController {
                 } else if indexPath.row == 4 {
                     tableViewCell.textLabel?.text = "Permissions"
                     tableViewCell.imageView?.image = UIImage(systemName: "lock.shield")
+                    tableViewCell.accessoryType = .disclosureIndicator
+                 else if indexPath.row == 5 {
+                    /* fork: memory limit and the memory entitlements */
+                    tableViewCell.textLabel?.text = "Memory"
+                    tableViewCell.imageView?.image = UIImage(systemName: "memorychip")
                     tableViewCell.accessoryType = .disclosureIndicator
                 }
             default:
@@ -143,8 +153,10 @@ class ManagementViewController: NXUITableViewController {
                 navigationController?.pushViewController(ForkProcessMonitorViewController(style: .insetGrouped), animated: true)
             } else if indexPath.row == 3 {
                 navigationController?.pushViewController(ForkKernelLogViewController(), animated: true)
-            } else {
+            } else if indexPath.row == 4 {
                 navigationController?.pushViewController(ForkPermissionsListViewController(style: .insetGrouped), animated: true)
+            } else {
+                navigationController?.pushViewController(ForkMemoryViewController(style: .insetGrouped), animated: true)
             }
         default:
             if indexPath.row == 0 {
@@ -1201,5 +1213,122 @@ final class ForkPermissionEditorViewController: UITableViewController {
                                       message: "Start it again and it uses these permissions.", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .cancel))
         present(alert, animated: true)
+    }
+}
+
+
+// MARK: - Fork: Memory
+
+/// What iOS lets Nyxian use, and the entitlements that raise it.
+enum ForkMemoryInfo {
+    static let increasedLimit = "com.apple.developer.kernel.increased-memory-limit"
+    static let extendedAddressing = "com.apple.developer.kernel.extended-virtual-addressing"
+
+    /// Memory Nyxian can still take before iOS ends it (the jetsam limit minus what it uses)
+    static var available: UInt64 { UInt64(os_proc_available_memory()) }
+
+    /// Memory Nyxian uses now (the footprint iOS counts against the limit)
+    static var footprint: UInt64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let result: kern_return_t = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { raw in
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), raw, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? UInt64(info.phys_footprint) : 0
+    }
+
+    static var physical: UInt64 { ProcessInfo.processInfo.physicalMemory }
+
+    private typealias CreateFromSelf = @convention(c) (CFAllocator?) -> Unmanaged<AnyObject>?
+    private typealias CopyValue = @convention(c) (AnyObject, CFString, UnsafeMutablePointer<Unmanaged<CFError>?>?) -> Unmanaged<AnyObject>?
+
+    /// true / false from Nyxian's own signature; nil when it cannot be read
+    static func entitlement(_ key: String) -> Bool? {
+        guard let security = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW),
+              let createSymbol = dlsym(security, "SecTaskCreateFromSelf"),
+              let copySymbol = dlsym(security, "SecTaskCopyValueForEntitlement") else { return nil }
+        let create = unsafeBitCast(createSymbol, to: CreateFromSelf.self)
+        let copy = unsafeBitCast(copySymbol, to: CopyValue.self)
+        guard let task = create(nil)?.takeRetainedValue() else { return nil }
+        guard let value = copy(task, key as CFString, nil)?.takeRetainedValue() else { return false }
+        if let number = value as? NSNumber { return number.boolValue }
+        return true
+    }
+
+    static func format(_ bytes: UInt64) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .memory)
+    }
+}
+
+final class ForkMemoryViewController: UITableViewController {
+    private struct Row {
+        let title: String
+        let value: String
+        let color: UIColor
+    }
+    private var sections: [[Row]] = []
+    private var timer: Timer?
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Memory"
+        refresh()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in self?.refresh() }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func refresh() {
+        let used = ForkMemoryInfo.footprint
+        let free = ForkMemoryInfo.available
+        let usage: [Row] = [
+            Row(title: "Limit for Nyxian (about)", value: ForkMemoryInfo.format(used + free), color: .label),
+            Row(title: "In use", value: ForkMemoryInfo.format(used), color: .secondaryLabel),
+            Row(title: "Still available", value: ForkMemoryInfo.format(free), color: .secondaryLabel),
+            Row(title: "Device RAM", value: ForkMemoryInfo.format(ForkMemoryInfo.physical), color: .secondaryLabel)
+        ]
+        func state(_ key: String) -> Row {
+            let name = key == ForkMemoryInfo.increasedLimit ? "Increased Memory Limit" : "Extended Virtual Addressing"
+            switch ForkMemoryInfo.entitlement(key) {
+            case .some(true): return Row(title: name, value: "Active", color: .systemGreen)
+            case .some(false): return Row(title: name, value: "Not active", color: .systemOrange)
+            case .none: return Row(title: name, value: "Unknown", color: .secondaryLabel)
+            }
+        }
+        sections = [usage, [state(ForkMemoryInfo.increasedLimit), state(ForkMemoryInfo.extendedAddressing)]]
+        tableView.reloadData()
+    }
+
+    override func numberOfSections(in tableView: UITableView) -> Int { sections.count }
+
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { sections[section].count }
+
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        section == 0 ? "Nyxian's memory (updates every second)" : "Entitlements of Nyxian's signature"
+    }
+
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        guard section == 1 else { return "iOS ends an app that goes over its limit. The apps you run in Nyxian count against Nyxian's own limit." }
+        return "They come from how Nyxian was signed (SideStore, another signer or LiveContainer): the app asks for them, and the signer grants them when the account and the App ID allow it. Inside LiveContainer these are LiveContainer's own."
+    }
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "memory") ?? UITableViewCell(style: .value1, reuseIdentifier: "memory")
+        let row = sections[indexPath.section][indexPath.row]
+        cell.textLabel?.text = row.title
+        cell.detailTextLabel?.text = row.value
+        cell.detailTextLabel?.textColor = row.color
+        cell.selectionStyle = .none
+        return cell
     }
 }

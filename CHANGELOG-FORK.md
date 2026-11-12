@@ -4,6 +4,21 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.62.0 — 2026-11-12
+
+- **More memory for Nyxian when it is sideloaded.** The IPA was archived
+  without signing, so it carried no entitlements at all and SideStore (or
+  another signer) never asked for Increased Memory Limit or Extended Virtual
+  Addressing, although `Nyxian.entitlements` lists them. `make package-app`
+  now writes `tools/fork/sideload.entitlements` into Nyxian and LiveProcess
+  with ldid (get-task-allow, increased-memory-limit,
+  extended-virtual-addressing); the signer requests them for the App ID and
+  keeps those the account allows.
+- **Settings › Management › Memory**: Nyxian's memory limit (about), in
+  use, still available, the device's RAM, and whether its signature has
+  Increased Memory Limit and Extended Virtual Addressing (Active / Not
+  active), updated every second.
+
 ## 1.61.0 — 2026-11-12
 
 - **Exports carry nothing of Nyxian.** `Config/Entitlements.plist` holds
