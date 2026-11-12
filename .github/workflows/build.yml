@@ -303,6 +303,26 @@ jobs:
 
           CHECK_DEPS=0 make all
 
+      # fork: the archive is built without signing, so the IPA carried no entitlements
+      # and a signer (SideStore, …) never asked for more memory. ldid writes them into
+      # Nyxian and LiveProcess (ad-hoc); the signer requests them for the App ID and keeps
+      # those the account allows. Only tools/fork/sideload.entitlements (get-task-allow
+      # and the two memory ones). Done here, not in the Makefile, so the LLVM cache key
+      # (which hashes the Makefile) stays the same.
+      - name: Add the memory entitlements to the IPA (fork)
+        run: |
+          set -e
+          work="$RUNNER_TEMP/entitlements"
+          rm -rf "$work" && mkdir -p "$work"
+          bins="Payload/Nyxian.app/Nyxian Payload/Nyxian.app/PlugIns/LiveProcess.appex/LiveProcess"
+          unzip -q Nyxian.ipa $bins -d "$work"
+          for bin in $bins; do
+            ldid -S"$PWD/tools/fork/sideload.entitlements" "$work/$bin"
+            echo "== $bin"; ldid -e "$work/$bin"
+          done
+          ipa="$PWD/Nyxian.ipa"
+          (cd "$work" && zip -q "$ipa" $bins)
+
       - name: Upload Nyxian
         uses: actions/upload-artifact@v7
         with:

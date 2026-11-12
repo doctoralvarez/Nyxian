@@ -4,6 +4,12 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.62.2 — 2026-11-12
+
+- The memory entitlements are written into the IPA by a workflow step after
+  `make all` instead of in the Makefile: changing the Makefile changed the
+  LLVM cache key, so the toolchain was being rebuilt from scratch.
+
 ## 1.62.1 — 2026-11-12
 
 - **Builds can run on your own Mac.** With the repository variable
@@ -17,9 +23,10 @@ Nyxian uses it to check compatibility with emexLabs OTA updates.
 - **More memory for Nyxian when it is sideloaded.** The IPA was archived
   without signing, so it carried no entitlements at all and SideStore (or
   another signer) never asked for Increased Memory Limit or Extended Virtual
-  Addressing, although `Nyxian.entitlements` lists them. `make package-app`
-  now writes `tools/fork/sideload.entitlements` into Nyxian and LiveProcess
-  with ldid (get-task-allow, increased-memory-limit,
+  Addressing, although `Nyxian.entitlements` lists them. The workflow now
+  writes `tools/fork/sideload.entitlements` into Nyxian and LiveProcess
+  with ldid (a step after `make all`; in the Makefile it changed the LLVM
+  cache key and forced a full LLVM rebuild) (get-task-allow, increased-memory-limit,
   extended-virtual-addressing); the signer requests them for the App ID and
   keeps those the account allows.
 - **Settings › Management › Memory**: Nyxian's memory limit (about), in

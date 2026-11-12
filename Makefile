@@ -135,17 +135,6 @@ compile: Frameworks/CoreCompiler/CoreCompilerSupportLibs
 
 package-app:
 	cp -r  build/Nyxian.xcarchive/Products/Applications Payload
-	# fork: the archive is built without signing, so it carried no entitlements and a
-	# signer (SideStore, …) never asked for more memory. ldid writes them in (ad-hoc);
-	# the signer then requests them for the App ID and keeps the ones the account allows.
-	# Only get-task-allow and the two memory ones (tools/fork/sideload.entitlements).
-	@if command -v ldid >/dev/null 2>&1; then \
-		for bin in Payload/Nyxian.app/Nyxian Payload/Nyxian.app/PlugIns/LiveProcess.appex/LiveProcess; do \
-			if [ -f "$$bin" ]; then ldid -Stools/fork/sideload.entitlements "$$bin" || exit 1; echo "entitlements: $$bin"; ldid -e "$$bin"; fi; \
-		done; \
-	else \
-		echo "warning: ldid not found, the IPA has no entitlements"; \
-	fi
 	-rm $(FILE)
 	zip -r $(FILE) ./Payload
 

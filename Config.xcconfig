@@ -11,7 +11,7 @@
 
 VERSION = 0.11.6.4
 // fork doctoralvarez/Nyxian: shown in Settings; bump with every fork release (CHANGELOG-FORK.md)
-NYXIAN_FORK_VERSION = 1.62.1
+NYXIAN_FORK_VERSION = 1.62.2
 BUILD_NUMBER = 20261105.7.RELEASE
 
 NYXIAN_DEVELOPMENT_TEAM = L4A6CKH3TV
