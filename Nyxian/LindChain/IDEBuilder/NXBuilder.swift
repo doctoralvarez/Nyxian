@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.0
+ Fork doctoralvarez/Nyxian — version 1.4.1
  Changelog:
+  - 1.4.1 (2026-11-12): every build first makes sure the SDK's @State fix is
+    in place (ForkSDKPatches.ensure).
   - 1.4.0 (2026-11-11): Library projects build (headsup lets them through);
     Run signs the .dylib and says it was built (a library is not run).
   - 1.3.0 (2026-11-09): forkQuietFailure: a failed build that will be tried
@@ -323,6 +325,8 @@ final class NXBuilder: NSObject {
         MDKPthreadDispatch {
             autoreleasepool {
                 NXBootstrap.shared().waitTillDone()
+                /* fork: @State as SwiftUI's property wrapper, also after the SDK was unpacked again */
+                ForkSDKPatches.ensure()
                 
                 var result: Bool = true
                 guard let builder: NXBuilder = NXBuilder(

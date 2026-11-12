@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.38.0
+ Fork doctoralvarez/Nyxian — version 1.38.1
  Changelog:
+  - 1.38.1 (2026-11-12): @State error again ("SwiftUIMacros.StateMacro could
+    not be found") — the SDK fix was remembered with a marker even when the
+    SDK was unpacked again afterwards (or was still downloading at launch),
+    so it was skipped. Now it checks the SwiftUI interfaces themselves (size
+    and date), after Nyxian has its SDK and before every build, and only
+    remembers a fix that fully worked.
   - 1.38.0 (2026-11-11): Projects list: a newly assigned icon shows — the
     list kept drawn icons by bundle identifier forever, so it now keys them
     by the icon file (and its date), and pull to refresh drops them all.
@@ -9019,48 +9025,96 @@ final class ForkStaticServer {
 /// One-time edits of Nyxian's own copy of the iOS SDK so it builds without Xcode-only compiler plugins.
 enum ForkSDKPatches {
     private static let markerName = ".nyxian-fork-sdk-patches"
-    private static let version = "1"
+    private static let version = "2"
+    private static let lock = NSLock()
     
     /// Swift macros whose implementation only ships inside Xcode, renamed so the
     /// declaration with the same name that does not need a plugin is used.
-    private static let xcodeOnlyMacros = ["State"]
+    private static let xcodeOnlyMacros: [String] = ["State"]
     
+    /// At launch, once Nyxian has its SDK (on a first install the SDK is
+    /// still downloading when this runs).
     static func apply() {
         DispatchQueue.global(qos: .utility).async {
-            let fm = FileManager.default
-            let sdk: URL = NXBootstrap.shared().sdkURL
-            let marker = sdk.appendingPathComponent(markerName)
-            guard fm.fileExists(atPath: sdk.path),
-                  (try? String(contentsOf: marker, encoding: .utf8)) != version else { return }
-            
-            var patchedFiles = 0
-            for framework in ["SwiftUICore", "SwiftUI"] {
-                let modules = sdk.appendingPathComponent("System/Library/Frameworks/\(framework).framework/Modules")
-                guard let enumerator = fm.enumerator(at: modules, includingPropertiesForKeys: nil) else { continue }
-                for case let url as URL in enumerator where url.pathExtension == "swiftinterface" {
-                    guard var text = try? String(contentsOf: url, encoding: .utf8) else { continue }
-                    let original = text
-                    for name in xcodeOnlyMacros {
-                        /* "public macro State() = #externalMacro(module: "SwiftUIMacros", …)" */
-                        text = text.replacingOccurrences(of: #"\bmacro\s+"# + name + #"(?=\s*[(<])"#, with: "macro __NyxianXcodeOnly" + name, options: .regularExpression)
-                    }
-                    if text != original, (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil {
-                        patchedFiles += 1
-                    }
+            NXBootstrap.shared().waitTillDone()
+            ensure()
+        }
+    }
+    
+    private static func interfaces(in sdk: URL) -> [URL] {
+        let fm = FileManager.default
+        var found: [URL] = []
+        for framework in ["SwiftUICore", "SwiftUI"] {
+            let modules = sdk.appendingPathComponent("System/Library/Frameworks/\(framework).framework/Modules")
+            guard let enumerator = fm.enumerator(at: modules, includingPropertiesForKeys: nil) else { continue }
+            for case let url as URL in enumerator where url.pathExtension == "swiftinterface" {
+                found.append(url)
+            }
+        }
+        return found.sorted { $0.path < $1.path }
+    }
+    
+    /// What the interfaces look like now (size and date of each): when they
+    /// change — the SDK downloaded or unpacked again — they are checked again.
+    private static func stamp(of files: [URL]) -> String {
+        let fm = FileManager.default
+        var parts: [String] = [version]
+        for url in files {
+            let attributes = try? fm.attributesOfItem(atPath: url.path)
+            let size = (attributes?[.size] as? NSNumber)?.intValue ?? -1
+            let date = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+            parts.append("\(url.lastPathComponent):\(size):\(Int(date))")
+        }
+        return parts.joined(separator: "|")
+    }
+    
+    /// Makes sure @State is SwiftUI's property wrapper (not the macro that
+    /// needs Xcode's SwiftUIMacros plugin). Cheap when nothing changed; runs
+    /// at launch and before every build.
+    static func ensure() {
+        lock.lock()
+        defer { lock.unlock() }
+        let fm = FileManager.default
+        let sdk: URL = NXBootstrap.shared().sdkURL
+        guard fm.fileExists(atPath: sdk.path) else { return }
+        let marker = sdk.appendingPathComponent(markerName)
+        let files = interfaces(in: sdk)
+        guard !files.isEmpty else { return }
+        if (try? String(contentsOf: marker, encoding: .utf8)) == stamp(of: files) { return }
+        
+        var patchedFiles = 0
+        var failed = false
+        for url in files {
+            guard var text = try? String(contentsOf: url, encoding: .utf8) else { failed = true; continue }
+            let original = text
+            for name in xcodeOnlyMacros {
+                /* "public macro State() = #externalMacro(module: "SwiftUIMacros", …)" */
+                text = text.replacingOccurrences(of: #"\bmacro\s+"# + name + #"(?=\s*[(<])"#, with: "macro __NyxianXcodeOnly" + name, options: .regularExpression)
+            }
+            guard text != original else { continue }
+            if (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil {
+                patchedFiles += 1
+            } else {
+                failed = true
+            }
+        }
+        
+        /* the SDK changed: SwiftUI modules built from it must be built again */
+        let cache: URL = NXBootstrap.shared().swiftModuleCacheURL
+        if let enumerator = fm.enumerator(at: cache, includingPropertiesForKeys: nil) {
+            for case let url as URL in enumerator {
+                let name = url.lastPathComponent
+                if name.hasPrefix("SwiftUI-") || name.hasPrefix("SwiftUICore-") || name.hasPrefix("SwiftUI.") || name.hasPrefix("SwiftUICore.") {
+                    try? fm.removeItem(at: url)
                 }
             }
-            
-            /* modules built from the old interfaces must be rebuilt */
-            let cache: URL = NXBootstrap.shared().swiftModuleCacheURL
-            if patchedFiles > 0, let enumerator = fm.enumerator(at: cache, includingPropertiesForKeys: nil) {
-                for case let url as URL in enumerator {
-                    let name = url.lastPathComponent
-                    if name.hasPrefix("SwiftUI-") || name.hasPrefix("SwiftUICore-") || name.hasPrefix("SwiftUI.") || name.hasPrefix("SwiftUICore.") {
-                        try? fm.removeItem(at: url)
-                    }
-                }
-            }
-            try? version.write(to: marker, atomically: true, encoding: .utf8)
+        }
+        /* only remembered when every file is right, so a failure is retried */
+        if !failed {
+            try? stamp(of: files).write(to: marker, atomically: true, encoding: .utf8)
+        }
+        if patchedFiles > 0 {
+            NSLog("ForkSDKPatches: @State macro renamed in %d SwiftUI interface(s)", patchedFiles)
         }
     }
 }

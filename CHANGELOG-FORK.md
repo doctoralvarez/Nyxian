@@ -4,6 +4,17 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.60.1 — 2026-11-12
+
+- **@State error is back fixed** ("external macro implementation type
+  'SwiftUIMacros.StateMacro' could not be found"). The SDK fix that turns
+  @State back into SwiftUI's property wrapper was remembered with a marker,
+  so it was skipped when the SDK was unpacked again later or was still
+  downloading at launch. It now checks the SwiftUI interfaces themselves
+  (size and date) after Nyxian has its SDK and before every build, clears
+  the cached SwiftUI modules when they changed, and only remembers a fix
+  that fully worked.
+
 ## 1.60.0 — 2026-11-12
 
 - **App Preview panel** (iPad, app projects): the running app in a panel at
