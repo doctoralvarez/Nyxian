@@ -21,8 +21,15 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.2
+ Fork doctoralvarez/Nyxian — version 1.5.0
  Changelog:
+  - 1.5.0 (2026-11-12): App Preview — a panel at the right of the editor
+    (app projects, iPad) with the running app inside, like the preview of
+    Swift Playgrounds, without #Preview or PreviewProvider. It loads once
+    when the project opens; editing Swift code pauses it (a still picture of
+    the app stays); saving (⌘S) builds again and, without errors, the app
+    comes back. Top bar: ↻ reload and hide; the editor bar has a button to
+    show it again. Settings › Customization › App Preview turns it on/off.
   - 1.4.2 (2026-11-08): ▶ while a cancelled build is still stopping says so.
   - 1.4.1 (2026-11-08): ▶ / ⌘R in a Python project runs the .py on screen (no build).
   - 1.4.0 (2026-11-07): the debugger attaches to every run (Pause /
@@ -186,6 +193,8 @@ class MainSplitViewController: UISplitViewController, UISplitViewControllerDeleg
     var masterVC: FileListViewController?
     var detailVC: SplitScreenDetailViewController?
     var lock: os_unfair_lock = os_unfair_lock()
+    /* fork: App Preview */
+    var forkPreview: ForkAppPreviewContainer?
     
     init(project: NXProject) {
         self.project = project
@@ -209,7 +218,14 @@ class MainSplitViewController: UISplitViewController, UISplitViewControllerDeleg
             let masterNav = UINavigationController(rootViewController: masterVC)
             let detailNav = UINavigationController(rootViewController: detailVC)
             
-            self.viewControllers = [masterNav,detailNav]
+            /* fork: the App Preview panel at the right of the editor (app projects) */
+            if ForkAppPreview.isAvailable(for: project) {
+                let container = ForkAppPreviewContainer(content: detailNav, project: project, detail: detailVC)
+                self.forkPreview = container
+                self.viewControllers = [masterNav, container]
+            } else {
+                self.viewControllers = [masterNav,detailNav]
+            }
         }
 
         self.displayModeButtonVisibility = .never
@@ -324,10 +340,17 @@ class MainSplitViewController: UISplitViewController, UISplitViewControllerDeleg
                 ForkPython.runProject(detailVC.project, from: detailVC)
                 return
             }
-            if let self = self,
-               let masterVC = masterVC,
-               let detailVC = detailVC,
-               os_unfair_lock_trylock(&self.lock) {
+            guard let self = self,
+                  let masterVC = self.masterVC,
+                  let detailVC = self.detailVC,
+                  os_unfair_lock_trylock(&self.lock) else {
+                /* fork: busy — the App Preview should not wait forever */
+                if let path = self?.project.url.path {
+                    NotificationCenter.default.post(name: ForkAppPreview.runFinished, object: path, userInfo: ["result": false, "busy": true])
+                }
+                return
+            }
+            do {
                 
                 let project = detailVC.project
                 
@@ -343,6 +366,8 @@ class MainSplitViewController: UISplitViewController, UISplitViewControllerDeleg
                     guard let self = self else { return }
                     masterVC.navigationItem.leftBarButtonItem?.isEnabled = true
                     os_unfair_lock_unlock(&self.lock)
+                    /* fork: App Preview follows every run */
+                    defer { NotificationCenter.default.post(name: ForkAppPreview.runFinished, object: project.url.path, userInfo: ["result": result]) }
                     
                     if result {
                         let fileTable: PEFileTable = PEFileTable.empty()
@@ -1048,5 +1073,507 @@ extension UIColor {
         
         let newBrightness = min(brightness + percentage/100, 1)
         return UIColor(hue: hue, saturation: saturation, brightness: newBrightness, alpha: alpha)
+    }
+}
+
+// MARK: - Fork: App Preview panel
+
+/// The running app in a panel at the right of the editor (like the preview of
+/// Swift Playgrounds). No #Preview or PreviewProvider: it is the app itself,
+/// built and run once when the project opens. Editing Swift code pauses it
+/// (a still picture stays); saving builds again and, when it builds without
+/// errors, the app comes back.
+enum ForkAppPreview {
+    static let enabledKey = "fork.appPreview"
+    static let visibleKey = "fork.appPreview.visible"
+    static let codeChanged = Notification.Name("ForkAppPreviewCodeChanged")
+    static let codeSaved = Notification.Name("ForkAppPreviewCodeSaved")
+    static let runFinished = Notification.Name("ForkAppPreviewRunFinished")
+
+    static var isEnabled: Bool {
+        UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true
+    }
+
+    static func isAvailable(for project: NXProject) -> Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+            && isEnabled
+            && !NXApplicationState.extensionLessMode
+            && project.projectConfig.schemeKind == .app
+            && ForkPython.scriptKind(of: project) == nil
+    }
+}
+
+final class ForkAppPreviewContainer: UIViewController {
+    private enum State {
+        case idle, building, waitingWindow, running, paused, failed, stopped
+    }
+
+    private let content: UIViewController
+    private let project: NXProject
+    private weak var detail: SplitScreenDetailViewController?
+    private let projectPath: String
+
+    private let panel = UIView()
+    private let divider = UIView()
+    private let header = UIStackView()
+    private let titleLabel = UILabel()
+    private let statusLabel = UILabel()
+    private let dockArea = UIView()
+    private let snapshotView = UIImageView()
+    private let messageLabel = UILabel()
+    private let spinner = UIActivityIndicatorView(style: .medium)
+    private var panelWidth: NSLayoutConstraint!
+
+    private var state: State = .idle
+    private var visible: Bool = UserDefaults.standard.object(forKey: ForkAppPreview.visibleKey) as? Bool ?? true
+    private var timer: Timer?
+    private var loadedOnce = false
+    private var waitUntil = Date.distantPast
+    private var graceUntil = Date.distantPast
+    private var busyRetries = 0
+    private var changedDuringBuild = false
+    private var saveWork: DispatchWorkItem?
+    private var toggleItem: UIBarButtonItem?
+    private var pauseWhenRunning = false
+
+    /// The live app shows while it runs (and while it first builds); while
+    /// paused or rebuilding after a change, the still picture shows instead
+    private var liveVisible: Bool {
+        switch state {
+        case .running, .waitingWindow, .idle, .stopped: return true
+        case .building: return snapshotView.image == nil
+        case .paused, .failed: return false
+        }
+    }
+
+    init(content: UIViewController, project: NXProject, detail: SplitScreenDetailViewController?) {
+        self.content = content
+        self.project = project
+        self.detail = detail
+        self.projectPath = project.url.path
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private var bundleIdentifier: String { project.projectConfig.bundleid ?? "" }
+
+    /// The panel shows only when there is room (not in a narrow Split View)
+    private var hasRoom: Bool {
+        traitCollection.horizontalSizeClass != .compact && view.bounds.width >= 600
+    }
+
+    private var isShown: Bool { visible && hasRoom }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = LDETheme.currentTheme?.gutterBackgroundColor
+
+        addChild(content)
+        content.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(content.view)
+        content.didMove(toParent: self)
+
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        panel.backgroundColor = LDETheme.currentTheme?.gutterBackgroundColor ?? .secondarySystemBackground
+        panel.clipsToBounds = true
+        view.addSubview(panel)
+
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        divider.backgroundColor = LDETheme.currentTheme?.gutterHairlineColor ?? UIColor.separator
+        panel.addSubview(divider)
+
+        titleLabel.text = "App Preview"
+        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        titleLabel.textColor = LDETheme.currentTheme?.textColor ?? .label
+        statusLabel.font = .systemFont(ofSize: 12)
+        statusLabel.textColor = .secondaryLabel
+        statusLabel.lineBreakMode = .byTruncatingTail
+        let titles = UIStackView(arrangedSubviews: [titleLabel, statusLabel])
+        titles.axis = .vertical
+        titles.spacing = 1
+
+        let reload = UIButton(type: .system)
+        reload.setImage(UIImage(systemName: "arrow.clockwise"), for: .normal)
+        reload.accessibilityLabel = "Reload Preview"
+        reload.addTarget(self, action: #selector(reloadTapped), for: .touchUpInside)
+        let hide = UIButton(type: .system)
+        hide.setImage(UIImage(systemName: "sidebar.right"), for: .normal)
+        hide.accessibilityLabel = "Hide Preview"
+        hide.addTarget(self, action: #selector(hideTapped), for: .touchUpInside)
+        for button in [reload, hide] {
+            button.widthAnchor.constraint(equalToConstant: 36).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 36).isActive = true
+        }
+
+        header.translatesAutoresizingMaskIntoConstraints = false
+        header.axis = .horizontal
+        header.alignment = .center
+        header.spacing = 6
+        header.addArrangedSubview(titles)
+        header.addArrangedSubview(UIView())
+        header.addArrangedSubview(spinner)
+        header.addArrangedSubview(reload)
+        header.addArrangedSubview(hide)
+        panel.addSubview(header)
+
+        dockArea.translatesAutoresizingMaskIntoConstraints = false
+        dockArea.backgroundColor = LDETheme.currentTheme?.backgroundColor ?? .systemBackground
+        dockArea.layer.cornerRadius = 14
+        dockArea.layer.cornerCurve = .continuous
+        dockArea.layer.borderWidth = 0.5
+        dockArea.layer.borderColor = (LDETheme.currentTheme?.gutterHairlineColor ?? UIColor.separator).cgColor
+        dockArea.clipsToBounds = true
+        panel.addSubview(dockArea)
+
+        snapshotView.translatesAutoresizingMaskIntoConstraints = false
+        snapshotView.contentMode = .scaleAspectFit
+        snapshotView.alpha = 0.45
+        dockArea.addSubview(snapshotView)
+
+        messageLabel.translatesAutoresizingMaskIntoConstraints = false
+        messageLabel.numberOfLines = 0
+        messageLabel.textAlignment = .center
+        messageLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        messageLabel.textColor = .secondaryLabel
+        dockArea.addSubview(messageLabel)
+
+        panelWidth = panel.widthAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            content.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            content.view.topAnchor.constraint(equalTo: view.topAnchor),
+            content.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            content.view.trailingAnchor.constraint(equalTo: panel.leadingAnchor),
+
+            panel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            panel.topAnchor.constraint(equalTo: view.topAnchor),
+            panel.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            panelWidth,
+
+            divider.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            divider.topAnchor.constraint(equalTo: panel.topAnchor),
+            divider.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+            divider.widthAnchor.constraint(equalToConstant: 0.5),
+
+            header.topAnchor.constraint(equalTo: panel.safeAreaLayoutGuide.topAnchor, constant: 6),
+            header.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 14),
+            header.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -8),
+            header.heightAnchor.constraint(equalToConstant: 40),
+
+            dockArea.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6),
+            dockArea.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 10),
+            dockArea.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -10),
+            dockArea.bottomAnchor.constraint(equalTo: panel.safeAreaLayoutGuide.bottomAnchor, constant: -10),
+
+            snapshotView.topAnchor.constraint(equalTo: dockArea.topAnchor),
+            snapshotView.bottomAnchor.constraint(equalTo: dockArea.bottomAnchor),
+            snapshotView.leadingAnchor.constraint(equalTo: dockArea.leadingAnchor),
+            snapshotView.trailingAnchor.constraint(equalTo: dockArea.trailingAnchor),
+
+            messageLabel.centerYAnchor.constraint(equalTo: dockArea.centerYAnchor),
+            messageLabel.leadingAnchor.constraint(equalTo: dockArea.leadingAnchor, constant: 20),
+            messageLabel.trailingAnchor.constraint(equalTo: dockArea.trailingAnchor, constant: -20)
+        ])
+
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(codeChanged(_:)), name: ForkAppPreview.codeChanged, object: nil)
+        center.addObserver(self, selector: #selector(codeSaved(_:)), name: ForkAppPreview.codeSaved, object: nil)
+        center.addObserver(self, selector: #selector(runFinished(_:)), name: ForkAppPreview.runFinished, object: nil)
+        setState(.idle)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        timer?.invalidate()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        /* the split view wraps this container in a navigation controller of its
+           own; the editor already has its bar */
+        navigationController?.setNavigationBarHidden(true, animated: false)
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        addToggleButton()
+        updateWidth()
+        if isShown {
+            startTimer()
+            if !loadedOnce {
+                loadedOnce = true
+                adoptOrLoad()
+            }
+        }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        /* the project closed: the app keeps running, out of the way */
+        timer?.invalidate()
+        timer = nil
+        NXWindowServer.shared()?.forkUndock(puttingAway: true)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updateWidth()
+        dock()
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        view.setNeedsLayout()
+    }
+
+    // MARK: layout
+
+    private func targetWidth() -> CGFloat {
+        guard isShown else { return 0 }
+        return min(max(view.bounds.width * 0.38, 320), 520)
+    }
+
+    private func updateWidth() {
+        let width = targetWidth()
+        if panelWidth.constant != width {
+            let wasShown = panelWidth.constant > 0
+            panelWidth.constant = width
+            if wasShown && width == 0 {
+                /* no room any more (narrow Split View): put the app away */
+                timer?.invalidate()
+                timer = nil
+                NXWindowServer.shared()?.forkUndock(puttingAway: true)
+            } else if !wasShown && width > 0 && viewIfLoaded?.window != nil {
+                startTimer()
+            }
+        }
+    }
+
+    private func dockRect() -> CGRect {
+        guard isShown, panelWidth.constant > 0, let server = NXWindowServer.shared() else { return .zero }
+        let rect = dockArea.convert(dockArea.bounds.insetBy(dx: 4, dy: 4), to: server)
+        return rect.width > 60 && rect.height > 60 ? rect : .zero
+    }
+
+    private func dock() {
+        guard let server = NXWindowServer.shared(), isShown, viewIfLoaded?.window != nil else { return }
+        let rect = dockRect()
+        guard rect != .zero else { return }
+        server.forkDock(bundleIdentifier: bundleIdentifier, rect: rect)
+        server.forkShowDockedWindow(liveVisible)
+    }
+
+    private func addToggleButton() {
+        guard toggleItem == nil, let detail else { return }
+        let item = UIBarButtonItem(image: UIImage(systemName: "rectangle.righthalf.inset.filled"), primaryAction: UIAction { [weak self] _ in
+            self?.toggleVisible()
+        })
+        item.accessibilityLabel = "App Preview"
+        toggleItem = item
+        var items = detail.navigationItem.rightBarButtonItems ?? []
+        items.append(item)
+        detail.navigationItem.rightBarButtonItems = items
+    }
+
+    // MARK: state
+
+    private func setState(_ newState: State, message: String? = nil) {
+        state = newState
+        let text: String
+        var status: String
+        switch newState {
+        case .idle:
+            text = "Tap ↻ to load the app"; status = "Not loaded"
+        case .building:
+            text = snapshotView.image == nil ? "Building the app…" : ""; status = "Building…"
+        case .waitingWindow:
+            text = snapshotView.image == nil ? "Starting the app…" : ""; status = "Starting…"
+        case .running:
+            text = ""; status = "Running"
+        case .paused:
+            text = "Paused — the code changed.\nSave (⌘S) to build again; the app comes back when there are no errors."
+            status = "Paused"
+        case .failed:
+            text = "The code has errors.\nFix them and save (⌘S), or tap ↻."
+            status = "Build failed"
+        case .stopped:
+            text = "The app is not running.\nTap ↻ to load it again."
+            status = "Stopped"
+        }
+        if let message { status = message }
+        messageLabel.text = text
+        messageLabel.isHidden = text.isEmpty
+        statusLabel.text = status
+        if newState == .building || newState == .waitingWindow { spinner.startAnimating() } else { spinner.stopAnimating() }
+        if newState == .running || newState == .idle || newState == .stopped { snapshotView.image = nil }
+        NXWindowServer.shared()?.forkShowDockedWindow(liveVisible)
+    }
+
+    private func startTimer() {
+        guard timer == nil else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in self?.tick() }
+    }
+
+    private func appWindowExists() -> Bool {
+        guard let server = NXWindowServer.shared() else { return false }
+        return server.windowIdentifier(forBundleIdentifier: bundleIdentifier) != id_t(bitPattern: -1)
+    }
+
+    private func tick() {
+        guard isShown else { return }
+        let exists = appWindowExists()
+        switch state {
+        case .waitingWindow:
+            if exists && Date() >= graceUntil {
+                setState(.running)
+                dock()
+                if pauseWhenRunning {
+                    /* edited while it built */
+                    pauseWhenRunning = false
+                    if let picture = NXWindowServer.shared()?.forkSnapshotDockedWindow() { snapshotView.image = picture }
+                    setState(.paused)
+                }
+            } else if Date() > waitUntil {
+                setState(.stopped, message: "The app did not open a window")
+            }
+        case .running:
+            if exists {
+                dock()
+            } else if Date() >= graceUntil {
+                setState(.stopped)
+            }
+        case .idle, .stopped:
+            /* started from ▶ elsewhere */
+            if exists {
+                setState(.running)
+                dock()
+            }
+        case .building, .paused, .failed:
+            if exists { dock() }
+        }
+    }
+
+    /// First time: an app already running is shown, otherwise it is built.
+    private func adoptOrLoad() {
+        if appWindowExists() {
+            setState(.running)
+            dock()
+        } else {
+            load()
+        }
+    }
+
+    private func load() {
+        guard isShown else { return }
+        if NXBuilder.builds {
+            /* another build is running: try again soon */
+            busyRetries += 1
+            guard busyRetries < 60 else { busyRetries = 0; setState(.failed, message: "Another build kept running"); return }
+            setState(.building, message: "Waiting for the current build…")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.load() }
+            return
+        }
+        busyRetries = 0
+        changedDuringBuild = false
+        setState(.building)
+        guard let split = splitViewController as? MainSplitViewController else {
+            setState(.failed, message: "Could not start the build")
+            return
+        }
+        split.invokeBuild()
+    }
+
+    // MARK: notifications
+
+    @objc private func codeChanged(_ note: Notification) {
+        guard (note.object as? String) == projectPath else { return }
+        switch state {
+        case .running, .waitingWindow:
+            if let picture = NXWindowServer.shared()?.forkSnapshotDockedWindow() {
+                snapshotView.image = picture
+            }
+            setState(.paused)
+        case .building:
+            changedDuringBuild = true
+        default:
+            break
+        }
+    }
+
+    @objc private func codeSaved(_ note: Notification) {
+        guard (note.object as? String) == projectPath, isShown,
+              state == .paused || state == .failed else { return }
+        /* several files saved at once (Save All): one build */
+        saveWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.load() }
+        saveWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    @objc private func runFinished(_ note: Notification) {
+        guard (note.object as? String) == projectPath else { return }
+        let result = note.userInfo?["result"] as? Bool ?? false
+        if note.userInfo?["busy"] as? Bool == true {
+            if state == .building {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.load() }
+            }
+            return
+        }
+        guard isShown else { return }
+        if result {
+            /* edited while it built: it opens, then pauses */
+            pauseWhenRunning = changedDuringBuild
+            changedDuringBuild = false
+            /* the old window can still be closing for a moment */
+            graceUntil = Date().addingTimeInterval(1.5)
+            waitUntil = Date().addingTimeInterval(40)
+            setState(.waitingWindow)
+        } else {
+            setState(.failed)
+        }
+    }
+
+    // MARK: buttons
+
+    @objc private func reloadTapped() {
+        guard state != .building else { return }
+        NXDocumentManager.shared().saveAll { [weak self] in
+            DispatchQueue.main.async { self?.load() }
+        }
+    }
+
+    @objc private func hideTapped() {
+        setVisible(false)
+    }
+
+    private func toggleVisible() {
+        setVisible(!visible)
+    }
+
+    private func setVisible(_ newValue: Bool) {
+        visible = newValue
+        UserDefaults.standard.set(newValue, forKey: ForkAppPreview.visibleKey)
+        if !newValue {
+            timer?.invalidate()
+            timer = nil
+            NXWindowServer.shared()?.forkUndock(puttingAway: true)
+        }
+        view.setNeedsLayout()
+        UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseInOut]) {
+            self.updateWidth()
+            self.view.layoutIfNeeded()
+        } completion: { _ in
+            guard newValue, self.isShown else { return }
+            self.startTimer()
+            if !self.loadedOnce || self.state == .idle || self.state == .stopped {
+                self.loadedOnce = true
+                self.adoptOrLoad()
+            } else {
+                self.dock()
+            }
+        }
+        if newValue && !hasRoom {
+            NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "App Preview needs a wider window (full screen or a larger Split View)", withDelay: 0.0)
+        }
     }
 }

@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.1
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-12): editing a Swift file of a project tells the App
+    Preview panel (it pauses until the code builds again).
   - 1.3.1 (2026-11-09): every issue of the last run (failed tests) is marked.
   - 1.3.0 (2026-11-09): ForkSwiftCrashGuard — the Swift compiler runs inside
     Nyxian, so code that crashes it closed the app, again at every launch (the
@@ -164,6 +166,10 @@ class CodeEditorCoordinator: NSObject, TextViewDelegate {
     func textViewDidChange(_ textView: TextView) {
         if(!textView.text.isEmpty) {
             self.parent?.document?.updateChangeCount(.done)
+        }
+        /* fork: the App Preview pauses while the Swift code changes */
+        if let parent = self.parent, parent.file.isSwift, let project = parent.project {
+            NotificationCenter.default.post(name: ForkAppPreview.codeChanged, object: project.url.path)
         }
         /* fork: suggestions follow every edit, also in files without a language server */
         self.parent?.completion?.textDidChange()

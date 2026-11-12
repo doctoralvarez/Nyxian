@@ -4,6 +4,19 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.60.0 — 2026-11-12
+
+- **App Preview panel** (iPad, app projects): the running app in a panel at
+  the right of the editor, like the preview of Swift Playgrounds — no
+  `#Preview` or `PreviewProvider` needed. It builds and opens once when the
+  project opens. Editing Swift code pauses it (a still picture stays);
+  saving (⌘S) builds again and, without errors, the app comes back; with
+  errors it stays paused. Top bar: ↻ reload and hide; the editor bar has a
+  button to show it again. Settings › Customization › "App Preview" turns
+  it on or off. The window server keeps that app's window docked in the
+  panel (it opens there, snaps back after a drag or rotation, and is put
+  away — still running — when the panel or the project closes).
+
 ## 1.59.0 — 2026-11-11
 
 - **Projects list icons**: a newly assigned icon shows. Drawn icons were

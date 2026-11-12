@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.20.0
+ Fork doctoralvarez/Nyxian — version 1.21.0
  Changelog:
+  - 1.21.0 (2026-11-12): saving a Swift file (⌘S) tells the App Preview
+    panel, which builds again and comes back when there are no errors.
   - 1.20.0 (2026-11-10): Java — .java files run with miniJVM (▶, ⌘R, Run
     with Arguments, Shell in This Project) and are colored
     (tree-sitter-java).
@@ -799,6 +801,10 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
                 self.document?.autosave()
                 /* fork: live SwiftUI preview */
                 DispatchQueue.main.async { [weak self] in self?.forkRefreshLivePreview() }
+                /* fork: App Preview panel */
+                if self.file.isSwift, let project = self.project {
+                    NotificationCenter.default.post(name: ForkAppPreview.codeSaved, object: project.url.path)
+                }
             }
             
             showSaveAnimation()

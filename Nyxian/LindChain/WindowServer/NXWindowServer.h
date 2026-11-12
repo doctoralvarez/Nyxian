@@ -63,6 +63,15 @@ static NXWindowServerPresentationState const NXWindowServerPresentationStateOutO
 
 - (void)showAppSwitcherExternal;
 
+/* fork: App Preview panel — the window of one app is docked into a rect
+   (the panel at the right of the editor) and stays there */
+@property (nonatomic, copy, readonly) NSString *forkDockedBundleIdentifier;
+- (void)forkDockBundleIdentifier:(NSString*)bundleIdentifier inRect:(CGRect)rect NS_SWIFT_NAME(forkDock(bundleIdentifier:rect:));
+- (BOOL)forkHasDockedWindow NS_SWIFT_NAME(forkHasDockedWindow());
+- (void)forkShowDockedWindow:(BOOL)show NS_SWIFT_NAME(forkShowDockedWindow(_:));
+- (UIImage*)forkSnapshotDockedWindow NS_SWIFT_NAME(forkSnapshotDockedWindow());
+- (void)forkUndockPuttingAway:(BOOL)putAway NS_SWIFT_NAME(forkUndock(puttingAway:));
+
 @end
 
 #endif /* NXWINDOWSERVER_H */

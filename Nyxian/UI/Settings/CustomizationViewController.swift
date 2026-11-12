@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.6.0
+ Fork doctoralvarez/Nyxian — version 1.7.0
  Changelog:
+  - 1.7.0 (2026-11-12): "App Preview (panel at the right, iPad)" toggle.
   - 1.6.0 (2026-11-11): Credentials > Username defaults to "mioftalmologo"
     (the old default "Anonym" is replaced).
   - 1.5.0 (2026-11-09): "SDK Backup" (owner/repo) and "GitHub Token" — where
@@ -100,7 +101,7 @@ class CustomizationViewController: NXUITableViewController {
         case 0:
             return 4
         case 1:
-            return 13
+            return 14
         case 2:
             return self.icons.count
         default:
@@ -197,6 +198,10 @@ int main(void)
             } else if indexPath.row == 11 {
                 /* fork: font of Python windows */
                 cell = StepperTableCell(title: "Python Font Size", key: ForkPython.fontSizeKey, defaultValue: ForkPython.defaultFontSize, minValue: 8, maxValue: 60)
+            } else if indexPath.row == 13 {
+                /* fork: the running app in a panel at the right of the editor */
+                cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
+                (cell as! ToggleTableCell).configure(title: "App Preview (panel at the right, iPad)", key: ForkAppPreview.enabledKey, defaultValue: true)
             } else {
                 /* fork: attach the debugger to every run */
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell

@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-12): docking for the App Preview panel — the window of
+    one app (by bundle identifier) is kept in a given rect: it opens there,
+    snaps back there after a drag or a rotation, can be hidden while the
+    preview is paused, and is put away (still running, in the switcher) when
+    the panel closes.
   - 1.1.0 (2026-11-11): the app switcher fits landscape: there it rises from
     the bottom up to just below the top safe area and its tiles get smaller
     (NXAppTileScale) so they are not cut off; rotating with it open closes it.
@@ -65,6 +70,9 @@
     UIScrollView *_runningAppsScrollView;
     
     NXWindowLayerView *_windowLayer;
+    /* fork: App Preview docking */
+    NSString *_forkDockedBundleIdentifier;
+    CGRect _forkDockRect;
 }
 
 - (instancetype)initWithWindowScene:(UIWindowScene *)windowScene
@@ -1019,6 +1027,12 @@
 
 - (CGRect)window:(NXWindow*)window wantsToChangeToRect:(CGRect)rect
 {
+    /* fork: the docked App Preview window stays in its panel */
+    if([self forkIsDockedWindow:window] && !CGRectIsEmpty(_forkDockRect))
+    {
+        return _forkDockRect;
+    }
+    
     /* getting parameters */
     UIEdgeInsets insets = self.safeAreaInsets;
     CGRect bounds = self.bounds;
@@ -1137,4 +1151,99 @@
     }
 }
 
+#pragma mark - fork: App Preview docking
+
+- (NSString*)forkDockedBundleIdentifier
+{
+    return _forkDockedBundleIdentifier;
+}
+
+- (BOOL)forkIsDockedWindow:(NXWindow*)window
+{
+    if(_forkDockedBundleIdentifier == nil || window == nil) return NO;
+    NXWindowSessionApplication *session = (NXWindowSessionApplication*)window.session;
+    if(![session isKindOfClass:[NXWindowSessionApplication class]]) return NO;
+    PEProcess *process = session.process;
+    return process != nil && [process.bundleIdentifier isEqualToString:_forkDockedBundleIdentifier];
+}
+
+- (NXWindow*)forkDockedWindow
+{
+    if(_forkDockedBundleIdentifier == nil) return nil;
+    for(NXWindow *window in _windows.allValues)
+    {
+        if([self forkIsDockedWindow:window]) return window;
+    }
+    return nil;
+}
+
+- (BOOL)forkHasDockedWindow
+{
+    return [self forkDockedWindow] != nil;
+}
+
+- (void)forkDockBundleIdentifier:(NSString*)bundleIdentifier
+                          inRect:(CGRect)rect
+{
+    assert([NSThread isMainThread]);
+    _forkDockedBundleIdentifier = [bundleIdentifier copy];
+    _forkDockRect = rect;
+    NXWindow *window = [self forkDockedWindow];
+    if(window == nil || CGRectIsEmpty(rect)) return;
+    
+    /* out of full screen, into the panel */
+    if(_fullScreenWindow == window)
+    {
+        [self windowWantsToMaximize:nil];
+    }
+    window.isMaximized = NO;
+    if(window.view.superview == nil)
+    {
+        [self activateWindowForIdentifier:window.identifier animated:NO withCompletion:nil];
+    }
+    [window.view.layer removeAllAnimations];
+    window.view.alpha = 1.0;
+    window.view.transform = CGAffineTransformIdentity;
+    if(!CGRectEqualToRect(window.view.frame, rect))
+    {
+        window.view.frame = rect;
+        [window.view setNeedsLayout];
+        [window.view layoutIfNeeded];
+    }
+    window.originalFrame = rect;
+    window.lastValidFrame = rect;
+}
+
+- (void)forkShowDockedWindow:(BOOL)show
+{
+    NXWindow *window = [self forkDockedWindow];
+    if(window == nil) return;
+    window.view.hidden = !show;
+    window.view.userInteractionEnabled = show;
+}
+
+- (UIImage*)forkSnapshotDockedWindow
+{
+    NXWindow *window = [self forkDockedWindow];
+    if(window == nil || window.view.hidden) return nil;
+    /* the same picture the app switcher shows */
+    return [window.session snapshotWindow];
+}
+
+- (void)forkUndockPuttingAway:(BOOL)putAway
+{
+    NXWindow *window = [self forkDockedWindow];
+    _forkDockedBundleIdentifier = nil;
+    _forkDockRect = CGRectZero;
+    if(window == nil) return;
+    window.view.hidden = NO;
+    window.view.userInteractionEnabled = YES;
+    if(putAway && window.view.superview != nil)
+    {
+        /* still running: it stays in the app switcher */
+        [self deactivateWindowByPullDown:NO withIdentifier:window.identifier withCompletion:nil];
+    }
+}
+
 @end
+
