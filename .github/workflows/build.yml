@@ -16,7 +16,10 @@ concurrency:
 jobs:
   build:
     name: Build and Package
-    runs-on: macos-latest
+    # fork: your own Mac (a self-hosted runner) when the repository variable
+    # NYXIAN_RUNNER is "self-hosted"; otherwise GitHub's Mac. Pull requests always
+    # go to GitHub's Mac, so nobody else's code ever runs on your computer.
+    runs-on: ${{ (github.event_name != 'pull_request' && vars.NYXIAN_RUNNER == 'self-hosted') && fromJSON('["self-hosted","macOS","ARM64"]') || 'macos-latest' }}
     env:
       # fork: your PRIVATE backup repository (SDK, toolchain, Python runtime, IPAs); token: secret SDK_REPO_TOKEN
       BACKUP_REPO: ${{ vars.BACKUP_REPO || 'doctoralvarez/nyxian-sdk' }}

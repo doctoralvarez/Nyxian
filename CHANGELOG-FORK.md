@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.62.1 — 2026-11-12
+
+- **Builds can run on your own Mac.** With the repository variable
+  `NYXIAN_RUNNER` set to `self-hosted`, the build job runs on a self-hosted
+  runner (`self-hosted`, `macOS`, `ARM64`) instead of GitHub's Mac (whose
+  Apple Silicon machines keep cancelling jobs for lack of capacity). Pull
+  requests always use GitHub's Mac.
+
 ## 1.62.0 — 2026-11-12
 
 - **More memory for Nyxian when it is sideloaded.** The IPA was archived
