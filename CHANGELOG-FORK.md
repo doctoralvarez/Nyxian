@@ -4,6 +4,18 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.59.0 — 2026-11-11
+
+- **Projects list icons**: a newly assigned icon shows. Drawn icons were
+  kept by bundle identifier and never redrawn; they are now keyed by the
+  icon file and its date, and pull to refresh drops them. Icons are also
+  found in an `AppIcon.appiconset` inside the project, and Python, Java and
+  Node.js projects show theirs when they have one.
+- **Pull to refresh is instant** in the projects list and in every folder
+  and subfolder of a project (no half-second wait or fade-in). Lists also
+  read the disk again when they show again (back from a project, a
+  subfolder or the editor) and when Nyxian comes back to the front.
+
 ## 1.58.0 — 2026-11-11
 
 - **Swipe actions in the file list** of a project (files and folders):

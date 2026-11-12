@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.11.0
+ Fork doctoralvarez/Nyxian — version 1.12.0
  Changelog:
+  - 1.12.0 (2026-11-11): pull to refresh is instant in every folder and
+    subfolder (no wait or fade-in); a list also reads its folder again when
+    it shows again (back from a subfolder or the editor) and when Nyxian
+    comes back to the front.
   - 1.11.0 (2026-11-11): swipe a file or folder to the left › Delete (asks
     first); swipe to the right › Export (share sheet) and Edit (a file opens
     in the code editor, a folder is renamed).
@@ -146,41 +150,31 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
     }
 
     @objc func performRefresh() {
+        /* fork: instant — the folder is read again and shown right away (no
+           half-second wait and no fade-in animation) */
         if !self.isSublink, let project = self.project {
             if project.reload() {
                 self.title = project.projectConfig.displayName
             }
         }
-        
-        self.entries = FileListEntry.getEntries(ofPath: self.path)
+        forkReloadEntries()
         self.refreshControl?.endRefreshing()
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.tableView.visibleCells.forEach { cell in
-                cell.alpha = 0
-            }
-            
-            self.tableView.reloadData()
-            
-            self.tableView.layoutIfNeeded()
-            
-            guard let visibleCells = self.tableView.visibleCells as? [FileListCell] else { return }
-            
-            visibleCells.forEach { cell in
-                cell.transform = CGAffineTransform(translationX: -30, y: 0)
-                cell.alpha = 0
-            }
-            
-            for (index, cell) in visibleCells.enumerated() {
-                let delay = Double(index) * 0.02
-                UIView.animate(withDuration: 0.6, delay: delay, usingSpringWithDamping: 0.8, initialSpringVelocity: 0.5, options: [.curveEaseOut], animations: {
-                    cell.transform = .identity
-                    cell.alpha = 1
-                })
-            }
-        }
     }
-    
+
+    /// fork: coming back to this list (from a subfolder, the editor, another
+    /// app…) shows what is in the folder now
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        if !isSelecting { forkReloadEntries() }
+        /* (the base class drops every observer when the list disappears) */
+        NotificationCenter.default.removeObserver(self, name: UIApplication.didBecomeActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(forkAppBecameActive), name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    @objc private func forkAppBecameActive() {
+        if !isSelecting, viewIfLoaded?.window != nil { forkReloadEntries() }
+    }
+
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }

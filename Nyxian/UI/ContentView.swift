@@ -21,8 +21,15 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.37.2
+ Fork doctoralvarez/Nyxian — version 1.38.0
  Changelog:
+  - 1.38.0 (2026-11-11): Projects list: a newly assigned icon shows — the
+    list kept drawn icons by bundle identifier forever, so it now keys them
+    by the icon file (and its date), and pull to refresh drops them all.
+    The icon is also found in an AppIcon.appiconset inside the project and
+    in Python, Java and Node.js projects that have one. Pull to refresh is
+    instant, and the list reads the disk again when it shows again (back
+    from a project).
   - 1.37.2 (2026-11-11): Projects selection: the bar (Delete, Duplicate,
     Export…) shows after a two-finger slide (UIKit turns editing on before
     telling us, so the bar now follows a flag of its own) and the title goes
@@ -543,7 +550,10 @@ import Network
     
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        if sessionIndex != nil {
+        /* fork: back from a project (or Settings), the list shows what is on
+           disk now — names, identifiers and icons */
+        if sessionIndex != nil || !(tableView.isEditing || forkSelecting) {
+            ForkProjectIconLookup.clear()
             reloadProjectsFromDisk()
         }
         /* fork: Python unpacked and signed now, in the background, not when it is first opened */
@@ -599,22 +609,8 @@ import Network
         let sectionProjects = self.projectsList[key] ?? []
         let project: NXProject = sectionProjects[indexPath.row]
         let cell: ProjectTableCell = self.tableView.dequeueReusableCell(withIdentifier: ProjectTableCell.reuseIdentifier) as! ProjectTableCell
-        let icon: UIImage? = {
-            /* fork: Python, Java and Node.js projects */
-            switch ForkPython.scriptKind(of: project) {
-            case "python": return UIImage(systemName: "chevron.left.forwardslash.chevron.right")
-            case "java": return UIImage(systemName: "cup.and.saucer.fill")
-            case "node": return UIImage(systemName: "curlybraces.square.fill")
-            default: break
-            }
-            switch project.projectConfig.schemeKind {
-            case .app: return ForkAppIcon.sourceImage(of: project) ?? ForkAppIcon.placeholderFromOriginalManifest(project) /* fork: the project's own icon, if it has one */
-            case .kSurfaceKext: return UIImage(systemName: "puzzlepiece.extension.fill")
-            case .library: return UIImage(systemName: "building.columns.fill")
-            default: return UIImage(named: "UtilityIcon")
-            }
-        }()
-        cell.configure(displayName: project.projectConfig.displayName, bundleIdentifier: project.projectConfig.bundleid, appIcon: icon, showArrow: UIDevice.current.userInterfaceIdiom != .pad)
+        let (icon, iconKey) = forkProjectIcon(project)
+        cell.configure(displayName: project.projectConfig.displayName, bundleIdentifier: project.projectConfig.bundleid, appIcon: icon, showArrow: UIDevice.current.userInterfaceIdiom != .pad, cacheKey: iconKey)
         return cell
     }
     
@@ -646,8 +642,46 @@ import Network
     // MARK: fork — pull to refresh, select several (two fingers) and act on them
 
     @objc private func forkRefreshProjects() {
+        /* instant: icons drawn before are dropped, so a new icon shows now */
+        ForkProjectIconLookup.clear()
+        ProjectTableCell.iconCache.removeAllObjects()
         reloadProjectsFromDisk()
         refreshControl?.endRefreshing()
+    }
+
+    /// The project's icon and a cache key that changes when the icon file
+    /// changes (the list keeps drawn icons by key: a key that only named the
+    /// bundle identifier kept showing the old icon forever).
+    private func forkProjectIcon(_ project: NXProject) -> (UIImage?, String) {
+        let base = project.url.path
+        if let file = ForkProjectIconLookup.iconFile(of: project) {
+            let attributes = try? FileManager.default.attributesOfItem(atPath: file.path)
+            let stamp = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+            let size = (attributes?[.size] as? NSNumber)?.intValue ?? 0
+            if let image = UIImage(contentsOfFile: file.path) {
+                return (image, "\(base)|\(file.path)|\(stamp)|\(size)")
+            }
+        }
+        let symbol: UIImage?
+        switch ForkPython.scriptKind(of: project) {
+        case "python": symbol = UIImage(systemName: "chevron.left.forwardslash.chevron.right")
+        case "java": symbol = UIImage(systemName: "cup.and.saucer.fill")
+        case "node": symbol = UIImage(systemName: "curlybraces.square.fill")
+        default:
+            switch project.projectConfig.schemeKind {
+            case .app:
+                /* a project imported from Swift Playgrounds with a placeholder icon */
+                if let placeholder = ForkAppIcon.placeholderFromOriginalManifest(project) {
+                    ForkProjectIconLookup.forget(project)
+                    return (placeholder, "\(base)|placeholder|\(ForkProjectIconLookup.stamp(ForkProjectIconLookup.configIcon(of: project)))")
+                }
+                symbol = nil
+            case .kSurfaceKext: symbol = UIImage(systemName: "puzzlepiece.extension.fill")
+            case .library: symbol = UIImage(systemName: "building.columns.fill")
+            default: symbol = UIImage(named: "UtilityIcon")
+            }
+        }
+        return (symbol, "\(base)|symbol|\(ForkPython.scriptKind(of: project) ?? "")|\(project.projectConfig.schemeKind.rawValue)")
     }
 
     override func tableView(_ tableView: UITableView, didDeselectRowAt indexPath: IndexPath) {
@@ -1991,6 +2025,60 @@ extension ContentViewController {
 
 // MARK: - Fork: app icon without asset catalogs
 
+/// fork: where the projects list finds a project's icon — Config/AppIcon.png
+/// (Nyxian's own, any kind of project), else the largest PNG of an
+/// AppIcon.appiconset inside the project. Lookups are remembered until the
+/// list is refreshed.
+enum ForkProjectIconLookup {
+    private static var found: [String: URL?] = [:]
+
+    static func configIcon(of project: NXProject) -> URL {
+        project.url.appendingPathComponent("Config/AppIcon.png")
+    }
+
+    static func stamp(_ url: URL) -> Double {
+        ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+    }
+
+    static func clear() { found.removeAll() }
+
+    static func forget(_ project: NXProject) { found[project.url.path] = nil }
+
+    static func iconFile(of project: NXProject) -> URL? {
+        let config = configIcon(of: project)
+        if FileManager.default.fileExists(atPath: config.path) { return config }
+        let key = project.url.path
+        if let known = found[key] { return known }
+        let result = assetCatalogIcon(in: project.url)
+        found[key] = .some(result)
+        return result
+    }
+
+    private static func assetCatalogIcon(in root: URL) -> URL? {
+        let fm = FileManager.default
+        guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else { return nil }
+        var best: (URL, Int)?
+        var visited = 0
+        for case let url as URL in walker {
+            visited += 1
+            if visited > 4000 { break }
+            let name = url.lastPathComponent
+            if ["Cache", "Build", ".build", "node_modules", "__pycache__"].contains(name) {
+                walker.skipDescendants()
+                continue
+            }
+            guard name.hasSuffix(".appiconset"), name.hasPrefix("AppIcon") else { continue }
+            walker.skipDescendants()
+            for file in (try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+            where file.pathExtension.lowercased() == "png" {
+                let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                if size > (best?.1 ?? 0) { best = (file, size) }
+            }
+        }
+        return best?.0
+    }
+}
+
 /// Icons as loose PNGs + CFBundleIcons (no actool on the device). The 1024 source lives in Config/AppIcon.png.
 enum ForkAppIcon {
     /// name, pixel size
@@ -2990,6 +3078,7 @@ extension ContentViewController {
             }
             do {
                 try ForkAppIcon.install(image, in: project)
+                ForkProjectIconLookup.forget(project)
                 tableView.reloadData()
                 forkGitHubAlert("App Icon", "Saved. Build and run the app again to see it on the app. A square image of 1024 × 1024 works best.")
             } catch {
