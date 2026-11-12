@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.6.0
+ Fork doctoralvarez/Nyxian — version 1.7.0
  Changelog:
+  - 1.7.0 (2026-11-12): Nyxian's own entitlements (org.emexlabs.nyxian.*)
+    in one place (NXForkDefaultNyxianEntitlements); a project opened without
+    Config/Entitlements.plist (exports leave it out) gets it back.
   - 1.6.0 (2026-11-11): Library projects build to $(CACHEROOT)/lib$(NXExecutable).dylib.
   - 1.5.0 (2026-11-08): faster Swift builds — cross-import overlays only for
     projects whose code uses one (SceneView, SpriteView, Map, VideoPlayer…),
@@ -295,6 +298,49 @@ static NSArray<NSString*> *NXForkOverlayImports(NSString *sourceRoot)
 
 @end
 
+/*
+ fork: the entitlements Nyxian itself reads (org.emexlabs.nyxian.*) when it
+ runs the app on the device. They only matter inside Nyxian: exports leave
+ them out, and a project without the file (e.g. a zip exported by Nyxian and
+ imported again) gets them back when it is opened.
+ */
+static NSDictionary *NXForkDefaultNyxianEntitlements(void)
+{
+    return @{
+            /* foundational */
+            (__bridge NSString*)kNXT2EntitlementPlatform: @(NO),
+            (__bridge NSString*)kNXT2EntitlementPlatformRoot: @(NO),
+            (__bridge NSString*)kNXT2EntitlementGetTaskAllow: @(YES),
+            (__bridge NSString*)kNXT2EntitlementTaskForPid: @(NO),
+            (__bridge NSString*)kNXT2EntitlementSUGID: @(NO),
+            (__bridge NSString*)kNXT2EntitlementSystemTaskPorts: @(NO),
+            
+            /* process */
+            (__bridge NSString*)kNXT2EntitlementProcessEnumeration: @(NO),
+            (__bridge NSString*)kNXT2EntitlementProcessKill: @(NO),
+            (__bridge NSString*)kNXT2EntitlementProcessSpawn: @(NO),
+            (__bridge NSString*)kNXT2EntitlementProcessSpawnSignedOnly: @(NO),
+            (__bridge NSString*)kNXT2EntitlementProcessSpawnInheriteEntitlements: @(NO),
+            
+            /* management */
+            (__bridge NSString*)kNXT2EntitlementManagementHost: @(NO),
+            
+            /* launch services */
+            (__bridge NSString*)kNXT2EntitlementLaunchServicesStart: @(NO),
+            (__bridge NSString*)kNXT2EntitlementLaunchServicesStop: @(NO),
+            (__bridge NSString*)kNXT2EntitlementLaunchServicesToggle: @(NO),
+            (__bridge NSString*)kNXT2EntitlementLaunchServicesGetEndpoint: @(NO),
+            (__bridge NSString*)kNXT2EntitlementLaunchServicesSetEndpoint: @(NO),
+            (__bridge NSString*)kNXT2EntitlementLaunchServicesGetEndpointAllowList: @[],
+            (__bridge NSString*)kNXT2EntitlementLaunchServicesSetEndpointAllowList: @[],
+            
+            /* sandbox */
+            (__bridge NSString*)kNXT2EntitlementSandboxFileRead: @[],
+            (__bridge NSString*)kNXT2EntitlementSandboxFileReadWrite: @[],
+            (__bridge NSString*)kNXT2EntitlementSandboxNoContainer: @(NO),
+    };
+}
+
 @implementation NXEntitlementsConfig
 @end
 
@@ -313,7 +359,16 @@ static NSArray<NSString*> *NXForkOverlayImports(NSString *sourceRoot)
         @"CACHEROOT": _cacheURL.path,
         @"SHDROOT": [[NSBundle.mainBundle.bundleURL URLByAppendingPathComponent:@"Shared"] path],
     }];
-    _entitlementsConfig = [[NXEntitlementsConfig alloc] initWithPlistPath:[NSString stringWithFormat:@"%@/Config/Entitlements.plist", self.url.path] withVariables:nil];
+    NSString *entitlementsPath = [NSString stringWithFormat:@"%@/Config/Entitlements.plist", self.url.path];
+    /* fork: Nyxian's entitlements come back when an export left them out */
+    if(![[NSFileManager defaultManager] fileExistsAtPath:entitlementsPath] &&
+       [[NSFileManager defaultManager] fileExistsAtPath:[NSString stringWithFormat:@"%@/Config/Project.plist", self.url.path]] &&
+       _projectConfig.schemeKind != NXProjectSchemeKindKSurfaceKext)
+    {
+        NSData *data = [NSPropertyListSerialization dataWithPropertyList:NXForkDefaultNyxianEntitlements() format:NSPropertyListXMLFormat_v1_0 options:0 error:nil];
+        [data writeToFile:entitlementsPath atomically:YES];
+    }
+    _entitlementsConfig = [[NXEntitlementsConfig alloc] initWithPlistPath:entitlementsPath withVariables:nil];
     return self;
 }
 
@@ -464,39 +519,7 @@ static NSArray<NSString*> *NXForkOverlayImports(NSString *sourceRoot)
     
     NSMutableDictionary *plistList = [@{
         @"/Config/Project.plist": projConfigPlist,
-        @"/Config/Entitlements.plist": @{
-            /* foundational */
-            (__bridge NSString*)kNXT2EntitlementPlatform: @(NO),
-            (__bridge NSString*)kNXT2EntitlementPlatformRoot: @(NO),
-            (__bridge NSString*)kNXT2EntitlementGetTaskAllow: @(YES),
-            (__bridge NSString*)kNXT2EntitlementTaskForPid: @(NO),
-            (__bridge NSString*)kNXT2EntitlementSUGID: @(NO),
-            (__bridge NSString*)kNXT2EntitlementSystemTaskPorts: @(NO),
-            
-            /* process */
-            (__bridge NSString*)kNXT2EntitlementProcessEnumeration: @(NO),
-            (__bridge NSString*)kNXT2EntitlementProcessKill: @(NO),
-            (__bridge NSString*)kNXT2EntitlementProcessSpawn: @(NO),
-            (__bridge NSString*)kNXT2EntitlementProcessSpawnSignedOnly: @(NO),
-            (__bridge NSString*)kNXT2EntitlementProcessSpawnInheriteEntitlements: @(NO),
-            
-            /* management */
-            (__bridge NSString*)kNXT2EntitlementManagementHost: @(NO),
-            
-            /* launch services */
-            (__bridge NSString*)kNXT2EntitlementLaunchServicesStart: @(NO),
-            (__bridge NSString*)kNXT2EntitlementLaunchServicesStop: @(NO),
-            (__bridge NSString*)kNXT2EntitlementLaunchServicesToggle: @(NO),
-            (__bridge NSString*)kNXT2EntitlementLaunchServicesGetEndpoint: @(NO),
-            (__bridge NSString*)kNXT2EntitlementLaunchServicesSetEndpoint: @(NO),
-            (__bridge NSString*)kNXT2EntitlementLaunchServicesGetEndpointAllowList: @[],
-            (__bridge NSString*)kNXT2EntitlementLaunchServicesSetEndpointAllowList: @[],
-            
-            /* sandbox */
-            (__bridge NSString*)kNXT2EntitlementSandboxFileRead: @[],
-            (__bridge NSString*)kNXT2EntitlementSandboxFileReadWrite: @[],
-            (__bridge NSString*)kNXT2EntitlementSandboxNoContainer: @(NO),
-        }
+        @"/Config/Entitlements.plist": NXForkDefaultNyxianEntitlements()
     } mutableCopy];
     
     if(schemeKind == NXProjectSchemeKindKSurfaceKext)

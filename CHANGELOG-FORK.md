@@ -4,6 +4,22 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.61.0 — 2026-11-12
+
+- **Exports carry nothing of Nyxian.** `Config/Entitlements.plist` holds
+  Nyxian's own entitlements (`org.emexlabs.nyxian.*`), which only let Nyxian
+  run the app on the device:
+  - **.swiftpm**: already left the whole `Config` folder out (unchanged).
+  - **Project .zip** (Projects › Export, multi-select Export): no
+    `Config/Entitlements.plist`; Nyxian writes it back when the zip is
+    imported and the project opened.
+  - **Export .ipa**: Nyxian's entitlements are no longer appended to the app
+    binary, and a blob left by an earlier run is removed.
+- **Apple entitlements of the app**: new file template "App Entitlements"
+  (`Config/AppEntitlements.plist`, commented examples: iCloud, App Groups,
+  HealthKit, push). Export .ipa shares `<app>.entitlements` next to the .ipa
+  for the signer; it travels in the project zip.
+
 ## 1.60.1 — 2026-11-12
 
 - **@State error is back fixed** ("external macro implementation type

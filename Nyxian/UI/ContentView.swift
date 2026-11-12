@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.38.1
+ Fork doctoralvarez/Nyxian — version 1.39.0
  Changelog:
+  - 1.39.0 (2026-11-12): exports carry nothing of Nyxian (ForkCleanExport):
+    a project's zip leaves out Config/Entitlements.plist (Nyxian's own
+    org.emexlabs.nyxian.* entitlements; they come back on import) and its
+    build cache; Export .ipa shares <app>.entitlements next to the .ipa when
+    Config/AppEntitlements.plist has Apple entitlements of the app.
   - 1.38.1 (2026-11-12): @State error again ("SwiftUIMacros.StateMacro could
     not be found") — the SDK fix was remembered with a marker even when the
     SDK was unpacked again afterwards (or was still downloading at launch),
@@ -869,7 +874,7 @@ import Network
                 while used.contains(name) { name += " 2" }
                 used.insert(name)
                 let zip = temp.appendingPathComponent("\(name).zip")
-                if zipDirectoryAtPath(project.url.path, zip.path, true) { zips.append(zip) }
+                if ForkCleanExport.zipProject(project, to: zip) { zips.append(zip) }
             }
             DispatchQueue.main.async { [weak self] in
                 guard let self, !zips.isEmpty else { return }
@@ -904,7 +909,12 @@ import Network
     private func forkExportZip(_ project: NXProject) {
         DispatchQueue.global().async {
             let zipPath: String = "\(NSTemporaryDirectory())/\(project.projectConfig.displayName!).zip"
-            zipDirectoryAtPath(project.url.path, zipPath, true)
+            guard ForkCleanExport.zipProject(project, to: URL(fileURLWithPath: zipPath)) else {
+                DispatchQueue.main.async {
+                    NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Could not make the zip", withDelay: 0.0)
+                }
+                return
+            }
             share(url: URL(fileURLWithPath: zipPath), remove: true)
         }
     }
@@ -9023,6 +9033,57 @@ final class ForkStaticServer {
 }
 
 /// One-time edits of Nyxian's own copy of the iOS SDK so it builds without Xcode-only compiler plugins.
+/// fork: exports carry nothing of Nyxian's own entitlements
+/// (org.emexlabs.nyxian.*, Config/Entitlements.plist): those only let Nyxian
+/// run the app on the device. Apple entitlements of the app itself live in
+/// Config/AppEntitlements.plist and are kept.
+enum ForkCleanExport {
+    static let nyxianEntitlements = "Config/Entitlements.plist"
+    static let appEntitlements = "Config/AppEntitlements.plist"
+
+    /// The project folder zipped without Nyxian's entitlements (and without
+    /// its build cache). Nyxian puts them back when the zip is imported again.
+    static func zipProject(_ project: NXProject, to zip: URL) -> Bool {
+        let fm = FileManager.default
+        let staging = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("CleanExport-\(UUID().uuidString)")
+        let copy = staging.appendingPathComponent(project.url.lastPathComponent)
+        defer { try? fm.removeItem(at: staging) }
+        do {
+            try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+            try fm.copyItem(at: project.url, to: copy)
+        } catch {
+            return false
+        }
+        try? fm.removeItem(at: copy.appendingPathComponent(nyxianEntitlements))
+        try? fm.removeItem(at: copy.appendingPathComponent("Cache"))
+        try? fm.removeItem(at: zip)
+        return zipDirectoryAtPath(copy.path, zip.path, true)
+    }
+
+    /// The .ipa, plus <app>.entitlements when the project has Apple
+    /// entitlements of its own (for the signer: zsign -e, Feather, ESign…)
+    static func shareIPA(_ project: NXProject) {
+        let ipa: URL = project.packageURL
+        let source = project.url.appendingPathComponent(appEntitlements)
+        guard let dictionary = NSDictionary(contentsOf: source), dictionary.count > 0 else {
+            share(url: ipa, remove: true)
+            return
+        }
+        let name = project.projectConfig.executable ?? "App"
+        let folder = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("Entitlements-\(UUID().uuidString)")
+        let file = folder.appendingPathComponent("\(name).entitlements")
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let data = try PropertyListSerialization.data(fromPropertyList: dictionary, format: .xml, options: 0)
+            try data.write(to: file)
+        } catch {
+            share(url: ipa, remove: true)
+            return
+        }
+        share(urls: [ipa, file], remove: true)
+    }
+}
+
 enum ForkSDKPatches {
     private static let markerName = ".nyxian-fork-sdk-patches"
     private static let version = "2"

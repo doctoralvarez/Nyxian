@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.1
+ Fork doctoralvarez/Nyxian — version 1.5.0
  Changelog:
+  - 1.5.0 (2026-11-12): Export .ipa leaves out Nyxian's entitlements
+    (org.emexlabs.nyxian.*, appended to the app only for running inside
+    Nyxian) and removes one left from an earlier run; with
+    Config/AppEntitlements.plist the share also carries <app>.entitlements
+    for the signer.
   - 1.4.1 (2026-11-12): every build first makes sure the SDK's @State fix is
     in place (ForkSDKPatches.ensure).
   - 1.4.0 (2026-11-11): Library projects build (headsup lets them through);
@@ -289,11 +294,16 @@ final class NXBuilder: NSObject {
                     zipDirectoryAtPath(project.payloadURL.path, project.packageURL.path, true)
                 }
             } else {
-                if self.project.projectConfig.signMachOWithNyxianEntitlements {
-                    trust_nxt2_sign(self.project.machoURL.path, project.entitlementsConfig.dictionary as CFDictionary, false, nil)
-                }
                 if self.project.projectConfig.schemeKind == .app {
+                    /* fork: an exported .ipa carries nothing of Nyxian — no
+                       org.emexlabs.nyxian.* entitlements appended to the app
+                       (they only matter when Nyxian runs it, and some signers
+                       reject the extra bytes); a blob from an earlier run is
+                       removed. Nyxian signs it again if it installs the .ipa. */
+                    _ = trust_remove_blob(self.project.machoURL.path)
                     try self.package()
+                } else if self.project.projectConfig.signMachOWithNyxianEntitlements {
+                    trust_nxt2_sign(self.project.machoURL.path, project.entitlementsConfig.dictionary as CFDictionary, false, nil)
                 }
             }
         }
@@ -448,7 +458,8 @@ func buildProjectWithArgumentUI(targetViewController: UIViewController,
                         loggerView.modalPresentationStyle = .formSheet
                         targetViewController.present(loggerView, animated: true)
                     } else if buildType == .export {
-                        share(url: project.packageURL, remove: true)
+                        /* fork: with Config/AppEntitlements.plist, its <app>.entitlements goes along */
+                        ForkCleanExport.shareIPA(project)
                     }
                     
                     NXBuilder.forkQuietFailure = false

@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.12.0
+ Fork doctoralvarez/Nyxian — version 1.13.0
  Changelog:
+  - 1.13.0 (2026-11-12): "App Entitlements" file template (Config/AppEntitlements.plist,
+    Apple entitlements of the app, with commented examples); share(urls:)
+    shares several files at once.
   - 1.12.0 (2026-11-11): pull to refresh is instant in every folder and
     subfolder (no wait or fade-in); a list also reads its folder again when
     it shows again (back from a subfolder or the editor) and when Nyxian
@@ -1083,14 +1086,21 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
 }
 
 func share(url: URL, remove: Bool = false) {
-    let activityViewController = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    share(urls: [url], remove: remove)
+}
+
+/// fork: several files in one share sheet (an .ipa with its .entitlements)
+func share(urls: [URL], remove: Bool = false) {
+    let activityViewController = UIActivityViewController(activityItems: urls, applicationActivities: nil)
     
     if remove {
         activityViewController.completionWithItemsHandler = { _, _, _, _ in
-            do {
-                try FileManager.default.removeItem(at: url)
-            } catch {
-                print("Failed to remove file: \(error)")
+            for url in urls {
+                do {
+                    try FileManager.default.removeItem(at: url)
+                } catch {
+                    print("Failed to remove file: \(error)")
+                }
             }
         }
     }
@@ -3872,6 +3882,38 @@ struct ForkFileTemplate {
                 r = Registro("\(name)", [1.0, 2.0, 3.0])
                 assert r.promedio() == 2.0
                 print(r, r.promedio())
+
+            """
+        },
+        /* fork: Apple entitlements of the app itself (not Nyxian's) */
+        ForkFileTemplate(title: "App Entitlements", subtitle: "Apple entitlements for the .ipa — make it in Config, named AppEntitlements", symbol: "checkmark.seal", fileExtension: "plist", placeholder: "AppEntitlements") { _ in
+            """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+            \t<!-- Apple entitlements of your app. Export .ipa shares them as <app>.entitlements
+            \t     next to the .ipa, for the signer. They must also be enabled for the App ID
+            \t     (developer.apple.com) and be in the provisioning profile. Examples:
+
+            \t<key>com.apple.developer.icloud-container-identifiers</key>
+            \t<array><string>iCloud.com.mioftalmologo.MyApp</string></array>
+            \t<key>com.apple.developer.icloud-services</key>
+            \t<array><string>CloudDocuments</string></array>
+            \t<key>com.apple.developer.ubiquity-container-identifiers</key>
+            \t<array><string>iCloud.com.mioftalmologo.MyApp</string></array>
+
+            \t<key>com.apple.security.application-groups</key>
+            \t<array><string>group.com.mioftalmologo.MyApp</string></array>
+
+            \t<key>com.apple.developer.healthkit</key>
+            \t<true/>
+
+            \t<key>aps-environment</key>
+            \t<string>production</string>
+            \t-->
+            </dict>
+            </plist>
 
             """
         },
