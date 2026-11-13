@@ -22,7 +22,7 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
   - 1.2.0 (2026-11-13): NXForkPermissionICloudSimulated — per-program
     "simulate iCloud" switch (default on) read by PEProcess.
