@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.39.0
+ Fork doctoralvarez/Nyxian — version 1.40.0
  Changelog:
+  - 1.40.0 (2026-11-13): Playgrounds sync (ForkPlaygroundsSync.swift): the
+    import menu gains "Sync with Playgrounds Now" and "Playgrounds Sync…";
+    the list syncs both ways when Nyxian opens, comes back to the front or
+    shows the list again (never while a project is open), sends Nyxian's
+    changes when Nyxian goes to the background, and reloads itself when a
+    sync brought projects in.
   - 1.39.0 (2026-11-12): exports carry nothing of Nyxian (ForkCleanExport):
     a project's zip leaves out Config/Entitlements.plist (Nyxian's own
     org.emexlabs.nyxian.* entitlements; they come back on import) and its
@@ -339,9 +345,19 @@ import Network
                 },
                 UIAction(title: "GitHub Account…", image: UIImage(systemName: "person.crop.circle")) { [weak self] _ in
                     self?.forkPresentGitHubAccount()
-                }
+                },
+                /* fork: two-way sync with iCloud Drive › Playgrounds (ForkPlaygroundsSync.swift) */
+                UIMenu(title: "", options: .displayInline, children: [
+                    UIAction(title: "Sync with Playgrounds Now", image: UIImage(systemName: "arrow.triangle.2.circlepath.icloud")) { [weak self] _ in
+                        self?.forkPlaygroundsSyncNow()
+                    },
+                    UIAction(title: "Playgrounds Sync…", image: UIImage(systemName: "icloud")) { [weak self] _ in
+                        self?.navigationController?.pushViewController(ForkPlaygroundsSyncViewController(), animated: true)
+                    }
+                ])
             ])
         )
+        forkObservePlaygroundsSync()
         /* fork: Python 3 — a tap opens the Python panel, a long press this menu */
         let pythonItem = UIBarButtonItem(
             image: UIImage(systemName: "chevron.left.forwardslash.chevron.right"),
@@ -569,6 +585,8 @@ import Network
         }
         /* fork: Python unpacked and signed now, in the background, not when it is first opened */
         ForkPython.warmUp()
+        /* fork: opening Nyxian or coming back to the list syncs with Playgrounds */
+        forkPlaygroundsAutoSync()
     }
     
     private var sortedSectionKeys: [String] {
@@ -2035,6 +2053,57 @@ extension ContentViewController {
         } catch {
             try? FileManager.default.removeItem(at: temp)
             NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: error.localizedDescription, withDelay: 0.0)
+        }
+    }
+}
+
+// MARK: - Fork: sync with iCloud Drive › Playgrounds (ForkPlaygroundsSync.swift)
+
+extension ContentViewController {
+    /// Only the projects list itself: no project open, nothing presented over it.
+    fileprivate var forkListIsShowing: Bool {
+        viewIfLoaded?.window != nil
+            && presentedViewController == nil
+            && (navigationController?.topViewController === self || navigationController == nil)
+    }
+
+    func forkObservePlaygroundsSync() {
+        let center = NotificationCenter.default
+        center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.forkPlaygroundsAutoSync()
+        }
+        center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
+            /* a project may be open: only Nyxian → Playgrounds */
+            ForkPlaygroundsSync.shared.pushInBackground()
+        }
+        center.addObserver(forName: ForkPlaygroundsSync.didChangeProjects, object: nil, queue: .main) { [weak self] _ in
+            guard let self, !(self.tableView.isEditing || self.forkSelecting) else { return }
+            self.forkRefreshProjects()
+        }
+    }
+
+    /// Both ways, only while the list shows (an open project is never changed underneath).
+    func forkPlaygroundsAutoSync() {
+        guard forkListIsShowing, !(tableView.isEditing || forkSelecting) else { return }
+        ForkPlaygroundsSync.shared.syncAutomatically(from: self)
+    }
+
+    func forkPlaygroundsSyncNow() {
+        let sync = ForkPlaygroundsSync.shared
+        guard sync.hasFolder else {
+            navigationController?.pushViewController(ForkPlaygroundsSyncViewController(), animated: true)
+            return
+        }
+        guard !sync.isRunning else {
+            forkGitHubAlert("Playgrounds Sync", "A sync is already running.")
+            return
+        }
+        sync.sync(mode: .full) { [weak self] report, error in
+            if let error {
+                self?.forkGitHubAlert("Playgrounds Sync", error.localizedDescription)
+            } else if let report {
+                self?.forkGitHubAlert("Playgrounds Sync", report.summary)
+            }
         }
     }
 }
