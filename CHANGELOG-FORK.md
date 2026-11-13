@@ -4,6 +4,19 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.63.0 — 2026-11-12
+
+- **Export .ipa › Capabilities**: switches for **iCloud**, **Increased Memory
+  Limit** and **Extended Virtual Addressing**. They write the entitlements
+  into `Config/AppEntitlements.plist` (iCloud: container `iCloud.<bundle id>`,
+  services CloudKit and CloudDocuments).
+- **The export signs `Config/AppEntitlements.plist` into the app** (ad-hoc,
+  with Nyxian's ZSign) so SideStore or another signer sees the entitlements
+  the app asks for and keeps the ones its App ID and profile allow.
+- A new check warns when the code uses iCloud (CKContainer,
+  NSUbiquitousKeyValueStore, ubiquity containers, CloudKit Core Data) and
+  iCloud is off; its fix turns it on.
+
 ## 1.62.4 — 2026-11-12
 
 - Settings › Management › Memory: a `get-task-allow` row that checks the

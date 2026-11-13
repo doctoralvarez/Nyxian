@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.13.0
+ Fork doctoralvarez/Nyxian — version 1.14.0
  Changelog:
+  - 1.14.0 (2026-11-12): Export .ipa › Capabilities: iCloud, Increased Memory
+    Limit and Extended Virtual Addressing switches. They write the entitlements
+    into Config/AppEntitlements.plist, which the export now signs into the app
+    (ad-hoc) so the signer sees them. A check warns when the code uses iCloud
+    (CloudKit, ubiquity) and iCloud is off.
   - 1.13.0 (2026-11-12): "App Entitlements" file template (Config/AppEntitlements.plist,
     Apple entitlements of the app, with commented examples); share(urls:)
     shares several files at once.
@@ -2866,6 +2871,94 @@ final class GitHubCommitViewController: UIViewController {
 // MARK: - Fork: export assistant
 
 /// Version, build number and pre-flight checks before Nyxian builds the .ipa.
+/// fork: Apple entitlements of the app itself, in Config/AppEntitlements.plist
+/// (exported into the app's signature, see NXBuilder)
+enum ForkAppEntitlements {
+    enum Capability: CaseIterable {
+        case iCloud, increasedMemory, extendedAddressing
+
+        var title: String {
+            switch self {
+            case .iCloud: return "iCloud"
+            case .increasedMemory: return "Increased Memory Limit"
+            case .extendedAddressing: return "Extended Virtual Addressing"
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .iCloud: return "CloudKit and iCloud Drive (container iCloud.<bundle id>)"
+            case .increasedMemory: return "More memory before iOS ends the app"
+            case .extendedAddressing: return "More address space (paid account)"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .iCloud: return "icloud"
+            case .increasedMemory: return "memorychip"
+            case .extendedAddressing: return "arrow.up.left.and.arrow.down.right"
+            }
+        }
+
+        /// The key that says whether it is on
+        var markerKey: String {
+            switch self {
+            case .iCloud: return "com.apple.developer.icloud-container-identifiers"
+            case .increasedMemory: return "com.apple.developer.kernel.increased-memory-limit"
+            case .extendedAddressing: return "com.apple.developer.kernel.extended-virtual-addressing"
+            }
+        }
+
+        func keys(bundleID: String) -> [String: Any] {
+            switch self {
+            case .iCloud:
+                let container = "iCloud.\(bundleID)"
+                return [
+                    "com.apple.developer.icloud-container-identifiers": [container],
+                    "com.apple.developer.ubiquity-container-identifiers": [container],
+                    "com.apple.developer.icloud-services": ["CloudKit", "CloudDocuments"]
+                ]
+            case .increasedMemory:
+                return ["com.apple.developer.kernel.increased-memory-limit": true]
+            case .extendedAddressing:
+                return ["com.apple.developer.kernel.extended-virtual-addressing": true]
+            }
+        }
+    }
+
+    static func url(_ project: NXProject) -> URL {
+        project.url.appendingPathComponent("Config/AppEntitlements.plist")
+    }
+
+    static func read(_ project: NXProject) -> [String: Any] {
+        guard let data = try? Data(contentsOf: url(project)),
+              let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else { return [:] }
+        return plist
+    }
+
+    static func isOn(_ capability: Capability, project: NXProject) -> Bool {
+        read(project)[capability.markerKey] != nil
+    }
+
+    static func set(_ capability: Capability, on: Bool, project: NXProject) {
+        var plist = read(project)
+        let keys = capability.keys(bundleID: project.projectConfig.bundleid ?? "app")
+        for (key, value) in keys {
+            if on { plist[key] = value } else { plist.removeValue(forKey: key) }
+        }
+        let target = url(project)
+        if plist.isEmpty {
+            try? FileManager.default.removeItem(at: target)
+            return
+        }
+        try? FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let data = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) {
+            try? data.write(to: target, options: .atomic)
+        }
+    }
+}
+
 final class ForkExportAssistant: UITableViewController {
     struct Check {
         let title: String
@@ -2980,6 +3073,16 @@ final class ForkExportAssistant: UITableViewController {
                     self?.promptDescription(key: hint.key, text: hint.text, project: project)
                 }))
         }
+        /* fork: iCloud used in the code but not asked for */
+        let iCloudTokens: [String] = ["CKContainer", "CKDatabase", "NSUbiquitousKeyValueStore", "url(forUbiquityContainerIdentifier", "ubiquityIdentityToken", "NSPersistentCloudKitContainer"]
+        if iCloudTokens.contains(where: { sources.contains($0) }) {
+            let on = ForkAppEntitlements.isOn(.iCloud, project: project)
+            let project = self.project
+            result.append(Check(title: "iCloud", detail: on ? "asked for (Capabilities)" : "the code uses iCloud but the app does not ask for it — turn on iCloud below", ok: on, fix: on ? nil : { [weak self] in
+                ForkAppEntitlements.set(.iCloud, on: true, project: project)
+                self?.runChecks()
+            }))
+        }
         if sources.contains("BGTaskScheduler") {
             let ok = info["BGTaskSchedulerPermittedIdentifiers"] != nil && info["UIBackgroundModes"] != nil
             result.append(Check(title: "Background tasks", detail: ok ? "identifiers and modes set" : "BGTaskScheduler needs BGTaskSchedulerPermittedIdentifiers and UIBackgroundModes in the Info.plist (Config/Project.plist > NXBundleInfo)", ok: ok, fix: nil))
@@ -3016,28 +3119,30 @@ final class ForkExportAssistant: UITableViewController {
     
     // MARK: table
     
-    override func numberOfSections(in tableView: UITableView) -> Int { 3 }
+    override func numberOfSections(in tableView: UITableView) -> Int { 4 }
     
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        ["Version", "Checks", nil][section]
+        ["Version", "Checks", "Capabilities", nil][section]
     }
     
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
         switch section {
         case 0: return "Saved in the project. Raise the build number for every .ipa you install over an older one."
-        case 2: return "Nyxian builds the app and packs it as an .ipa that is not signed for distribution: sign it with your own certificate (or a signing service) to install it outside Nyxian. TestFlight / App Store uploads need Xcode or Transporter on a Mac."
+        case 2: return "Written to Config/AppEntitlements.plist and signed into the app, so the signer sees them. Each must also be on for the App ID (developer.apple.com or GetMoreRam); iCloud also needs the container (iCloud.<bundle id>) created and assigned to the App ID. iCloud and Extended Virtual Addressing need a paid account. Inside Nyxian the app runs with Nyxian's entitlements."
+        case 3: return "Nyxian builds the app and packs it as an .ipa that is not signed for distribution: sign it with your own certificate (or a signing service) to install it outside Nyxian. TestFlight / App Store uploads need Xcode or Transporter on a Mac."
         default: return nil
         }
     }
     
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        [2, checks.count, 1][section]
+        [2, checks.count, ForkAppEntitlements.Capability.allCases.count, 1][section]
     }
     
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
         var content = cell.defaultContentConfiguration()
         cell.accessoryType = .none
+        cell.accessoryView = nil
         cell.selectionStyle = .default
         switch indexPath.section {
         case 0:
@@ -3053,6 +3158,21 @@ final class ForkExportAssistant: UITableViewController {
             content.image = UIImage(systemName: check.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
             content.imageProperties.tintColor = check.ok ? .systemGreen : .systemOrange
             if check.fix != nil { cell.accessoryType = .disclosureIndicator } else { cell.selectionStyle = .none }
+        case 2:
+            let capability = ForkAppEntitlements.Capability.allCases[indexPath.row]
+            content.text = capability.title
+            content.secondaryText = capability.detail
+            content.secondaryTextProperties.color = .secondaryLabel
+            content.image = UIImage(systemName: capability.symbol)
+            let toggle = UISwitch()
+            toggle.isOn = ForkAppEntitlements.isOn(capability, project: project)
+            let project = self.project
+            toggle.addAction(UIAction { [weak self, weak toggle] _ in
+                ForkAppEntitlements.set(capability, on: toggle?.isOn ?? false, project: project)
+                self?.runChecks()
+            }, for: .valueChanged)
+            cell.accessoryView = toggle
+            cell.selectionStyle = .none
         default:
             content.text = "Export .ipa"
             content.textProperties.color = .tintColor
@@ -3088,6 +3208,8 @@ final class ForkExportAssistant: UITableViewController {
             present(alert, animated: true)
         case 1:
             checks[indexPath.row].fix?()
+        case 2:
+            break
         default:
             export()
         }

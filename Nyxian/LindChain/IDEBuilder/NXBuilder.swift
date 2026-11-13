@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.5.0
+ Fork doctoralvarez/Nyxian — version 1.6.0
  Changelog:
+  - 1.6.0 (2026-11-12): Export .ipa signs Config/AppEntitlements.plist into
+    the app (ad-hoc, ZSigner), so a signer (SideStore, …) sees the app's own
+    entitlements (iCloud, memory) and asks for them.
   - 1.5.0 (2026-11-12): Export .ipa leaves out Nyxian's entitlements
     (org.emexlabs.nyxian.*, appended to the app only for running inside
     Nyxian) and removes one left from an earlier run; with
@@ -301,6 +304,17 @@ final class NXBuilder: NSObject {
                        reject the extra bytes); a blob from an earlier run is
                        removed. Nyxian signs it again if it installs the .ipa. */
                     _ = trust_remove_blob(self.project.machoURL.path)
+                    /* fork: the app's own Apple entitlements, written into its signature */
+                    let appEntitlements = self.project.url.appendingPathComponent("Config/AppEntitlements.plist")
+                    if let data = try? Data(contentsOf: appEntitlements),
+                       let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
+                       !plist.isEmpty,
+                       let xml = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) {
+                        let bundleID: String = self.project.projectConfig.bundleid ?? ""
+                        if !ZSigner.adhocSignMachO(atPath: self.project.machoURL.path, bundleId: bundleID, entitlementData: xml) {
+                            throw NSError(domain: "com.cr4zy.nyxian.builder.export", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not write the app's entitlements (Config/AppEntitlements.plist) into the app"])
+                        }
+                    }
                     try self.package()
                 } else if self.project.projectConfig.signMachOWithNyxianEntitlements {
                     trust_nxt2_sign(self.project.machoURL.path, project.entitlementsConfig.dictionary as CFDictionary, false, nil)
