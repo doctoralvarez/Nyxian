@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.0.1
  Changelog:
+  - 1.0.1 (2026-11-13): the coordinator's NSError is turned into an Error
+    explicitly where it is combined with other errors (compiler safety).
   - 1.0.0 (2026-11-13): two-way sync of app projects with a folder of Swift
     Playgrounds packages (iCloud Drive › Playgrounds). The folder is picked
     once in Files and kept as a bookmark (no iCloud entitlement needed).
@@ -326,7 +328,7 @@ final class ForkPlaygroundsSync {
                 listingError = error
             }
         }
-        if let error = listingError ?? coordinationError {
+        if let error = listingError ?? (coordinationError as Error?) {
             throw SyncError.folderUnavailable(error.localizedDescription)
         }
         let packages = Set(listing.filter { $0.pathExtension.lowercased() == "swiftpm" }.map { $0.lastPathComponent })
@@ -510,7 +512,7 @@ final class ForkPlaygroundsSync {
                 }
             }
         }
-        if let error = writeError ?? coordinationError { throw error }
+        if let error = writeError ?? (coordinationError as Error?) { throw error }
         return signature(ofPackage: destination)
     }
 
@@ -564,7 +566,7 @@ final class ForkPlaygroundsSync {
                     copyError = error
                 }
             }
-            if let error = copyError ?? coordinationError {
+            if let error = copyError ?? (coordinationError as Error?) {
                 try? fm.removeItem(at: temp)
                 throw error
             }

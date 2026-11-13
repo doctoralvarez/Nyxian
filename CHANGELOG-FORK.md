@@ -22,7 +22,7 @@ Nyxian uses it to check compatibility with emexLabs OTA updates.
   that project's sync off. Each project has its own switch.
 - Files still in iCloud are downloaded first; a package that is not down
   within a minute waits for the next sync.
-- New file `Nyxian/UI/ForkPlaygroundsSync.swift` (1.0.0); `ContentView.swift`
+- New file `Nyxian/UI/ForkPlaygroundsSync.swift` (1.0.1); `ContentView.swift`
   1.40.0.
 
 ## 1.65.1 — 2026-11-13
