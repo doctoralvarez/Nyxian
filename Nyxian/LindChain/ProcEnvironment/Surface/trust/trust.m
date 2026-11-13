@@ -24,6 +24,8 @@
 /*
  Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.2.0 (2026-11-13): NXForkPermissionICloudSimulated — per-program
+    "simulate iCloud" switch (default on) read by PEProcess.
   - 1.1.0 (2026-11-12): NXForkPermissionStoreKitSimulated — per-program
     "simulate StoreKit" switch (default on) read by PEProcess.
   - 1.0.0 (2026-11-09): per-program permissions (Settings → Management →
@@ -407,6 +409,16 @@ bool NXForkPermissionStoreKitSimulated(const char *executablePath)
         NSDictionary *policy = NXForkPermissionPolicyForExecutable(@(executablePath));
         /* on unless switched off: StoreKit cannot reach the App Store from inside Nyxian */
         return !([policy[@"storekit"] isKindOfClass:[NSNumber class]] && ![policy[@"storekit"] boolValue]);
+    }
+}
+
+bool NXForkPermissionICloudSimulated(const char *executablePath)
+{
+    if(executablePath == NULL) return true;
+    @autoreleasepool {
+        NSDictionary *policy = NXForkPermissionPolicyForExecutable(@(executablePath));
+        /* on unless switched off: Nyxian has no iCloud entitlement for its programs */
+        return !([policy[@"icloud"] isKindOfClass:[NSNumber class]] && ![policy[@"icloud"] boolValue]);
     }
 }
 

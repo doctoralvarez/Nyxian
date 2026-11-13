@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.65.0 — 2026-11-13
+
+- **Test iCloud backup inside Nyxian**: Permissions › (program) › new
+  **Simulate iCloud** switch (on by default). The program starts with
+  `NYXIAN_ICLOUD=simulate`; Nyxian has no iCloud entitlement for its programs,
+  so an app reads that variable and uses a local folder instead of iCloud
+  (the Myopia app's simulated backup). Off: the app sees no variable.
+
 ## 1.64.0 — 2026-11-13
 
 - **Test in-app purchases inside Nyxian**: Settings › Management ›

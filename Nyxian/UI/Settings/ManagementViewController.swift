@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.0
+ Fork doctoralvarez/Nyxian — version 1.5.0
  Changelog:
+  - 1.5.0 (2026-11-13): Permissions: "Simulate iCloud" switch per program
+    (default on): the program starts with NYXIAN_ICLOUD=simulate.
   - 1.4.0 (2026-11-13): Permissions: "Simulate StoreKit" switch per program
     (default on): the program starts with NYXIAN_STOREKIT=simulate so an app
     can test in-app purchases with its own simulated store.
@@ -885,6 +887,7 @@ struct ForkPermissionProgram {
         if read + readWrite > 0 { parts.append("+\(read + readWrite) folders") }
         parts.append((policy["network"] as? Bool ?? true) ? "network on" : "network blocked")
         if policy["storekit"] as? Bool == false { parts.append("real StoreKit") }
+        if policy["icloud"] as? Bool == false { parts.append("real iCloud") }
         return parts.joined(separator: " · ")
     }
 }
@@ -1071,7 +1074,8 @@ final class ForkPermissionEditorViewController: UITableViewController {
         case 0: return modes.count
         case 1: return folders("read").count + 1
         case 2: return folders("readWrite").count + 1
-        case 3, 4: return 1
+        case 3: return 1
+        case 4: return 2
         default: return 2
         }
     }
@@ -1082,7 +1086,7 @@ final class ForkPermissionEditorViewController: UITableViewController {
         case 1: return "Extra Folders — Read Only"
         case 2: return "Extra Folders — Read and Write"
         case 3: return "Network"
-        case 4: return "In-App Purchases (StoreKit)"
+        case 4: return "Simulated Services (StoreKit, iCloud)"
         default: return nil
         }
     }
@@ -1092,7 +1096,7 @@ final class ForkPermissionEditorViewController: UITableViewController {
         case 0: return program.detail
         case 2: return "Folders are inside Nyxian's root (\"/var/mobile\" is $(NXROOT)/var/mobile) and include what is in them. They add to the file mode above."
         case 3: return "Off: its connections to the internet and the local network fail with \"Operation not permitted\". Local sockets keep working."
-        case 4: return "On: the program starts with NYXIAN_STOREKIT=simulate. StoreKit cannot reach the App Store from inside Nyxian, so an app can read that variable and use a simulated store to test purchases. Off: the app sees no variable."
+        case 4: return "On: the program starts with NYXIAN_STOREKIT=simulate. StoreKit cannot reach the App Store from inside Nyxian, so an app can read that variable and use a simulated store to test purchases. Off: the app sees no variable. Likewise \"Simulate iCloud\" sets NYXIAN_ICLOUD=simulate: Nyxian has no iCloud entitlement for its programs, so an app can back up to a local folder instead."
         default: return section == 5 ? "Changes apply the next time it starts." : nil
         }
     }
@@ -1131,13 +1135,14 @@ final class ForkPermissionEditorViewController: UITableViewController {
             cell.accessoryView = toggle
             cell.selectionStyle = .none
         case 4:
-            cell.textLabel?.text = "Simulate StoreKit"
+            let key = indexPath.row == 0 ? "storekit" : "icloud"
+            cell.textLabel?.text = indexPath.row == 0 ? "Simulate StoreKit" : "Simulate iCloud"
             let toggle = UISwitch()
-            toggle.isOn = policy["storekit"] as? Bool ?? true
+            toggle.isOn = policy[key] as? Bool ?? true
             toggle.addAction(UIAction { [weak self] action in
                 guard let self = self, let toggle = action.sender as? UISwitch else { return }
                 var value = self.policy
-                value["storekit"] = toggle.isOn
+                value[key] = toggle.isOn
                 self.policy = value
             }, for: .valueChanged)
             cell.accessoryView = toggle

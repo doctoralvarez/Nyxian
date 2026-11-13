@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-13): programs start with NYXIAN_ICLOUD=simulate (unless
+    switched off in Permissions) so apps can test iCloud backup with a local
+    folder.
   - 1.3.0 (2026-11-12): programs start with NYXIAN_STOREKIT=simulate (unless
     switched off in Permissions) so apps can test in-app purchases with a
     simulated store.
@@ -256,6 +259,16 @@ NSString *PEForkSigningReport(NSArray<NSString *> *paths)
         NSMutableDictionary *mutableItems = [items mutableCopy];
         NSMutableDictionary *environment = [mutableItems[@"PEEnvironment"] mutableCopy] ?: [NSMutableDictionary dictionary];
         environment[@"NYXIAN_STOREKIT"] = @"simulate";
+        mutableItems[@"PEEnvironment"] = environment;
+        items = mutableItems;
+    }
+    
+    /* fork: Nyxian has no iCloud entitlement for its programs; tell the program to simulate iCloud */
+    if(NXForkPermissionICloudSimulated(ownPath))
+    {
+        NSMutableDictionary *mutableItems = [items mutableCopy];
+        NSMutableDictionary *environment = [mutableItems[@"PEEnvironment"] mutableCopy] ?: [NSMutableDictionary dictionary];
+        environment[@"NYXIAN_ICLOUD"] = @"simulate";
         mutableItems[@"PEEnvironment"] = environment;
         items = mutableItems;
     }
