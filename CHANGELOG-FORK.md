@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.65.1 — 2026-11-13
+
+- **Nyxian no longer steals LiveContainer's URL scheme**: `Info.plist`
+  declared `livecontainer://` (left over from LiveContainer's code). With
+  LiveContainer installed too, iOS could hand LiveContainer's relaunch URL to
+  Nyxian, so launching an app in LiveContainer opened Nyxian. Nyxian now
+  declares only its own `nyxian://` scheme. Nothing in Nyxian handled
+  `livecontainer://`, so nothing else changes.
+
 ## 1.65.0 — 2026-11-13
 
 - **Test iCloud backup inside Nyxian**: Permissions › (program) › new
