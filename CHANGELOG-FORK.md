@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.64.0 — 2026-11-13
+
+- **Test in-app purchases inside Nyxian**: Settings › Management ›
+  Permissions › (program) has a new **Simulate StoreKit** switch, on by
+  default. A program starts with the environment variable
+  `NYXIAN_STOREKIT=simulate`; StoreKit cannot reach the App Store from inside
+  Nyxian, so an app reads that variable and uses its own simulated store
+  (the Myopia app's `TiendaSimulada`). Off: the app sees no variable.
+
 ## 1.63.0 — 2026-11-12
 
 - **Export .ipa › Capabilities**: switches for **iCloud**, **Increased Memory

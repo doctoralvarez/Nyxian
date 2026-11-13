@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-12): programs start with NYXIAN_STOREKIT=simulate (unless
+    switched off in Permissions) so apps can test in-app purchases with a
+    simulated store.
   - 1.2.0 (2026-11-10): -initWithItems: records why a spawn failed
     (PEProcessSpawnFailure, logged as PEProcess:spawn) so posix_spawn can
     return a telling error instead of always EPERM. PEForkSigningReport
@@ -245,6 +248,16 @@ NSString *PEForkSigningReport(NSArray<NSString *> *paths)
         mutableItems[@"PEEnvironment"] = environment;
         items = mutableItems;
         klog_log("PEProcess:permissions", "network blocked for %s", ownPath);
+    }
+    
+    /* fork: StoreKit cannot reach the App Store from inside Nyxian; tell the program to simulate it */
+    if(NXForkPermissionStoreKitSimulated(ownPath))
+    {
+        NSMutableDictionary *mutableItems = [items mutableCopy];
+        NSMutableDictionary *environment = [mutableItems[@"PEEnvironment"] mutableCopy] ?: [NSMutableDictionary dictionary];
+        environment[@"NYXIAN_STOREKIT"] = @"simulate";
+        mutableItems[@"PEEnvironment"] = environment;
+        items = mutableItems;
     }
     
     /* assigning potential bundle information */

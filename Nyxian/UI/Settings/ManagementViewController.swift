@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.2
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-13): Permissions: "Simulate StoreKit" switch per program
+    (default on): the program starts with NYXIAN_STOREKIT=simulate so an app
+    can test in-app purchases with its own simulated store.
   - 1.3.2 (2026-11-12): Memory: a get-task-allow row to check that reading
     the entitlements works (development signatures almost always have it).
   - 1.3.1 (2026-11-12): fixes the Memory row (a missing brace broke the build).
@@ -881,6 +884,7 @@ struct ForkPermissionProgram {
         let readWrite = (policy["readWrite"] as? [String])?.count ?? 0
         if read + readWrite > 0 { parts.append("+\(read + readWrite) folders") }
         parts.append((policy["network"] as? Bool ?? true) ? "network on" : "network blocked")
+        if policy["storekit"] as? Bool == false { parts.append("real StoreKit") }
         return parts.joined(separator: " · ")
     }
 }
@@ -1060,14 +1064,14 @@ final class ForkPermissionEditorViewController: UITableViewController {
     
     private func folders(_ key: String) -> [String] { policy[key] as? [String] ?? [] }
     
-    override func numberOfSections(in tableView: UITableView) -> Int { 5 }
+    override func numberOfSections(in tableView: UITableView) -> Int { 6 }
     
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch section {
         case 0: return modes.count
         case 1: return folders("read").count + 1
         case 2: return folders("readWrite").count + 1
-        case 3: return 1
+        case 3, 4: return 1
         default: return 2
         }
     }
@@ -1078,6 +1082,7 @@ final class ForkPermissionEditorViewController: UITableViewController {
         case 1: return "Extra Folders — Read Only"
         case 2: return "Extra Folders — Read and Write"
         case 3: return "Network"
+        case 4: return "In-App Purchases (StoreKit)"
         default: return nil
         }
     }
@@ -1087,7 +1092,8 @@ final class ForkPermissionEditorViewController: UITableViewController {
         case 0: return program.detail
         case 2: return "Folders are inside Nyxian's root (\"/var/mobile\" is $(NXROOT)/var/mobile) and include what is in them. They add to the file mode above."
         case 3: return "Off: its connections to the internet and the local network fail with \"Operation not permitted\". Local sockets keep working."
-        default: return section == 4 ? "Changes apply the next time it starts." : nil
+        case 4: return "On: the program starts with NYXIAN_STOREKIT=simulate. StoreKit cannot reach the App Store from inside Nyxian, so an app can read that variable and use a simulated store to test purchases. Off: the app sees no variable."
+        default: return section == 5 ? "Changes apply the next time it starts." : nil
         }
     }
     
@@ -1124,6 +1130,18 @@ final class ForkPermissionEditorViewController: UITableViewController {
             }, for: .valueChanged)
             cell.accessoryView = toggle
             cell.selectionStyle = .none
+        case 4:
+            cell.textLabel?.text = "Simulate StoreKit"
+            let toggle = UISwitch()
+            toggle.isOn = policy["storekit"] as? Bool ?? true
+            toggle.addAction(UIAction { [weak self] action in
+                guard let self = self, let toggle = action.sender as? UISwitch else { return }
+                var value = self.policy
+                value["storekit"] = toggle.isOn
+                self.policy = value
+            }, for: .valueChanged)
+            cell.accessoryView = toggle
+            cell.selectionStyle = .none
         default:
             if indexPath.row == 0 {
                 cell.textLabel?.text = "Restart It Now"
@@ -1148,7 +1166,7 @@ final class ForkPermissionEditorViewController: UITableViewController {
         case 1, 2:
             let key = indexPath.section == 1 ? "read" : "readWrite"
             if indexPath.row >= folders(key).count { addFolder(to: key) }
-        case 4:
+        case 5:
             if indexPath.row == 0 {
                 endRunning()
             } else {

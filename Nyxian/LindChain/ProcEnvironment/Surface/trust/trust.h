@@ -22,8 +22,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-12): NXForkPermissionStoreKitSimulated.
   - 1.0.0 (2026-11-09): per-program permissions (NXForkPermission…).
 */
 
@@ -94,6 +95,9 @@ PEEntitlementFlags trust_identity_entitlement_flags_from_entitlements(CFDictiona
    fork.permissions.v1: @{ key: @{ @"name", @"files": default|declared|full, @"read": @[paths],
    @"readWrite": @[paths], @"network": @(BOOL) } }, key "bundle:<id>" or "path:<executable>" */
 bool NXForkPermissionNetworkBlocked(const char *executablePath);
+/* fork: StoreKit simulation for apps run inside Nyxian (@"storekit": @(BOOL), default YES): the program
+   starts with NYXIAN_STOREKIT=simulate, so an app can use its own simulated store instead of the App Store */
+bool NXForkPermissionStoreKitSimulated(const char *executablePath);
 #if __OBJC__
 extern NSString *const NXForkPermissionsDefaultsKey;
 NSString *NXForkPermissionKeyForExecutable(NSString *executablePath);

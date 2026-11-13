@@ -22,8 +22,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-12): NXForkPermissionStoreKitSimulated — per-program
+    "simulate StoreKit" switch (default on) read by PEProcess.
   - 1.0.0 (2026-11-09): per-program permissions (Settings → Management →
     Permissions): file access "Nyxian default", "only what it declares"
     (its entitlements and container, even with the file system sandbox
@@ -395,6 +397,16 @@ bool NXForkPermissionNetworkBlocked(const char *executablePath)
     @autoreleasepool {
         NSDictionary *policy = NXForkPermissionPolicyForExecutable(@(executablePath));
         return [policy[@"network"] isKindOfClass:[NSNumber class]] && ![policy[@"network"] boolValue];
+    }
+}
+
+bool NXForkPermissionStoreKitSimulated(const char *executablePath)
+{
+    if(executablePath == NULL) return true;
+    @autoreleasepool {
+        NSDictionary *policy = NXForkPermissionPolicyForExecutable(@(executablePath));
+        /* on unless switched off: StoreKit cannot reach the App Store from inside Nyxian */
+        return !([policy[@"storekit"] isKindOfClass:[NSNumber class]] && ![policy[@"storekit"] boolValue]);
     }
 }
 
