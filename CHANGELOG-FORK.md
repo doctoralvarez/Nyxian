@@ -4,6 +4,27 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.66.0 — 2026-11-13
+
+- **Sync with Swift Playgrounds in iCloud**: import menu › **Playgrounds
+  Sync…** — choose iCloud Drive › Playgrounds once in Files (kept as a
+  bookmark, no iCloud entitlement needed). Every Swift app project is kept in
+  step with a `.swiftpm` there, both ways, with the existing .swiftpm
+  importer and exporter: Swift Playgrounds on the other devices sees
+  Nyxian's projects, and its changes come back.
+- **When**: opening Nyxian, coming back to it or to the projects list (never
+  while a project is open), and Nyxian → Playgrounds when Nyxian goes to the
+  background; also **Sync with Playgrounds Now**.
+- **Both sides changed**: the newer one wins; the other one is first copied
+  to `Playgrounds Sync Backups` (Show Backups in Files).
+- **Deleting never crosses over**: a project deleted in Nyxian leaves its
+  package (it is not imported again); a package deleted in Playgrounds turns
+  that project's sync off. Each project has its own switch.
+- Files still in iCloud are downloaded first; a package that is not down
+  within a minute waits for the next sync.
+- New file `Nyxian/UI/ForkPlaygroundsSync.swift` (1.0.1); `ContentView.swift`
+  1.40.0.
+
 ## 1.65.1 — 2026-11-13
 
 - **Nyxian no longer steals LiveContainer's URL scheme**: `Info.plist`
