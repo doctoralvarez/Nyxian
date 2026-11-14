@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.0
+ Fork doctoralvarez/Nyxian — version 1.5.0
  Changelog:
+  - 1.5.0 (2026-11-14): -releaseMemory never waits. Closing a file while its
+    code was still being checked (a Swift check can take several seconds)
+    froze Nyxian: the editor released the server on the main thread and had
+    to wait for the check to finish. Now, when a check is running, the
+    release is only noted and done by the check itself when it ends.
   - 1.4.0 (2026-11-07): -swiftSymbolAtLine:utf8Column:content:inFile: for
     Find References (Swift).
   - 1.3.0 (2026-11-07): -getFixIts.
@@ -38,6 +43,7 @@
 #import <string.h>
 #import <strings.h>
 #include <os/lock.h>
+#include <stdatomic.h>
 
 #pragma mark - SynpushServer
 
@@ -45,6 +51,17 @@
     os_unfair_lock _lock;
     MDKMutableASTUnit *_unit;
     MDKMutableFile *_file;
+    /* fork: a release asked for while a check held the lock */
+    atomic_bool _releasePending;
+}
+
+/* fork: called with the lock held, right before it is let go */
+- (void)forkReleaseIfPending
+{
+    if(atomic_exchange(&_releasePending, false))
+    {
+        _unit = nil;
+    }
 }
 
 - (instancetype)init:(NSString*)filepath
@@ -84,6 +101,7 @@
     [_file setUnsavedData:newData];
     [_unit reparse];
 
+    [self forkReleaseIfPending];
     os_unfair_lock_unlock(&_lock);
 }
 
@@ -119,9 +137,18 @@
 
 - (void)releaseMemory
 {
-    os_unfair_lock_lock(&_lock);
-    _unit = nil;
-    os_unfair_lock_unlock(&_lock);
+    /* fork: never wait for a running check (the editor calls this on the
+       main thread when it closes) */
+    if(os_unfair_lock_trylock(&_lock))
+    {
+        atomic_store(&_releasePending, false);
+        _unit = nil;
+        os_unfair_lock_unlock(&_lock);
+    }
+    else
+    {
+        atomic_store(&_releasePending, true);
+    }
 }
 
 - (BOOL)isActive
@@ -156,6 +183,7 @@
     [_unit setArguments:args];
     bool succeed = [_unit reparse];
     
+    [self forkReleaseIfPending];
     os_unfair_lock_unlock(&_lock);
     
     return succeed;

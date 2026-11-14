@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.67.2 — 2026-11-14
+
+- **Closing a Swift file right after opening it no longer freezes Nyxian.**
+  When a file opens, Nyxian checks its code in the background (a Swift check
+  can take several seconds). Closing the editor released the language server
+  on the main thread, which had to wait for that check to finish, so the app
+  hung. The release now never waits: while a check runs it is only noted, and
+  the check frees the memory itself when it ends.
+
 ## 1.67.1 — 2026-11-13
 
 - The private `-cert.ipa` carries the paid signing certificate (iPhone
