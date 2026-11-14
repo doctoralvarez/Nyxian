@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.1
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-13): Bundle identifiers. "Set Bundle IDs Now" gives every
+    synced Swift app project com.<username>.<AppName> (Customization ›
+    Credentials username; the app's own name without spaces), after showing
+    the list of changes; "On every sync" does it before each sync (and after
+    one that imported projects), so the .swiftpm in Playgrounds gets it too.
   - 1.0.1 (2026-11-13): the coordinator's NSError is turned into an Error
     explicitly where it is combined with other errors (compiler safety).
   - 1.0.0 (2026-11-13): two-way sync of app projects with a folder of Swift
@@ -262,6 +267,10 @@ final class ForkPlaygroundsSync {
         }
         isRunning = true
         NotificationCenter.default.post(name: Self.didChangeStatus, object: nil)
+        /* fork 1.1: bundle identifiers first, so this sync already sends them */
+        if ForkBundleIdentifierFixer.automatic {
+            _ = ForkBundleIdentifierFixer.apply(ForkBundleIdentifierFixer.plan())
+        }
         let snapshot = state
         queue.async {
             var working = snapshot
@@ -290,6 +299,10 @@ final class ForkPlaygroundsSync {
                 self.state = fresh
                 self.isRunning = false
                 if report.changedProjects {
+                    /* fork 1.1: imported projects get theirs too (sent on the next sync) */
+                    if ForkBundleIdentifierFixer.automatic {
+                        _ = ForkBundleIdentifierFixer.apply(ForkBundleIdentifierFixer.plan())
+                    }
                     NotificationCenter.default.post(name: Self.didChangeProjects, object: nil)
                 }
                 NotificationCenter.default.post(name: Self.didChangeStatus, object: nil)
@@ -705,7 +718,7 @@ final class ForkPlaygroundsSync {
 
 final class ForkPlaygroundsSyncViewController: UITableViewController, UIDocumentPickerDelegate {
     private enum Section: Int, CaseIterable {
-        case folder, sync, projects, ignored, more
+        case folder, sync, bundleIDs, projects, ignored, more
     }
 
     private var projects: [NXProject] = []
@@ -745,6 +758,7 @@ final class ForkPlaygroundsSyncViewController: UITableViewController, UIDocument
         switch Section(rawValue: section)! {
         case .folder: return 1
         case .sync: return 3
+        case .bundleIDs: return 2
         case .projects: return sync.hasFolder ? projects.count : 0
         case .ignored: return sync.hasFolder ? ignored.count : 0
         case .more: return sync.hasFolder ? 2 : 1
@@ -755,6 +769,7 @@ final class ForkPlaygroundsSyncViewController: UITableViewController, UIDocument
         switch Section(rawValue: section)! {
         case .folder: return "Swift Playgrounds folder"
         case .sync: return "Sync"
+        case .bundleIDs: return "Bundle identifiers"
         case .projects: return sync.hasFolder && !projects.isEmpty ? "App projects" : nil
         case .ignored: return sync.hasFolder && !ignored.isEmpty ? "Packages not imported" : nil
         case .more: return nil
@@ -770,6 +785,9 @@ final class ForkPlaygroundsSyncViewController: UITableViewController, UIDocument
             var text = "Automatic: when Nyxian opens, when you come back to it or to the projects list, and (Nyxian → Playgrounds only) when you leave it. When both sides changed, the newer one is kept and the other one is first copied to \(ForkPlaygroundsSync.backupsFolderName)."
             if let summary = state.lastSummary { text += "\n\nLast sync:\n" + summary }
             return text
+        case .bundleIDs:
+            let sample = ForkBundleIdentifierFixer.identifier(forName: "My App")
+            return "Every Swift app project whose switch is on below gets \(ForkBundleIdentifierFixer.organization()).<its name without spaces>, e.g. \(sample). The organization comes from Customization › Credentials › username. With \"On every sync\", it is done before each sync, so the .swiftpm in Playgrounds gets it too."
         case .projects:
             return sync.hasFolder && !projects.isEmpty ? "Deleting never crosses over: a project deleted here leaves its package in Playgrounds, and a package deleted there turns its project's switch off." : nil
         case .ignored:
@@ -816,6 +834,18 @@ final class ForkPlaygroundsSyncViewController: UITableViewController, UIDocument
                 }
                 cell.selectionStyle = .none
             }
+        case .bundleIDs:
+            if indexPath.row == 0 {
+                cell.textLabel?.text = "Set Bundle IDs Now"
+                cell.textLabel?.textColor = busy ? UIColor.secondaryLabel : (tableView.tintColor ?? UIColor.systemBlue)
+            } else {
+                cell.textLabel?.text = "On every sync"
+                let toggle = UISwitch()
+                toggle.isOn = ForkBundleIdentifierFixer.automatic
+                toggle.addTarget(self, action: #selector(toggleBundleIDs(_:)), for: .valueChanged)
+                cell.accessoryView = toggle
+                cell.selectionStyle = .none
+            }
         case .projects:
             let project = projects[indexPath.row]
             let key = ForkPlaygroundsSync.key(of: project)
@@ -856,6 +886,9 @@ final class ForkPlaygroundsSyncViewController: UITableViewController, UIDocument
         case .sync:
             guard indexPath.row == 1, sync.hasFolder, !sync.isRunning else { return }
             syncNow()
+        case .bundleIDs:
+            guard indexPath.row == 0, !sync.isRunning else { return }
+            confirmBundleIDs()
         case .projects:
             break
         case .ignored:
@@ -892,6 +925,39 @@ final class ForkPlaygroundsSyncViewController: UITableViewController, UIDocument
         reload()
     }
 
+    /// Shows what would change, then changes it
+    private func confirmBundleIDs() {
+        let changes = ForkBundleIdentifierFixer.plan()
+        guard !changes.isEmpty else {
+            forkGitHubAlert("Bundle identifiers", "Every synced app project already has its \(ForkBundleIdentifierFixer.organization()).<name> identifier.")
+            return
+        }
+        let lines: [String] = changes.prefix(20).map { "\($0.name)\n\($0.old) → \($0.new)" }
+        var message = lines.joined(separator: "\n\n")
+        if changes.count > 20 { message += "\n\n…and \(changes.count - 20) more" }
+        let alert = UIAlertController(title: "Change \(changes.count) bundle identifier\(changes.count == 1 ? "" : "s")?", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Change", style: .default) { [weak self] _ in
+            guard let self else { return }
+            let done = ForkBundleIdentifierFixer.apply(changes)
+            NotificationCenter.default.post(name: ForkPlaygroundsSync.didChangeProjects, object: nil)
+            if self.sync.hasFolder {
+                /* the sync's own summary follows; Playgrounds gets them now */
+                NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "\(done) bundle identifier\(done == 1 ? "" : "s") changed. Syncing with Playgrounds…", withDelay: 0.0)
+                self.syncNow()
+            } else {
+                self.forkGitHubAlert("Bundle identifiers", "\(done) changed.")
+            }
+            self.reload()
+        })
+        present(alert, animated: true)
+    }
+
+    @objc private func toggleBundleIDs(_ sender: UISwitch) {
+        ForkBundleIdentifierFixer.automatic = sender.isOn
+        if sender.isOn { confirmBundleIDs() }
+    }
+
     @objc private func toggleAutomatic(_ sender: UISwitch) {
         var state = sync.state
         state.automatic = sender.isOn
@@ -918,3 +984,82 @@ final class ForkPlaygroundsSyncViewController: UITableViewController, UIDocument
         }
     }
 }
+
+// MARK: - fork 1.1: bundle identifiers of the synced projects
+
+/// Gives synced Swift app projects com.<username>.<AppName>.
+enum ForkBundleIdentifierFixer {
+    static let automaticKey = "fork.playgroundsSync.bundleIdentifiers"
+
+    struct Change {
+        let project: NXProject
+        let name: String
+        let old: String
+        let new: String
+    }
+
+    static var automatic: Bool {
+        get { UserDefaults.standard.bool(forKey: automaticKey) }
+        set { UserDefaults.standard.set(newValue, forKey: automaticKey) }
+    }
+
+    /// com.<username> (Customization › Credentials), as new projects use
+    static func organization() -> String {
+        ProjectTemplateOptionsModel.organizationIdentifierFromUsername()
+    }
+
+    /// The app's own name without spaces; letters, digits and "-" only
+    static func productPart(_ name: String) -> String {
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-")
+        var output = ""
+        for scalar in name.unicodeScalars where allowed.contains(scalar) {
+            output.unicodeScalars.append(scalar)
+        }
+        let trimmed = output.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return trimmed.isEmpty ? "App" : trimmed
+    }
+
+    static func identifier(forName name: String) -> String {
+        "\(organization()).\(productPart(name))"
+    }
+
+    /// Swift app projects whose sync switch is on
+    static func syncedProjects() -> [NXProject] {
+        let raw = NXProject.listProjects(at: NXBootstrap.shared().rootURL.appendingPathComponent("Projects")) as? [String: [NXProject]] ?? [:]
+        let excluded = ForkPlaygroundsSync.shared.state.excludedProjects
+        return raw.values.flatMap { $0 }
+            .filter { ForkPlaygroundsSync.isEligible($0) && !excluded.contains(ForkPlaygroundsSync.key(of: $0)) }
+    }
+
+    /// What would change (projects that already have theirs are left out)
+    static func plan() -> [Change] {
+        var changes: [Change] = []
+        for project in syncedProjects() {
+            let name = ForkPlaygroundsSync.name(of: project)
+            let old = project.projectConfig.bundleid ?? ""
+            let new = identifier(forName: name)
+            if old != new {
+                changes.append(Change(project: project, name: name, old: old, new: new))
+            }
+        }
+        return changes.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Writes NXBundleIdentifier in each project's Config/Project.plist; returns how many
+    @discardableResult
+    static func apply(_ changes: [Change]) -> Int {
+        var done = 0
+        for change in changes {
+            let url = (change.project.url as URL).appendingPathComponent("Config/Project.plist")
+            guard let data = try? Data(contentsOf: url),
+                  var plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else { continue }
+            plist["NXBundleIdentifier"] = change.new
+            guard let output = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0),
+                  (try? output.write(to: url, options: .atomic)) != nil else { continue }
+            _ = change.project.reload()
+            done += 1
+        }
+        return done
+    }
+}
+

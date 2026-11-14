@@ -4,6 +4,17 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.67.0 — 2026-11-13
+
+- **Playgrounds Sync › Bundle identifiers**: **Set Bundle IDs Now** gives
+  every synced Swift app project (its switch on) `com.<username>.<AppName>`
+  — the organization from Customization › Credentials (`com.mioftalmologo`),
+  the app's own name without spaces — after listing every change, then syncs
+  so the `.swiftpm` in Playgrounds gets it. **On every sync** does it before
+  each sync, and again after a sync that imported projects.
+- `NYXIAN_FORK_VERSION` was still 1.63.0 since 1.64.0 (the IPAs were named
+  1.63.0-<commit>); it is now current.
+
 ## 1.66.0 — 2026-11-13
 
 - **Sync with Swift Playgrounds in iCloud**: import menu › **Playgrounds
