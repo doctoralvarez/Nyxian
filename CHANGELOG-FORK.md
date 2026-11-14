@@ -4,6 +4,13 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.67.1 — 2026-11-13
+
+- The private `-cert.ipa` carries the paid signing certificate (iPhone
+  Developer: JESUS RAMON ALVAREZ FELIX, team 76Z2B8RZM9, until 2027-11-13)
+  from `nyxian-sdk/signing/`. No code change: a new version so the backup
+  makes a new `-cert.ipa` (an existing name is never replaced).
+
 ## 1.67.0 — 2026-11-13
 
 - **Playgrounds Sync › Bundle identifiers**: **Set Bundle IDs Now** gives
