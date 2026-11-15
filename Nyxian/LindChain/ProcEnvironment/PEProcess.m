@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.0
+ Fork doctoralvarez/Nyxian — version 1.5.0
  Changelog:
+  - 1.5.0 (2026-11-14): the variables are named Simulate_StoreKit and
+    Simulate_iCloud (value "simulate"), so app code never names Nyxian;
+    NYXIAN_STOREKIT and NYXIAN_ICLOUD are still set for apps not updated yet.
   - 1.4.0 (2026-11-13): programs start with NYXIAN_ICLOUD=simulate (unless
     switched off in Permissions) so apps can test iCloud backup with a local
     folder.
@@ -258,7 +261,8 @@ NSString *PEForkSigningReport(NSArray<NSString *> *paths)
     {
         NSMutableDictionary *mutableItems = [items mutableCopy];
         NSMutableDictionary *environment = [mutableItems[@"PEEnvironment"] mutableCopy] ?: [NSMutableDictionary dictionary];
-        environment[@"NYXIAN_STOREKIT"] = @"simulate";
+        environment[@"Simulate_StoreKit"] = @"simulate";
+        environment[@"NYXIAN_STOREKIT"] = @"simulate"; /* older apps */
         mutableItems[@"PEEnvironment"] = environment;
         items = mutableItems;
     }
@@ -268,7 +272,8 @@ NSString *PEForkSigningReport(NSArray<NSString *> *paths)
     {
         NSMutableDictionary *mutableItems = [items mutableCopy];
         NSMutableDictionary *environment = [mutableItems[@"PEEnvironment"] mutableCopy] ?: [NSMutableDictionary dictionary];
-        environment[@"NYXIAN_ICLOUD"] = @"simulate";
+        environment[@"Simulate_iCloud"] = @"simulate";
+        environment[@"NYXIAN_ICLOUD"] = @"simulate"; /* older apps */
         mutableItems[@"PEEnvironment"] = environment;
         items = mutableItems;
     }

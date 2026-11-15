@@ -97,9 +97,9 @@ PEEntitlementFlags trust_identity_entitlement_flags_from_entitlements(CFDictiona
    @"readWrite": @[paths], @"network": @(BOOL) } }, key "bundle:<id>" or "path:<executable>" */
 bool NXForkPermissionNetworkBlocked(const char *executablePath);
 /* fork: StoreKit simulation for apps run inside Nyxian (@"storekit": @(BOOL), default YES): the program
-   starts with NYXIAN_STOREKIT=simulate, so an app can use its own simulated store instead of the App Store */
+   starts with Simulate_StoreKit=simulate (and the older NYXIAN_STOREKIT), so an app can use its own simulated store instead of the App Store */
 bool NXForkPermissionStoreKitSimulated(const char *executablePath);
-/* fork: iCloud simulation (@"icloud": @(BOOL), default YES): the program starts with NYXIAN_ICLOUD=simulate,
+/* fork: iCloud simulation (@"icloud": @(BOOL), default YES): the program starts with Simulate_iCloud=simulate (and the older NYXIAN_ICLOUD),
    so an app can back up to a local folder instead of iCloud (Nyxian has no iCloud entitlement of its own) */
 bool NXForkPermissionICloudSimulated(const char *executablePath);
 #if __OBJC__

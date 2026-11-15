@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.5.0
+ Fork doctoralvarez/Nyxian — version 1.5.1
  Changelog:
+  - 1.5.1 (2026-11-14): the footer names the new variables Simulate_StoreKit
+    and Simulate_iCloud.
   - 1.5.0 (2026-11-13): Permissions: "Simulate iCloud" switch per program
     (default on): the program starts with NYXIAN_ICLOUD=simulate.
   - 1.4.0 (2026-11-13): Permissions: "Simulate StoreKit" switch per program
@@ -1096,7 +1098,7 @@ final class ForkPermissionEditorViewController: UITableViewController {
         case 0: return program.detail
         case 2: return "Folders are inside Nyxian's root (\"/var/mobile\" is $(NXROOT)/var/mobile) and include what is in them. They add to the file mode above."
         case 3: return "Off: its connections to the internet and the local network fail with \"Operation not permitted\". Local sockets keep working."
-        case 4: return "On: the program starts with NYXIAN_STOREKIT=simulate. StoreKit cannot reach the App Store from inside Nyxian, so an app can read that variable and use a simulated store to test purchases. Off: the app sees no variable. Likewise \"Simulate iCloud\" sets NYXIAN_ICLOUD=simulate: Nyxian has no iCloud entitlement for its programs, so an app can back up to a local folder instead."
+        case 4: return "On: the program starts with Simulate_StoreKit=simulate. StoreKit cannot reach the App Store from inside Nyxian, so an app can read that variable and use a simulated store to test purchases. Off: the app sees no variable. Likewise \"Simulate iCloud\" sets Simulate_iCloud=simulate: Nyxian has no iCloud entitlement for its programs, so an app can back up to a local folder instead."
         default: return section == 5 ? "Changes apply the next time it starts." : nil
         }
     }

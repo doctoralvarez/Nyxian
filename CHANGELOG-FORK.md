@@ -4,6 +4,13 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.68.0 — 2026-11-14
+
+- The simulation variables are now **`Simulate_StoreKit=simulate`** and
+  **`Simulate_iCloud=simulate`**, so an app's code never has to name Nyxian.
+  The older `NYXIAN_STOREKIT` and `NYXIAN_ICLOUD` are still set, so apps not
+  updated yet keep working. Settings › Permissions shows the new names.
+
 ## 1.67.2 — 2026-11-14
 
 - **Closing a Swift file right after opening it no longer freezes Nyxian.**
