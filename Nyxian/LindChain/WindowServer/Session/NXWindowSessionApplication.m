@@ -20,6 +20,16 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-15): apps run inside Nyxian follow light / dark mode. Their
+    scene never got a user interface style, so they stayed in one mode (in
+    Swift Playgrounds they follow the device). The scene now starts with the
+    style from Customization › Appearance (the device's when Automatic) and
+    gets every change (the device switching, or a new choice).
+*/
+
 #import <LindChain/WindowServer/Session/NXWindowSessionApplication.h>
 #import <LindChain/ProcEnvironment/Surface/proc/proc.h>
 #import <LindChain/WindowServer/NXWindowServer.h>
@@ -102,6 +112,44 @@ static os_unfair_lock g_window_rects_lock = OS_UNFAIR_LOCK_INIT;
     _contentView = contentView;
 }
 
+UIUserInterfaceStyle NXForkAppearanceOverride(void)
+{
+    switch([NSUserDefaults.standardUserDefaults integerForKey:@"fork.appearance"])
+    {
+        case 1: return UIUserInterfaceStyleLight;
+        case 2: return UIUserInterfaceStyleDark;
+        default: return UIUserInterfaceStyleUnspecified;
+    }
+}
+
+UIUserInterfaceStyle NXForkAppearanceStyle(void)
+{
+    UIUserInterfaceStyle chosen = NXForkAppearanceOverride();
+    if(chosen != UIUserInterfaceStyleUnspecified)
+    {
+        return chosen;
+    }
+    /* the screen's traits follow the device, whatever a window overrides */
+    UIUserInterfaceStyle device = UIScreen.mainScreen.traitCollection.userInterfaceStyle;
+    return device == UIUserInterfaceStyleDark ? UIUserInterfaceStyleDark : UIUserInterfaceStyleLight;
+}
+
+- (void)forkApplyInterfaceStyle
+{
+    if(_scene == nil)
+    {
+        return;
+    }
+    UIUserInterfaceStyle style = NXForkAppearanceStyle();
+    if(_scene.settings.userInterfaceStyle == style)
+    {
+        return;
+    }
+    [_scene updateSettingsWithBlock:^(UIMutableApplicationSceneSettings *settings) {
+        settings.userInterfaceStyle = style;
+    }];
+}
+
 - (void)setScene:(FBScene *)scene
 {
     _scene = scene;
@@ -110,6 +158,8 @@ static os_unfair_lock g_window_rects_lock = OS_UNFAIR_LOCK_INIT;
         UIEdgeInsets insets = (self.isFullscreen) ? NXWindowServer.shared.safeAreaInsets : UIEdgeInsetsZero;
         
         insets.top = 10;
+        /* fork: light or dark like the device (or the chosen appearance) */
+        settings.userInterfaceStyle = NXForkAppearanceStyle();
         
         switch(settings.interfaceOrientation)
         {
@@ -171,6 +221,8 @@ static os_unfair_lock g_window_rects_lock = OS_UNFAIR_LOCK_INIT;
         settings.persistenceIdentifier = [NSString stringWithFormat:@"sceneID:%@-%@", @"LiveProcess", [NSUUID.UUID UUIDString]];
         settings.statusBarDisabled = true;
         settings.frame = self.view.frame;
+        /* fork: light or dark like the device (or the chosen appearance) */
+        settings.userInterfaceStyle = NXForkAppearanceStyle();
         if(UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone)
         {
             UIEdgeInsets insets = settings.safeAreaInsetsPortrait;

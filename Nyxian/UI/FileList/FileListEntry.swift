@@ -20,6 +20,15 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-15): ForkManualOrder — the order you give a list by holding
+    a row and dragging it (projects, files and folders). getEntries keeps it:
+    folders first and by name as before, then the order you set; items added
+    later go to the end.
+*/
+
 import Foundation
 
 struct FileListEntry: Identifiable {
@@ -66,12 +75,62 @@ struct FileListEntry: Identifiable {
         } catch {
             print(error)
         }
-        return entries ?? []
+        /* fork: the order set by hand (hold a row and drag it) */
+        return ForkManualOrder.ordered(entries ?? [], id: ForkManualOrder.listID(forPath: path)) { $0.name }
     }
     
     static func getEntries(ofPath path: String, perEntryHandler: (FileListEntry) -> Void) {
         for item in FileListEntry.getEntries(ofPath: path) {
             perEntryHandler(item)
         }
+    }
+}
+
+
+/// fork: the order you gave a list by holding a row and dragging it. Saved per
+/// list (a folder, relative to Nyxian's root, or a section of the projects list).
+enum ForkManualOrder {
+    private static let key = "fork.manualOrder"
+
+    /// A folder's id, relative to Nyxian's root so it survives a reinstall
+    static func listID(forPath path: String) -> String {
+        let root = NXBootstrap.shared().rootURL.path
+        if path.hasPrefix(root) {
+            return "files:" + String(path.dropFirst(root.count))
+        }
+        return "files:" + path
+    }
+
+    static func names(for id: String) -> [String] {
+        let all = UserDefaults.standard.dictionary(forKey: key) as? [String: [String]] ?? [:]
+        return all[id] ?? []
+    }
+
+    static func save(_ names: [String], for id: String) {
+        var all = UserDefaults.standard.dictionary(forKey: key) as? [String: [String]] ?? [:]
+        all[id] = names
+        UserDefaults.standard.set(all, forKey: key)
+    }
+
+    static func forget(_ id: String) {
+        var all = UserDefaults.standard.dictionary(forKey: key) as? [String: [String]] ?? [:]
+        all.removeValue(forKey: id)
+        UserDefaults.standard.set(all, forKey: key)
+    }
+
+    /// The items in the saved order; ones not saved yet keep their order, at the end
+    static func ordered<T>(_ items: [T], id: String, name: (T) -> String) -> [T] {
+        let saved = names(for: id)
+        guard !saved.isEmpty else { return items }
+        var rank: [String: Int] = [:]
+        for (index, value) in saved.enumerated() where rank[value] == nil {
+            rank[value] = index
+        }
+        let known = items.enumerated()
+            .filter { rank[name($0.element)] != nil }
+            .sorted { rank[name($0.element)]! < rank[name($1.element)]! }
+            .map { $0.element }
+        let others = items.filter { rank[name($0)] == nil }
+        return known + others
     }
 }

@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-15): -forkApplyAppearance: the window server takes the
+    appearance chosen in Customization (or follows the device) and every app
+    window inside gets its light / dark mode.
   - 1.2.0 (2026-11-12): docking for the App Preview panel — the window of
     one app (by bundle identifier) is kept in a given rect: it opens there,
     snaps back there after a drag or a rotation, can be hidden while the
@@ -89,6 +92,8 @@
     {
         _windows = [[NSMutableDictionary alloc] init];
         _windowOrder = [[NSMutableArray alloc] init];
+        /* fork: Customization › Appearance */
+        self.overrideUserInterfaceStyle = NXForkAppearanceOverride();
         _activeWindowIdentifier = (id_t)-1;
         _appSwitcherView = nil;
         
@@ -1245,5 +1250,21 @@
     }
 }
 
+#pragma mark - fork: appearance
+
+- (void)forkApplyAppearance
+{
+    assert([NSThread isMainThread]);
+    self.overrideUserInterfaceStyle = NXForkAppearanceOverride();
+    for(NXWindow *window in _windows.allValues)
+    {
+        if([window.session respondsToSelector:@selector(forkApplyInterfaceStyle)])
+        {
+            [(id)window.session forkApplyInterfaceStyle];
+        }
+    }
+}
+
 @end
+
 

@@ -20,6 +20,12 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-15): -forkApplyInterfaceStyle (light / dark mode for the app's scene).
+*/
+
 #ifndef NXWINDOWSESSIONAPPLICATION_H
 #define NXWINDOWSESSIONAPPLICATION_H
 
@@ -40,6 +46,9 @@
 - (instancetype)initWithProcess:(PEProcess*)process;
 
 + (void)bringSessionToFrontWithBundleIdentifier:(NSString*)bundleIdentifier;
+
+/* fork: gives the app's scene the current light / dark mode */
+- (void)forkApplyInterfaceStyle;
 
 @end
 

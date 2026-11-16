@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-15): the window starts with Customization › Appearance
+    (automatic, light or dark).
   - 1.3.0 (2026-11-10): Recovery › Settings › "Show welcome screen" brings back the
     "Welcome to Nyxian" screen, now off by default.
   - 1.2.0 (2026-11-08): the app delegate gives the orientations chosen in
@@ -2908,6 +2910,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         
         let window = UIWindow(windowScene: windowScene)
         window.rootViewController = BootViewController()
+        /* fork: Customization › Appearance */
+        window.overrideUserInterfaceStyle = NXForkAppearanceOverride()
         window.makeKeyAndVisible()
         self.window = window
     }

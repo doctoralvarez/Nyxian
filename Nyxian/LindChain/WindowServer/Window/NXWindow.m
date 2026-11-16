@@ -20,11 +20,19 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-15): when light / dark mode changes, the app inside the
+    window gets it (forkApplyInterfaceStyle).
+*/
+
 #import <LindChain/WindowServer/Window/NXWindow.h>
 #import <LindChain/WindowServer/Window/NXResizeHandle.h>
 #import <LindChain/WindowServer/Window/NXWindowBar.h>
 #import <LindChain/WindowServer/NXWindowServer.h>
 #import <LindChain/Private/UIKitPrivate.h>
+#import <LindChain/WindowServer/Session/NXWindowSessionApplication.h>
 
 @implementation NXWindow {
     UIStackView *_contentStack;
@@ -53,6 +61,11 @@
         }
         
         [strongSelf refreshEffects];
+        /* fork: the app inside follows light / dark mode */
+        if([strongSelf.session respondsToSelector:@selector(forkApplyInterfaceStyle)])
+        {
+            [(id)strongSelf.session forkApplyInterfaceStyle];
+        }
     }];
     
     _session = session;

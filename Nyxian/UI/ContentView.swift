@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.40.0
+ Fork doctoralvarez/Nyxian — version 1.41.0
  Changelog:
+  - 1.41.0 (2026-11-15): hold a project and drag it up or down to put it
+    where you want inside its section; the order is kept.
   - 1.40.0 (2026-11-13): Playgrounds sync (ForkPlaygroundsSync.swift): the
     import menu gains "Sync with Playgrounds Now" and "Playgrounds Sync…";
     the list syncs both ways when Nyxian opens, comes back to the front or
@@ -310,6 +312,10 @@ import Network
             let key = Self.sectionKey(for: project)
             buckets[key, default: []].append(project)
         }
+        /* fork: keep the order set by holding a project and dragging it */
+        for (key, list) in buckets {
+            buckets[key] = ForkManualOrder.ordered(list, id: "projects:" + key) { $0.url.lastPathComponent }
+        }
         
         self.projectsList = buckets
         self.tableView.reloadData()
@@ -327,6 +333,10 @@ import Network
         self.refreshControl?.addTarget(self, action: #selector(forkRefreshProjects), for: .valueChanged)
         /* fork: a two-finger slide selects several projects */
         self.tableView.allowsMultipleSelectionDuringEditing = true
+        /* fork: hold a project and drag it up or down to reorder (iPhone needs this on) */
+        self.tableView.dragInteractionEnabled = true
+        self.tableView.dragDelegate = self
+        self.tableView.dropDelegate = self
 
         let createItem = UIBarButtonItem(
             barButtonSystemItem: .add,
@@ -10626,3 +10636,52 @@ final class ForkNotebookViewController: UIViewController {
         present(navigation, animated: true)
     }
 }
+
+// MARK: - fork: reorder projects by holding and dragging
+
+extension ContentViewController: UITableViewDragDelegate, UITableViewDropDelegate {
+    func tableView(_ tableView: UITableView, itemsForBeginning session: UIDragSession, at indexPath: IndexPath) -> [UIDragItem] {
+        guard !(tableView.isEditing || forkSelecting), indexPath.section < sortedSectionKeys.count else { return [] }
+        let list = projectsList[sortedSectionKeys[indexPath.section]] ?? []
+        guard indexPath.row < list.count else { return [] }
+        let item = UIDragItem(itemProvider: NSItemProvider())
+        item.localObject = list[indexPath.row].url
+        return [item]
+    }
+
+    func tableView(_ tableView: UITableView, dropSessionDidUpdate session: UIDropSession, withDestinationIndexPath destinationIndexPath: IndexPath?) -> UITableViewDropProposal {
+        guard session.localDragSession != nil else { return UITableViewDropProposal(operation: .cancel) }
+        return UITableViewDropProposal(operation: .move, intent: .insertAtDestinationIndexPath)
+    }
+
+    func tableView(_ tableView: UITableView, performDropWith coordinator: UITableViewDropCoordinator) {
+        /* local moves are done by tableView(_:moveRowAt:to:) */
+    }
+
+    override func tableView(_ tableView: UITableView, canMoveRowAt indexPath: IndexPath) -> Bool {
+        return indexPath.section < sortedSectionKeys.count
+    }
+
+    /// A project stays in its own section (Applications, Utilities, ...)
+    override func tableView(_ tableView: UITableView, targetIndexPathForMoveFromRowAt sourceIndexPath: IndexPath, toProposedIndexPath proposedDestinationIndexPath: IndexPath) -> IndexPath {
+        if proposedDestinationIndexPath.section == sourceIndexPath.section { return proposedDestinationIndexPath }
+        let count = projectsList[sortedSectionKeys[sourceIndexPath.section]]?.count ?? 1
+        let row = proposedDestinationIndexPath.section < sourceIndexPath.section ? 0 : max(count - 1, 0)
+        return IndexPath(row: row, section: sourceIndexPath.section)
+    }
+
+    override func tableView(_ tableView: UITableView, moveRowAt sourceIndexPath: IndexPath, to destinationIndexPath: IndexPath) {
+        guard sourceIndexPath.section == destinationIndexPath.section,
+              sourceIndexPath.section < sortedSectionKeys.count else {
+            tableView.reloadData()
+            return
+        }
+        let key = sortedSectionKeys[sourceIndexPath.section]
+        guard var list = projectsList[key], sourceIndexPath.row < list.count else { return }
+        let moved = list.remove(at: sourceIndexPath.row)
+        list.insert(moved, at: min(destinationIndexPath.row, list.count))
+        projectsList[key] = list
+        ForkManualOrder.save(list.map { $0.url.lastPathComponent }, for: "projects:" + key)
+    }
+}
+

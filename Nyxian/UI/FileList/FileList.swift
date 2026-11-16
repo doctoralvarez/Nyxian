@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.14.0
+ Fork doctoralvarez/Nyxian — version 1.15.0
  Changelog:
+  - 1.15.0 (2026-11-15): hold a file or folder and drag it up or down to put
+    it where you want; each folder and subfolder keeps its own order.
   - 1.14.0 (2026-11-12): Export .ipa › Capabilities: iCloud, Increased Memory
     Limit and Extended Virtual Addressing switches. They write the entitlements
     into Config/AppEntitlements.plist, which the export now signs into the app
@@ -196,6 +198,12 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
         /* fork: pull down to read the folder again, also when it has few files
            (a list shorter than the screen did not bounce, so it could not be pulled) */
         self.tableView.alwaysBounceVertical = true
+        /* fork: hold a row and drag it to reorder (iPhone needs this on) */
+        if !self.isReadOnly {
+            self.tableView.dragInteractionEnabled = true
+            self.tableView.dragDelegate = self
+            self.tableView.dropDelegate = self
+        }
         if self.refreshControl == nil, !self.isSelecting {
             self.refreshControl = UIRefreshControl()
             self.refreshControl?.addTarget(self, action: #selector(performRefresh), for: .valueChanged)
@@ -4041,3 +4049,35 @@ struct ForkFileTemplate {
         },
     ]
 }
+
+// MARK: - fork: reorder by holding and dragging
+
+extension FileListViewController: UITableViewDragDelegate, UITableViewDropDelegate {
+    func tableView(_ tableView: UITableView, itemsForBeginning session: UIDragSession, at indexPath: IndexPath) -> [UIDragItem] {
+        guard !isReadOnly, !isSelecting, indexPath.row < entries.count else { return [] }
+        let item = UIDragItem(itemProvider: NSItemProvider())
+        item.localObject = entries[indexPath.row].path
+        return [item]
+    }
+
+    func tableView(_ tableView: UITableView, dropSessionDidUpdate session: UIDropSession, withDestinationIndexPath destinationIndexPath: IndexPath?) -> UITableViewDropProposal {
+        guard session.localDragSession != nil else { return UITableViewDropProposal(operation: .cancel) }
+        return UITableViewDropProposal(operation: .move, intent: .insertAtDestinationIndexPath)
+    }
+
+    func tableView(_ tableView: UITableView, performDropWith coordinator: UITableViewDropCoordinator) {
+        /* local moves are done by tableView(_:moveRowAt:to:) */
+    }
+
+    override func tableView(_ tableView: UITableView, canMoveRowAt indexPath: IndexPath) -> Bool {
+        !isReadOnly && indexPath.row < entries.count
+    }
+
+    override func tableView(_ tableView: UITableView, moveRowAt sourceIndexPath: IndexPath, to destinationIndexPath: IndexPath) {
+        guard sourceIndexPath.row < entries.count else { return }
+        let moved = entries.remove(at: sourceIndexPath.row)
+        entries.insert(moved, at: min(destinationIndexPath.row, entries.count))
+        ForkManualOrder.save(entries.map { $0.name }, for: ForkManualOrder.listID(forPath: path))
+    }
+}
+

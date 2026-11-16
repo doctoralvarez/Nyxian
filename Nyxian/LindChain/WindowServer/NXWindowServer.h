@@ -20,6 +20,13 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-15): NXForkAppearanceOverride / NXForkAppearanceStyle and
+    -forkApplyAppearance (Customization › Appearance).
+*/
+
 #ifndef NXWINDOWSERVER_H
 #define NXWINDOWSERVER_H
 
@@ -72,7 +79,16 @@ static NXWindowServerPresentationState const NXWindowServerPresentationStateOutO
 - (UIImage*)forkSnapshotDockedWindow NS_SWIFT_NAME(forkSnapshotDockedWindow());
 - (void)forkUndockPuttingAway:(BOOL)putAway NS_SWIFT_NAME(forkUndock(puttingAway:));
 
+/* fork: Customization › Appearance changed — the window server and every app inside follow it */
+- (void)forkApplyAppearance;
+
 @end
+
+/* fork: Customization › Appearance (fork.appearance: 0 automatic, 1 light, 2 dark).
+   Override = what a window should force (Unspecified when automatic);
+   Style = what an app scene gets (the device's mode when automatic). */
+UIKIT_EXTERN UIUserInterfaceStyle NXForkAppearanceOverride(void);
+UIKIT_EXTERN UIUserInterfaceStyle NXForkAppearanceStyle(void);
 
 #endif /* NXWINDOWSERVER_H */
 

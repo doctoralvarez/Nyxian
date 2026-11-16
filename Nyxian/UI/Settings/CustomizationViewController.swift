@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.7.0
+ Fork doctoralvarez/Nyxian — version 1.8.0
  Changelog:
+  - 1.8.0 (2026-11-15): "Appearance": Automatic (follows the device), Light or
+    Dark, for Nyxian and the apps it runs.
   - 1.7.0 (2026-11-12): "App Preview (panel at the right, iPad)" toggle.
   - 1.6.0 (2026-11-11): Credentials > Username defaults to "mioftalmologo"
     (the old default "Anonym" is replaced).
@@ -101,7 +103,7 @@ class CustomizationViewController: NXUITableViewController {
         case 0:
             return 4
         case 1:
-            return 14
+            return 15
         case 2:
             return self.icons.count
         default:
@@ -198,6 +200,11 @@ int main(void)
             } else if indexPath.row == 11 {
                 /* fork: font of Python windows */
                 cell = StepperTableCell(title: "Python Font Size", key: ForkPython.fontSizeKey, defaultValue: ForkPython.defaultFontSize, minValue: 8, maxValue: 60)
+            } else if indexPath.row == 14 {
+                /* fork: light / dark mode for Nyxian and the apps it runs */
+                let picker = PickerTableCell(options: ForkAppearance.options, title: "Appearance", key: ForkAppearance.key, defaultValue: 0)
+                picker.callback = { _ in ForkAppearance.apply() }
+                cell = picker
             } else if indexPath.row == 13 {
                 /* fork: the running app in a panel at the right of the editor */
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
@@ -270,3 +277,24 @@ int main(void)
     }
 
 }
+
+// MARK: - fork: appearance
+
+/// Customization › Appearance: Automatic follows the device's light / dark
+/// mode; Light or Dark keep one. Nyxian's own windows and the apps it runs
+/// (their scenes get the style) both follow it.
+enum ForkAppearance {
+    static let key = "fork.appearance"
+    static let options: [String] = ["Automatic", "Light", "Dark"]
+
+    static func apply() {
+        let style = NXForkAppearanceOverride()
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            for window in scene.windows {
+                window.overrideUserInterfaceStyle = style
+            }
+        }
+        NXWindowServer.shared()?.forkApplyAppearance()
+    }
+}
+

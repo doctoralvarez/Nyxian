@@ -4,6 +4,20 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.69.0 — 2026-11-15
+
+- **Apps run inside Nyxian follow light / dark mode.** Their scene never got
+  a user interface style, so `@Environment(\.colorScheme)` and dynamic colors
+  stayed in one mode (in Swift Playgrounds they follow the device). The scene
+  now starts with the current mode and gets every change.
+- **Settings › Customization › Appearance:** Automatic (follows the device),
+  Light or Dark — for Nyxian itself and for the apps it runs.
+- **Reorder by holding and dragging:** hold a project and drag it up or down
+  (inside its section) in the Projects list, and the same for files and
+  folders inside a project, in every folder and subfolder. Each list keeps
+  its own order; new items go to the end. Off while selecting several and
+  in read-only lists.
+
 ## 1.68.0 — 2026-11-14
 
 - The simulation variables are now **`Simulate_StoreKit=simulate`** and
