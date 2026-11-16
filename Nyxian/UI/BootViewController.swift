@@ -2911,7 +2911,12 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let window = UIWindow(windowScene: windowScene)
         window.rootViewController = BootViewController()
         /* fork: Customization › Appearance */
-        window.overrideUserInterfaceStyle = NXForkAppearanceOverride()
+        /* (the boot target has no window server: read fork.appearance here) */
+        switch UserDefaults.standard.integer(forKey: "fork.appearance") {
+        case 1: window.overrideUserInterfaceStyle = .light
+        case 2: window.overrideUserInterfaceStyle = .dark
+        default: window.overrideUserInterfaceStyle = .unspecified
+        }
         window.makeKeyAndVisible()
         self.window = window
     }
