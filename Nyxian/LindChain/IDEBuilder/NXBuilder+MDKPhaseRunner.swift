@@ -20,6 +20,14 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-15): threads from ForkBuildSpeed (every core with more
+    memory); a finished Swift job is reported for the "nothing changed"
+    skip, and in one pass the diagnostics left by single-file builds go.
+*/
+
 import MobileDevelopmentKit
 
 extension NXBuilder: MDKPhaseRunnerDelegate {
@@ -50,9 +58,8 @@ extension NXBuilder: MDKPhaseRunnerDelegate {
     
     func runner(_ runner: MDKPhaseRunner,
                 multithreadingThreadCountFor phase: MDKPhase) -> CFIndex {
-        let userSelectedValue: NSNumber? = UserDefaults.standard.object(forKey: "cputhreads") as? NSNumber
-        let userSelected = userSelectedValue?.intValue ?? CCGetMaximumPerformanceCores()
-        return CFIndex(userSelected == 0 ? 1 : userSelected)
+        /* fork: every core when there is more memory */
+        return CFIndex(ForkBuildSpeed.threads)
     }
     
     func runner(_ runner: MDKPhaseRunner,
@@ -61,6 +68,16 @@ extension NXBuilder: MDKPhaseRunnerDelegate {
                 withResultingDiagnostics diagnostics: [MDKDiagnostic]?,
                 withMainSource mainSource: String?,
                 wasSuccessful success: Bool) {
+        /* fork: the last good Swift job records the sources for the next skip */
+        if job.type == .swiftCompiler {
+            ForkBuildSpeed.finishedSwiftJob(success: success)
+            /* one pass: diagnostics come as "wmo"; clear what single files left before */
+            if let mainSource = mainSource, !mainSource.hasSuffix(".swift") {
+                for source in ForkBuildSpeed.swiftJobFiles(job).sources {
+                    self.database.removeFileDebug(ofPath: source)
+                }
+            }
+        }
         if let diagnostics = diagnostics,
            let mainSource = mainSource {
             self.database.removeFileDebug(ofPath: mainSource)

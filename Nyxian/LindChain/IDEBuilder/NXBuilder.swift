@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.6.0
+ Fork doctoralvarez/Nyxian — version 1.7.0
  Changelog:
+  - 1.7.0 (2026-11-15): the build's flag signature includes the speed
+    options (one pass), so changing them compiles everything again.
   - 1.6.0 (2026-11-12): Export .ipa signs Config/AppEntitlements.plist into
     the app (ad-hoc, ZSigner), so a signer (SideStore, …) sees the app's own
     entitlements (iCloud, memory) and asks for them.
@@ -104,7 +106,7 @@ final class NXBuilder: NSObject {
             return nil
         }
         
-        self.argsString = self.project.projectConfig.swiftFlags.joined(separator: " ") + self.project.projectConfig.compilerFlags.joined(separator: " ") + " \(self.project.projectConfig.linkFrameworksAutomatically)"
+        self.argsString = self.project.projectConfig.swiftFlags.joined(separator: " ") + self.project.projectConfig.compilerFlags.joined(separator: " ") + " \(self.project.projectConfig.linkFrameworksAutomatically)" + ForkBuildSpeed.signature(projectURL: self.project.url)
         
         // Check if the args string matches up
         if self.incrementalBuild,

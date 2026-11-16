@@ -20,9 +20,18 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-15): the Swift driver gets ForkBuildSpeed's flags (one
+    pass, -wmo, and -num-threads) when Settings › Toolchain › Speed and the
+    memory allow it.
+*/
+
 #import <LindChain/IDEBuilder/NXPhaseEngine.h>
 #import <LindChain/IDEBuilder/LDEFilesFinder.h>
 #import <LindChain/IDEFoundation/NXUtils.h>
+#import <Nyxian-Swift.h>
 
 @implementation NXPhaseEngine
 
@@ -69,6 +78,8 @@
     if([swiftFiles count] != 0)
     {
         [driverFlags addObjectsFromArray:project.projectConfig.swiftFlags];
+        /* fork: one pass with the extra memory (Settings › Toolchain › Speed) */
+        [driverFlags addObjectsFromArray:[ForkBuildSpeed extraSwiftFlagsWithSwiftFileCount:(NSInteger)swiftFiles.count]];
         [driverFlags addObject:@"-module-name"];
         [driverFlags addObject:NXMakeContentCodeFriendly(project.projectConfig.displayName)];
         return [self engineWithSwiftFlags:driverFlags withOtherClangFlags:project.projectConfig.compilerFlags withOtherLinkerFlags:project.projectConfig.linkerFlags];

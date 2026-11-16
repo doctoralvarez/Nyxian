@@ -20,6 +20,14 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-15): "Speed" section: the memory iOS gives Nyxian, Swift
+    "One Pass" (Automatic / On / Off) and "All Cores with More Memory"; the
+    Threads stepper goes up to every core.
+*/
+
 import UIKit
 import CoreCompiler
 
@@ -37,10 +45,11 @@ class ToolChainViewController: NXUITableViewController {
     }
     
     override func numberOfSections(in tableView: UITableView) -> Int {
-        return 4
+        return 5
     }
     
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        if section == 4 { return 3 }
         return (section == 3) ? 2 : 1
     }
     
@@ -54,6 +63,8 @@ class ToolChainViewController: NXUITableViewController {
             return "Threading in compilation refers to the compiler's ability to perform tasks in parallel like parsing, code generation, and optimization across multiple CPU threads to speed up the build process."
         case 3:
             return "This clears caches that were created for performance."
+        case 4:
+            return ForkBuildSpeedFooter.text
         default:
             return nil
         }
@@ -65,6 +76,8 @@ class ToolChainViewController: NXUITableViewController {
             return "Features"
         case 3:
             return "Actions"
+        case 4:
+            return "Speed"
         default:
             return nil
         }
@@ -84,8 +97,24 @@ class ToolChainViewController: NXUITableViewController {
             break
         case 2:
             let optimCpuCount: Int = (Int)(CCGetMaximumPerformanceCores())
-            cell = StepperTableCell(title: "Threads", key: "cputhreads", defaultValue: optimCpuCount, minValue: 1, maxValue: optimCpuCount)
+            /* fork: up to every core (efficiency cores too) */
+            cell = StepperTableCell(title: "Threads", key: "cputhreads", defaultValue: optimCpuCount, minValue: 1, maxValue: max(optimCpuCount, ForkBuildSpeed.allCores))
             break
+        case 4:
+            switch indexPath.row {
+            case 0:
+                let info = UITableViewCell(style: .value1, reuseIdentifier: nil)
+                info.textLabel?.text = "Memory Limit"
+                let limit = ForkMemoryInfo.format(ForkBuildSpeed.memoryLimit)
+                info.detailTextLabel?.text = ForkBuildSpeed.hasMoreMemory ? "\(limit) · more memory" : limit
+                info.selectionStyle = .none
+                cell = info
+            case 1:
+                cell = PickerTableCell(options: ForkBuildSpeed.onePassOptions, title: "Swift in One Pass", key: ForkBuildSpeed.onePassKey, defaultValue: 0)
+            default:
+                cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
+                (cell as! ToggleTableCell).configure(title: "All Cores with More Memory", key: ForkBuildSpeed.allCoresKey, defaultValue: true)
+            }
         default:
             switch(indexPath.row) {
             case 0:
@@ -119,3 +148,15 @@ class ToolChainViewController: NXUITableViewController {
         tableView.deselectRow(at: indexPath, animated: true)
     }
 }
+
+/// fork: what the Speed options do
+enum ForkBuildSpeedFooter {
+    static var text: String {
+        let cores = "\(ForkBuildSpeed.performanceCores) performance of \(ForkBuildSpeed.allCores) cores"
+        let now = ForkBuildSpeed.hasMoreMemory
+            ? "Now: more memory, builds use \(ForkBuildSpeed.threads) threads."
+            : "Now: normal memory, builds use \(ForkBuildSpeed.threads) threads (\(cores))."
+        return "Swift in One Pass compiles all Swift files of a project in a single run (whole module): SwiftUI and the other frameworks are loaded, and the code is checked, once instead of once per file, and the machine code of each file is made in parallel. It needs more memory, so Automatic turns it on with Increased Memory Limit (or 4 GB or more) and two or more Swift files; a project of one Swift file builds the same either way. All Cores uses the efficiency cores too when there is more memory. Changing these compiles the project again once. " + now
+    }
+}
+

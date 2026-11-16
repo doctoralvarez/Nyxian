@@ -21,8 +21,21 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 2.0.0
  Changelog:
+  - 2.0.0 (2026-11-15): faster Swift builds, using the extra memory.
+    * The "nothing changed" skip now really works for Swift: it looked for
+      clang-type jobs, so Swift was always compiled again. It now reads the
+      Swift jobs' own sources and object files (-o), and also checks that the
+      set of Swift files is the one of the last good compile.
+    * One pass (whole module, -wmo): all Swift files are compiled by a single
+      compiler run, so SwiftUI and the other frameworks are loaded and every
+      file is type-checked once instead of once per file; with -num-threads
+      the machine code of each file is made in parallel. Automatic: on with
+      two or more Swift files and Increased Memory Limit (or 4 GB or more).
+    * Threads: with more memory every core is used (also the efficiency
+      cores), for C / Objective-C files and the one-pass Swift code generation.
+    (ForkBuildSpeed; Settings › Toolchain › Speed)
   - 1.0.0 (2026-11-07): Swift builds skip the compiler when no Swift file
     changed since the last build (every object file is newer than every Swift
     source and the build flags are the same); only the link runs. A change in
@@ -41,7 +54,17 @@ extension NXBuilder: MDKDriverDelegate {
     func driver(_ driver: MDKDriver, editJobListForJobList jobs: [MDKJob]) -> [MDKJob]? {
         if driver.type != .clang {
             /* fork: nothing to compile when no Swift file changed */
-            return (self.projectDirty || !self.incrementalBuild) ? jobs : NXBuilder.forkSkipSwiftCompileIfUnchanged(jobs)
+            /* fork: one pass (-wmo -num-threads): its extra object files get fixed paths */
+            let stable = ForkBuildSpeed.stableWholeModuleOutputs(jobs, cacheURL: self.project.cacheURL)
+            let manifest = self.project.cacheURL.appendingPathComponent("fork-swift-sources.txt")
+            if !(self.projectDirty || !self.incrementalBuild),
+               let skipped = NXBuilder.forkSkipSwiftCompileIfUnchanged(stable, manifestURL: manifest) {
+                return skipped
+            }
+            /* compiling: the list of sources is written again once every Swift job succeeded */
+            try? FileManager.default.removeItem(at: manifest)
+            ForkBuildSpeed.beginSwiftCompile(jobs: stable, manifestURL: manifest)
+            return stable
         }
         
         // This can now in theory run in parallel ?:3
@@ -49,9 +72,8 @@ extension NXBuilder: MDKDriverDelegate {
         var newJobs: [MDKJob] = []
         var depsSet: Set<MDKDependency> = Set()
         
-        let userSelectedValue: NSNumber? = UserDefaults.standard.object(forKey: "cputhreads") as? NSNumber
-        let userSelected = userSelectedValue?.intValue ?? CCGetMaximumPerformanceCores()
-        let threads = CFIndex(userSelected == 0 ? 1 : userSelected)
+        /* fork: every core when there is more memory */
+        let threads = CFIndex(ForkBuildSpeed.threads)
         
         let mdkThreadPoolGroup: MDKThreadPoolGroup = MDKThreadPoolGroup(threads: threads)
         for job in jobs {
@@ -184,29 +206,216 @@ extension NXBuilder: MDKDriverDelegate {
 }
 
 extension NXBuilder {
-    /// Drops the Swift compile jobs when all their objects are newer than all their sources.
-    static func forkSkipSwiftCompileIfUnchanged(_ jobs: [MDKJob]) -> [MDKJob] {
+    /// Drops the Swift compile jobs when every object file they write is newer
+    /// than every Swift source, and the Swift files are the same set as in the
+    /// last good compile. nil = compile.
+    static func forkSkipSwiftCompileIfUnchanged(_ jobs: [MDKJob], manifestURL: URL) -> [MDKJob]? {
+        let swiftJobs = jobs.filter { $0.type == .swiftCompiler }
+        guard !swiftJobs.isEmpty else { return nil }
         let fm = FileManager.default
         func modified(_ path: String) -> Date? {
             (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date
         }
         
-        let compileJobs = jobs.filter { $0.type == .compiler }
-        guard !compileJobs.isEmpty else { return jobs }
-        
         var oldestObject: Date?
         var sources: Set<String> = []
-        for job in compileJobs {
-            /* a job without its own object file (module merging, …): do not guess */
-            guard let output = job.outputFileURL, let date = modified(output.path) else { return jobs }
-            oldestObject = min(oldestObject ?? date, date)
-            for url in job.inputFileURLs ?? [] { sources.insert(url.path) }
+        for job in swiftJobs {
+            let parts = ForkBuildSpeed.swiftJobFiles(job)
+            /* a job without its own object file (module merging, ...): do not guess */
+            guard !parts.outputs.isEmpty else { return nil }
+            for output in parts.outputs {
+                guard let date = modified(output) else { return nil }
+                oldestObject = min(oldestObject ?? date, date)
+            }
+            sources.formUnion(parts.sources)
         }
-        guard let oldestObject, !sources.isEmpty else { return jobs }
+        guard let oldestObject, !sources.isEmpty else { return nil }
+        
+        /* a Swift file added or removed since the last good compile */
+        guard let saved = try? String(contentsOf: manifestURL, encoding: .utf8),
+              saved == ForkBuildSpeed.manifestText(sources) else { return nil }
         
         for path in sources {
-            guard let date = modified(path), date < oldestObject else { return jobs }
+            guard let date = modified(path), date < oldestObject else { return nil }
         }
-        return jobs.filter { $0.type != .compiler }
+        return jobs.filter { $0.type != .swiftCompiler }
+    }
+}
+
+// MARK: - fork: build speed (uses the extra memory)
+
+/// Settings › Toolchain › Speed. With Increased Memory Limit the compiler has
+/// room for more at once: all Swift files in one pass, and every core.
+@objc final class ForkBuildSpeed: NSObject {
+    /// 0 = Automatic, 1 = On, 2 = Off
+    static let onePassKey = "fork.build.swiftOnePass"
+    static let onePassOptions: [String] = ["Automatic", "On", "Off"]
+    /// more memory: use every core (default on)
+    static let allCoresKey = "fork.build.allCores"
+    /// a limit at least this big counts as "more memory"
+    static let moreMemoryBytes: UInt64 = 4 * 1024 * 1024 * 1024
+
+    /// About how much memory iOS lets Nyxian use (what is left + what it uses)
+    static var memoryLimit: UInt64 { ForkMemoryInfo.available + ForkMemoryInfo.footprint }
+
+    private static let increasedLimitEntitlement: Bool = ForkMemoryInfo.entitlement(ForkMemoryInfo.increasedLimit) == true
+
+    /// Increased Memory Limit is in the signature, or the limit is big anyway
+    @objc static var hasMoreMemory: Bool {
+        increasedLimitEntitlement || memoryLimit >= moreMemoryBytes
+    }
+
+    static var performanceCores: Int { max(Int(CCGetMaximumPerformanceCores()), 1) }
+    static var allCores: Int { max(ProcessInfo.processInfo.activeProcessorCount, 1) }
+
+    /// The Threads setting, or every core when there is more memory
+    @objc static var threads: Int {
+        let chosen = (UserDefaults.standard.object(forKey: "cputhreads") as? NSNumber)?.intValue ?? performanceCores
+        let user = max(chosen, 1)
+        let useAll = UserDefaults.standard.object(forKey: allCoresKey) as? Bool ?? true
+        if useAll && hasMoreMemory { return max(user, allCores) }
+        return user
+    }
+
+    static var onePassMode: Int { UserDefaults.standard.integer(forKey: onePassKey) }
+
+    /// Whether this build compiles all Swift files in one run
+    @objc static func usesOnePass(swiftFileCount: Int) -> Bool {
+        switch onePassMode {
+        case 1: return swiftFileCount >= 1
+        case 2: return false
+        default: return swiftFileCount >= 2 && hasMoreMemory
+        }
+    }
+
+    /// The flags NXPhaseEngine adds to the Swift driver
+    @objc static func extraSwiftFlags(swiftFileCount: Int) -> [String] {
+        guard usesOnePass(swiftFileCount: swiftFileCount) else { return [] }
+        var flags: [String] = ["-wmo"]
+        let codegenThreads = min(threads, swiftFileCount)
+        if codegenThreads > 1 {
+            flags.append(contentsOf: ["-num-threads", String(codegenThreads)])
+        }
+        return flags
+    }
+
+    /// Part of the build's flag signature: a change rebuilds everything
+    static func signature(projectURL: URL) -> String {
+        let flags = extraSwiftFlags(swiftFileCount: swiftFileCount(in: projectURL))
+        return flags.isEmpty ? "" : " fork-speed:" + flags.joined(separator: " ")
+    }
+
+    /// Swift files of a project, as NXPhaseEngine finds them
+    static func swiftFileCount(in projectURL: URL) -> Int {
+        let files = LDEFilesFinder(projectURL.path, Set(["swift"]), Set(["Resources", "Config"]))
+        return files?.count ?? 0
+    }
+
+    // MARK: Swift jobs
+
+    /// Sources (.swift arguments) and object files (-o) of a Swift job
+    static func swiftJobFiles(_ job: MDKJob) -> (sources: [String], outputs: [String]) {
+        let args = job.baseArguments ?? []
+        var sources: [String] = []
+        var outputs: [String] = []
+        var index = 0
+        while index < args.count {
+            let arg = args[index]
+            if arg == "-o", index + 1 < args.count {
+                outputs.append(args[index + 1])
+                index += 2
+                continue
+            }
+            if arg.hasSuffix(".swift") && arg.hasPrefix("/") {
+                sources.append(arg)
+            }
+            index += 1
+        }
+        return (sources, outputs)
+    }
+
+    /// In one pass with -num-threads the compiler writes one object file per
+    /// Swift file, all but the first to temporary names that change on every
+    /// build. They get fixed paths in the project's cache (also in the link).
+    static func stableWholeModuleOutputs(_ jobs: [MDKJob], cacheURL: URL) -> [MDKJob] {
+        var remap: [(String, String)] = []
+        let folder = cacheURL.appendingPathComponent("WholeModule")
+        for job in jobs where job.type == .swiftCompiler {
+            let args = job.baseArguments ?? []
+            guard args.contains("-num-threads") else { continue }
+            let parts = swiftJobFiles(job)
+            guard parts.outputs.count > 1 else { continue }
+            /* outputs follow the order of the sources (the module's files) */
+            let sourceFiles = parts.sources
+            for (index, output) in parts.outputs.enumerated() where index > 0 && !output.hasPrefix(cacheURL.path) {
+                let base: String
+                if index < sourceFiles.count {
+                    base = (sourceFiles[index] as NSString).lastPathComponent
+                } else {
+                    base = "part\(index)"
+                }
+                let stable = folder.appendingPathComponent("\(index)-\(base).o").path
+                remap.append((output, stable))
+            }
+        }
+        guard !remap.isEmpty else { return jobs }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return jobs.map { job in
+            let args = job.baseArguments ?? []
+            var changed = false
+            let newArgs: [String] = args.map { arg in
+                var value = arg
+                for (old, new) in remap where value.contains(old) {
+                    value = value.replacingOccurrences(of: old, with: new)
+                    changed = true
+                }
+                return value
+            }
+            guard changed else { return job }
+            return MDKJob(type: job.type, withArguments: newArgs, withInputFileURLs: job.inputFileURLs, withOutputFileURL: job.outputFileURL)
+        }
+    }
+
+    static func manifestText(_ sources: Set<String>) -> String {
+        sources.sorted().joined(separator: "\n")
+    }
+
+    // MARK: the sources of the last good compile
+
+    private static var lock = os_unfair_lock()
+    private static var pendingJobs = 0
+    private static var pendingFailed = false
+    private static var pendingSources: Set<String> = []
+    private static var pendingManifest: URL?
+
+    static func beginSwiftCompile(jobs: [MDKJob], manifestURL: URL) {
+        let swiftJobs = jobs.filter { $0.type == .swiftCompiler }
+        var sources: Set<String> = []
+        for job in swiftJobs { sources.formUnion(swiftJobFiles(job).sources) }
+        os_unfair_lock_lock(&lock)
+        pendingJobs = swiftJobs.count
+        pendingFailed = false
+        pendingSources = sources
+        pendingManifest = swiftJobs.isEmpty ? nil : manifestURL
+        os_unfair_lock_unlock(&lock)
+    }
+
+    /// Called for every finished Swift job; the last good one writes the list
+    static func finishedSwiftJob(success: Bool) {
+        os_unfair_lock_lock(&lock)
+        guard let manifest = pendingManifest else {
+            os_unfair_lock_unlock(&lock)
+            return
+        }
+        if !success { pendingFailed = true }
+        pendingJobs -= 1
+        let done = pendingJobs <= 0
+        let write = done && !pendingFailed
+        let text = manifestText(pendingSources)
+        if done { pendingManifest = nil }
+        os_unfair_lock_unlock(&lock)
+        if write {
+            try? text.write(to: manifest, atomically: true, encoding: .utf8)
+        }
     }
 }

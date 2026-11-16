@@ -4,6 +4,25 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.70.0 — 2026-11-15
+
+Faster builds with the extra memory (Increased Memory Limit):
+
+- **Running a project you did not change no longer compiles its Swift again.**
+  The "nothing changed" check (1.x, incremental build) looked for the wrong
+  job type, so Swift was always compiled. It now reads the Swift jobs' own
+  sources and object files, and also checks that no Swift file was added or
+  removed since the last good compile; then only the link runs.
+- **Settings › Toolchain › Speed › Swift in One Pass** (Automatic / On / Off):
+  all Swift files compiled in a single run (`-wmo`), so SwiftUI and the other
+  frameworks are loaded and the code is type-checked once, not once per file;
+  with `-num-threads` each file's machine code is made in parallel (their
+  object files get fixed paths in the project cache). Automatic: on with two
+  or more Swift files and Increased Memory Limit (or 4 GB or more).
+- **All Cores with More Memory** (on): the efficiency cores are used too, for
+  C / Objective-C files and the one-pass code generation; the Threads stepper
+  goes up to every core. The Speed section shows the memory limit.
+
 ## 1.69.0 — 2026-11-15
 
 - **Apps run inside Nyxian follow light / dark mode.** Their scene never got
