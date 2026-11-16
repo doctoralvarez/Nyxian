@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.7.0
+ Fork doctoralvarez/Nyxian — version 1.8.0
  Changelog:
+  - 1.8.0 (2026-11-15): a one-pass Swift build that fails with no error in
+    the code is done again file by file at once (and Automatic stops using
+    One Pass here), so the project still builds and runs.
   - 1.7.0 (2026-11-15): the build's flag signature includes the speed
     options (one pass), so changing them compiles everything again.
   - 1.6.0 (2026-11-12): Export .ipa signs Config/AppEntitlements.plist into
@@ -153,6 +156,14 @@ final class NXBuilder: NSObject {
         }
     }
     
+    /// fork: an error in one of the project's Swift files
+    private func forkHasSwiftErrors() -> Bool {
+        for (key, object) in self.database.debugObjects where key.hasSuffix(".swift") {
+            if object.debugItems.contains(where: { $0.severity == .error || $0.severity == .fatal }) { return true }
+        }
+        return false
+    }
+    
     func clean() throws {
         // now remove what was find
         for file in LDEFilesFinder(
@@ -187,7 +198,28 @@ final class NXBuilder: NSObject {
     }
     
     func build() throws {
-        if !self.phaseRunner.runPhases() {
+        let usedOnePass = ForkBuildSpeed.usesOnePass(swiftFileCount: ForkBuildSpeed.swiftFileCount(in: self.project.url))
+        var ok = self.phaseRunner.runPhases()
+        /* fork: One Pass failed without an error in the code: build file by file */
+        if !ok, usedOnePass, !NXBuilder.forkCancelRequested, !self.forkHasSwiftErrors() {
+            if ForkBuildSpeed.onePassMode == 0 {
+                UserDefaults.standard.set(true, forKey: ForkBuildSpeed.onePassFailedKey)
+            }
+            ForkBuildSpeed.forcePerFile = true
+            defer { ForkBuildSpeed.forcePerFile = false }
+            let engine = try NXPhaseEngine(project: self.project)
+            engine.delegate = self
+            if let runner = NXPhaseRunner(engine: engine) {
+                runner.delegate = self
+                self.phaseRunner = runner
+                self.projectDirty = true
+                ok = runner.runPhases()
+                if ok {
+                    self.database.addMessage(message: "Swift in One Pass did not work here, so the project was compiled file by file (Settings › Toolchain › Speed).", severity: .warning)
+                }
+            }
+        }
+        if !ok {
             throw NSError(domain: "com.cr4zy.nyxian.builder.runner", code: 1, userInfo: [NSLocalizedDescriptionKey:"Failed to run project."])
         }
         

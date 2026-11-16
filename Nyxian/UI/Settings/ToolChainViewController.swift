@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.0.1
  Changelog:
+  - 1.0.1 (2026-11-15): choosing a Swift in One Pass option tries it again
+    after it failed on this device; the footer says when it is off for that.
   - 1.0.0 (2026-11-15): "Speed" section: the memory iOS gives Nyxian, Swift
     "One Pass" (Automatic / On / Off) and "All Cores with More Memory"; the
     Threads stepper goes up to every core.
@@ -110,7 +112,10 @@ class ToolChainViewController: NXUITableViewController {
                 info.selectionStyle = .none
                 cell = info
             case 1:
-                cell = PickerTableCell(options: ForkBuildSpeed.onePassOptions, title: "Swift in One Pass", key: ForkBuildSpeed.onePassKey, defaultValue: 0)
+                let picker = PickerTableCell(options: ForkBuildSpeed.onePassOptions, title: "Swift in One Pass", key: ForkBuildSpeed.onePassKey, defaultValue: 0)
+                /* choosing again tries One Pass again after it failed here */
+                picker.callback = { _ in UserDefaults.standard.removeObject(forKey: ForkBuildSpeed.onePassFailedKey) }
+                cell = picker
             default:
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
                 (cell as! ToggleTableCell).configure(title: "All Cores with More Memory", key: ForkBuildSpeed.allCoresKey, defaultValue: true)
@@ -156,7 +161,9 @@ enum ForkBuildSpeedFooter {
         let now = ForkBuildSpeed.hasMoreMemory
             ? "Now: more memory, builds use \(ForkBuildSpeed.threads) threads."
             : "Now: normal memory, builds use \(ForkBuildSpeed.threads) threads (\(cores))."
-        return "Swift in One Pass compiles all Swift files of a project in a single run (whole module): SwiftUI and the other frameworks are loaded, and the code is checked, once instead of once per file, and the machine code of each file is made in parallel. It needs more memory, so Automatic turns it on with Increased Memory Limit (or 4 GB or more) and two or more Swift files; a project of one Swift file builds the same either way. All Cores uses the efficiency cores too when there is more memory. Changing these compiles the project again once. " + now
+        let failed = UserDefaults.standard.bool(forKey: ForkBuildSpeed.onePassFailedKey)
+            ? " One Pass failed here once, so Automatic leaves it off; choose an option to try it again." : ""
+        return "Swift in One Pass compiles all Swift files of a project in a single run (whole module): SwiftUI and the other frameworks are loaded, and the code is checked, once instead of once per file, It needs more memory, so Automatic turns it on with Increased Memory Limit (or 4 GB or more) and two or more Swift files; a project of one Swift file builds the same either way. If a one-pass build fails without an error in the code, it is compiled file by file at once. All Cores uses the efficiency cores too when there is more memory. Changing these compiles the project again once. " + now + failed
     }
 }
 

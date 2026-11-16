@@ -21,8 +21,15 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 2.0.0
+ Fork doctoralvarez/Nyxian — version 2.1.0
  Changelog:
+  - 2.1.0 (2026-11-15): One Pass broke every project with two or more Swift
+    files ("Failed to run project."): with -num-threads the compiler's extra
+    object files did not end up where the link looked. One Pass is now a
+    plain -wmo (one object file, the same path handling as file by file), and
+    if a one-pass build still fails without any error in the code, the build
+    is done again file by file at once and Automatic stops using One Pass on
+    this device (choosing the option again tries it again).
   - 2.0.0 (2026-11-15): faster Swift builds, using the extra memory.
     * The "nothing changed" skip now really works for Swift: it looked for
       clang-type jobs, so Swift was always compiled again. It now reads the
@@ -280,7 +287,14 @@ extension NXBuilder {
     static var onePassMode: Int { UserDefaults.standard.integer(forKey: onePassKey) }
 
     /// Whether this build compiles all Swift files in one run
+    /// set while a failed one-pass build is done again file by file
+    static var forcePerFile = false
+    /// One Pass failed here without an error in the code: Automatic leaves it off
+    static let onePassFailedKey = "fork.build.swiftOnePassFailed"
+
     @objc static func usesOnePass(swiftFileCount: Int) -> Bool {
+        if forcePerFile { return false }
+        if onePassMode == 0 && UserDefaults.standard.bool(forKey: onePassFailedKey) { return false }
         switch onePassMode {
         case 1: return swiftFileCount >= 1
         case 2: return false
@@ -291,12 +305,8 @@ extension NXBuilder {
     /// The flags NXPhaseEngine adds to the Swift driver
     @objc static func extraSwiftFlags(swiftFileCount: Int) -> [String] {
         guard usesOnePass(swiftFileCount: swiftFileCount) else { return [] }
-        var flags: [String] = ["-wmo"]
-        let codegenThreads = min(threads, swiftFileCount)
-        if codegenThreads > 1 {
-            flags.append(contentsOf: ["-num-threads", String(codegenThreads)])
-        }
-        return flags
+        /* plain whole module: one object file (-num-threads broke the link) */
+        return ["-wmo"]
     }
 
     /// Part of the build's flag signature: a change rebuilds everything

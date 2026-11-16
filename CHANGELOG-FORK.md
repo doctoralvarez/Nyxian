@@ -4,6 +4,16 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.70.1 — 2026-11-15
+
+- **Fix: projects with two or more Swift files failed** ("Failed to run
+  project.") with Swift in One Pass. With `-num-threads` the compiler's extra
+  object files were not where the link looked for them. One Pass is now a
+  plain `-wmo` (one object file, handled like file-by-file builds).
+- Safety net: if a one-pass build still fails with no error in the code, it
+  is compiled again file by file at once (a warning says so) and Automatic
+  stops using One Pass on this device; choosing an option tries it again.
+
 ## 1.70.0 — 2026-11-15
 
 Faster builds with the extra memory (Increased Memory Limit):
