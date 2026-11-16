@@ -4,6 +4,13 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.71.0 — 2026-11-16
+
+- **New names for the app test switches.** Programs now start with
+  `REVISAR_STOREKIT=1` and `REVISAR_ICLOUD=1`. The Permissions switches are
+  called **Review StoreKit** and **Review iCloud**. The older variables
+  (`Simulate_*`, `NYXIAN_*`) are still set so apps not updated yet keep working.
+
 ## 1.70.2 — 2026-11-16
 
 - **#Preview no longer stops a build** ("plugin for module 'PreviewsMacros'

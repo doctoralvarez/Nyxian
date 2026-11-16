@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.5.1
+ Fork doctoralvarez/Nyxian — version 1.6.0
  Changelog:
+  - 1.6.0 (2026-11-16): the switches are called "Review StoreKit" and "Review
+    iCloud" and the footer names REVISAR_STOREKIT and REVISAR_ICLOUD.
   - 1.5.1 (2026-11-14): the footer names the new variables Simulate_StoreKit
     and Simulate_iCloud.
   - 1.5.0 (2026-11-13): Permissions: "Simulate iCloud" switch per program
@@ -1088,7 +1090,7 @@ final class ForkPermissionEditorViewController: UITableViewController {
         case 1: return "Extra Folders — Read Only"
         case 2: return "Extra Folders — Read and Write"
         case 3: return "Network"
-        case 4: return "Simulated Services (StoreKit, iCloud)"
+        case 4: return "Review Services (StoreKit, iCloud)"
         default: return nil
         }
     }
@@ -1098,7 +1100,7 @@ final class ForkPermissionEditorViewController: UITableViewController {
         case 0: return program.detail
         case 2: return "Folders are inside Nyxian's root (\"/var/mobile\" is $(NXROOT)/var/mobile) and include what is in them. They add to the file mode above."
         case 3: return "Off: its connections to the internet and the local network fail with \"Operation not permitted\". Local sockets keep working."
-        case 4: return "On: the program starts with Simulate_StoreKit=simulate. StoreKit cannot reach the App Store from inside Nyxian, so an app can read that variable and use a simulated store to test purchases. Off: the app sees no variable. Likewise \"Simulate iCloud\" sets Simulate_iCloud=simulate: Nyxian has no iCloud entitlement for its programs, so an app can back up to a local folder instead."
+        case 4: return "On: the program starts with REVISAR_STOREKIT=1. StoreKit cannot reach the App Store from inside Nyxian, so an app can read that variable and use its review store to test purchases. Off: the app sees no variable. Likewise \"Review iCloud\" sets REVISAR_ICLOUD=1: Nyxian has no iCloud entitlement for its programs, so an app can back up to a local folder instead."
         default: return section == 5 ? "Changes apply the next time it starts." : nil
         }
     }
@@ -1138,7 +1140,7 @@ final class ForkPermissionEditorViewController: UITableViewController {
             cell.selectionStyle = .none
         case 4:
             let key = indexPath.row == 0 ? "storekit" : "icloud"
-            cell.textLabel?.text = indexPath.row == 0 ? "Simulate StoreKit" : "Simulate iCloud"
+            cell.textLabel?.text = indexPath.row == 0 ? "Review StoreKit" : "Review iCloud"
             let toggle = UISwitch()
             toggle.isOn = policy[key] as? Bool ?? true
             toggle.addAction(UIAction { [weak self] action in

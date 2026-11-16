@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.5.0
+ Fork doctoralvarez/Nyxian — version 1.6.0
  Changelog:
+  - 1.6.0 (2026-11-16): programs also start with REVISAR_STOREKIT=1 and
+    REVISAR_ICLOUD=1 (the names apps use from now on); the Simulate_* and
+    NYXIAN_* names are still set for apps not updated yet.
   - 1.5.0 (2026-11-14): the variables are named Simulate_StoreKit and
     Simulate_iCloud (value "simulate"), so app code never names Nyxian;
     NYXIAN_STOREKIT and NYXIAN_ICLOUD are still set for apps not updated yet.
@@ -261,7 +264,8 @@ NSString *PEForkSigningReport(NSArray<NSString *> *paths)
     {
         NSMutableDictionary *mutableItems = [items mutableCopy];
         NSMutableDictionary *environment = [mutableItems[@"PEEnvironment"] mutableCopy] ?: [NSMutableDictionary dictionary];
-        environment[@"Simulate_StoreKit"] = @"simulate";
+        environment[@"REVISAR_STOREKIT"] = @"1";
+        environment[@"Simulate_StoreKit"] = @"simulate"; /* older apps */
         environment[@"NYXIAN_STOREKIT"] = @"simulate"; /* older apps */
         mutableItems[@"PEEnvironment"] = environment;
         items = mutableItems;
@@ -272,7 +276,8 @@ NSString *PEForkSigningReport(NSArray<NSString *> *paths)
     {
         NSMutableDictionary *mutableItems = [items mutableCopy];
         NSMutableDictionary *environment = [mutableItems[@"PEEnvironment"] mutableCopy] ?: [NSMutableDictionary dictionary];
-        environment[@"Simulate_iCloud"] = @"simulate";
+        environment[@"REVISAR_ICLOUD"] = @"1";
+        environment[@"Simulate_iCloud"] = @"simulate"; /* older apps */
         environment[@"NYXIAN_ICLOUD"] = @"simulate"; /* older apps */
         mutableItems[@"PEEnvironment"] = environment;
         items = mutableItems;
