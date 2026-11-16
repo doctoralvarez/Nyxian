@@ -288,7 +288,12 @@ enum ForkAppearance {
     static let options: [String] = ["Automatic", "Light", "Dark"]
 
     static func apply() {
-        let style = NXForkAppearanceOverride()
+        let style: UIUserInterfaceStyle
+        switch UserDefaults.standard.integer(forKey: key) {
+        case 1: style = .light
+        case 2: style = .dark
+        default: style = .unspecified
+        }
         for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
             for window in scene.windows {
                 window.overrideUserInterfaceStyle = style
