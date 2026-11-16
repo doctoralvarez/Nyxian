@@ -4,6 +4,19 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.70.2 — 2026-11-16
+
+- **#Preview no longer stops a build** ("plugin for module 'PreviewsMacros'
+  not found": that macro plugin only ships with Xcode). A Swift file with
+  #Preview is compiled from a copy in the project cache where those blocks are
+  blanked out (same lines and columns); its errors show on the real file.
+- **SwiftUI overlays are found again:** the iOS 27 SDK has every
+  `_X_SwiftUI` overlay as a framework (System/Library/Frameworks), but they
+  were only looked for in usr/lib/swift, so none was imported —
+  "cannot find type 'PhotosPickerItem' in scope" (also SpriteView, Map,
+  VideoPlayer, …). Added: .photosPicker, WebView / WebPage, LocationButton,
+  RealityView.
+
 ## 1.70.1 — 2026-11-15
 
 - **Fix: projects with two or more Swift files failed** ("Failed to run

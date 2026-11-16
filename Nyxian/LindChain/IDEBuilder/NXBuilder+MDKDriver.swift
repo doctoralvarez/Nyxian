@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 2.1.0
+ Fork doctoralvarez/Nyxian — version 2.2.0
  Changelog:
+  - 2.2.0 (2026-11-16): #Preview blocks no longer stop a build ("plugin for
+    module 'PreviewsMacros' not found": that macro plugin only ships with
+    Xcode). A Swift file with #Preview is compiled from a copy in the project
+    cache where those blocks are blanked out (same lines and columns), and
+    its errors are shown on the real file (ForkPreviewStripping).
   - 2.1.0 (2026-11-15): One Pass broke every project with two or more Swift
     files ("Failed to run project."): with -num-threads the compiler's extra
     object files did not end up where the link looked. One Pass is now a
@@ -61,8 +66,10 @@ extension NXBuilder: MDKDriverDelegate {
     func driver(_ driver: MDKDriver, editJobListForJobList jobs: [MDKJob]) -> [MDKJob]? {
         if driver.type != .clang {
             /* fork: nothing to compile when no Swift file changed */
+            /* fork: files with #Preview are compiled from a copy without those blocks */
+            let withoutPreviews = ForkPreviewStripping.sanitize(jobs, cacheURL: self.project.cacheURL, sourceRoot: self.project.url.path)
             /* fork: one pass (-wmo -num-threads): its extra object files get fixed paths */
-            let stable = ForkBuildSpeed.stableWholeModuleOutputs(jobs, cacheURL: self.project.cacheURL)
+            let stable = ForkBuildSpeed.stableWholeModuleOutputs(withoutPreviews, cacheURL: self.project.cacheURL)
             let manifest = self.project.cacheURL.appendingPathComponent("fork-swift-sources.txt")
             if !(self.projectDirty || !self.incrementalBuild),
                let skipped = NXBuilder.forkSkipSwiftCompileIfUnchanged(stable, manifestURL: manifest) {
@@ -426,6 +433,88 @@ extension NXBuilder {
         os_unfair_lock_unlock(&lock)
         if write {
             try? text.write(to: manifest, atomically: true, encoding: .utf8)
+        }
+    }
+}
+
+
+// MARK: - fork: #Preview without Xcode's macro plugin
+
+/// The previews macro (#Preview) needs PreviewsMacros, a plugin that only
+/// ships with Xcode. Building does not need previews, so a Swift file that has
+/// #Preview is compiled from a copy in the project cache where those blocks are
+/// blanked out with spaces (lines and columns stay the same), and diagnostics
+/// on the copy are put back on the real file.
+enum ForkPreviewStripping {
+    private static var lock = os_unfair_lock()
+    private static var originals: [String: String] = [:]
+
+    /// The real file for a path of a copy (any other path unchanged)
+    static func originalPath(_ path: String) -> String {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        return originals[path] ?? path
+    }
+
+    private static let previewRegex = try? NSRegularExpression(pattern: #"#Preview\s*(\([^)]*\))?\s*\{"#)
+
+    /// The text with every #Preview block turned into spaces (newlines kept); nil if it has none
+    static func blankingPreviews(_ text: String) -> String? {
+        guard text.contains("#Preview"), let regex = previewRegex else { return nil }
+        let ns = NSMutableString(string: text)
+        var searchFrom = 0
+        var changed = false
+        while searchFrom < ns.length,
+              let match = regex.firstMatch(in: ns as String, range: NSRange(location: searchFrom, length: ns.length - searchFrom)) {
+            let open = NSMaxRange(match.range) - 1
+            guard let close = ForkSwiftUIPreview.matchingBrace(in: ns, open: open) else { break }
+            for index in match.range.location...close {
+                let c = ns.character(at: index)
+                if c != 10 && c != 13 {
+                    ns.replaceCharacters(in: NSRange(location: index, length: 1), with: " ")
+                }
+            }
+            changed = true
+            searchFrom = close + 1
+        }
+        return changed ? (ns as String) : nil
+    }
+
+    /// Swift jobs with each file that has #Preview replaced by its blanked copy
+    static func sanitize(_ jobs: [MDKJob], cacheURL: URL, sourceRoot: String) -> [MDKJob] {
+        var sources: Set<String> = []
+        for job in jobs where job.type == .swiftCompiler {
+            sources.formUnion(ForkBuildSpeed.swiftJobFiles(job).sources)
+        }
+        let folder = cacheURL.appendingPathComponent("NoPreviews")
+        var remap: [String: String] = [:]
+        for source in sources {
+            guard let text = try? String(contentsOfFile: source, encoding: .utf8),
+                  let blanked = blankingPreviews(text) else { continue }
+            var relative = source
+            if relative.hasPrefix(sourceRoot) { relative = String(relative.dropFirst(sourceRoot.count)) }
+            let copy = folder.appendingPathComponent(relative).path
+            let data = Data(blanked.utf8)
+            /* written only when it changed, so its date tells the incremental build */
+            if (try? Data(contentsOf: URL(fileURLWithPath: copy))) != data {
+                try? FileManager.default.createDirectory(atPath: (copy as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+                guard (try? data.write(to: URL(fileURLWithPath: copy), options: .atomic)) != nil else { continue }
+            }
+            remap[source] = copy
+        }
+        guard !remap.isEmpty else { return jobs }
+        os_unfair_lock_lock(&lock)
+        for (source, copy) in remap {
+            originals[copy] = source
+            originals[(copy as NSString).standardizingPath] = source
+        }
+        os_unfair_lock_unlock(&lock)
+        return jobs.map { job in
+            guard job.type == .swiftCompiler else { return job }
+            let args = job.baseArguments ?? []
+            let newArgs = args.map { remap[$0] ?? $0 }
+            guard newArgs != args else { return job }
+            return MDKJob(type: job.type, withArguments: newArgs, withInputFileURLs: job.inputFileURLs, withOutputFileURL: job.outputFileURL)
         }
     }
 }

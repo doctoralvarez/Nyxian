@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.7.0
+ Fork doctoralvarez/Nyxian — version 1.8.0
  Changelog:
+  - 1.8.0 (2026-11-16): a SwiftUI overlay is also found when the SDK has it
+    as a framework (System/Library/Frameworks/_PhotosUI_SwiftUI.framework,
+    …), not only in usr/lib/swift. The iOS 27 SDK has all of them as
+    frameworks, so none was imported: "cannot find type 'PhotosPickerItem'".
+    .photosPicker counts; WebView / WebPage, LocationButton and RealityView
+    get their overlays too.
   - 1.7.0 (2026-11-12): Nyxian's own entitlements (org.emexlabs.nyxian.*)
     in one place (NXForkDefaultNyxianEntitlements); a project opened without
     Config/Entitlements.plist (exports leave it out) gets it back.
@@ -106,8 +112,11 @@ static NSArray<NSString*> *NXForkOverlayImports(NSString *sourceRoot)
         @"_StoreKit_SwiftUI": @[@"StoreView", @"ProductView", @"SubscriptionStoreView"],
         @"_AuthenticationServices_SwiftUI": @[@"SignInWithAppleButton"],
         @"_QuickLook_SwiftUI": @[@"quickLookPreview"],
-        @"_PhotosUI_SwiftUI": @[@"PhotosPicker"],
+        @"_PhotosUI_SwiftUI": @[@"PhotosPicker", @"photosPicker"],
         @"_HealthKit_SwiftUI": @[@"healthDataAccessRequest"],
+        @"_WebKit_SwiftUI": @[@"WebView(", @"WebPage"],
+        @"_CoreLocationUI_SwiftUI": @[@"LocationButton"],
+        @"_RealityKit_SwiftUI": @[@"RealityView"],
     };
     
     NSMutableString *sources = [NSMutableString string];
@@ -129,7 +138,22 @@ static NSArray<NSString*> *NXForkOverlayImports(NSString *sourceRoot)
         if(!used) continue;
         NSString *modulePath = [swiftLib stringByAppendingPathComponent:[module stringByAppendingPathExtension:@"swiftmodule"]];
         NSString *interfacePath = [swiftLib stringByAppendingPathComponent:[module stringByAppendingPathExtension:@"swiftinterface"]];
-        if(![[NSFileManager defaultManager] fileExistsAtPath:modulePath] && ![[NSFileManager defaultManager] fileExistsAtPath:interfacePath]) continue;
+        /* fork 1.8.0: an overlay may also be a framework of the SDK (_PhotosUI_SwiftUI.framework,
+           …), not only a module in usr/lib/swift */
+        NSString *sdk = NXBootstrap.shared.sdkURL.path;
+        NSString *frameworkName = [module stringByAppendingPathExtension:@"framework"];
+        NSArray<NSString*> *candidates = @[
+            modulePath,
+            interfacePath,
+            [sdk stringByAppendingPathComponent:[@"System/Library/Frameworks" stringByAppendingPathComponent:frameworkName]],
+            [sdk stringByAppendingPathComponent:[@"System/Library/PrivateFrameworks" stringByAppendingPathComponent:frameworkName]]
+        ];
+        BOOL found = NO;
+        for(NSString *candidate in candidates)
+        {
+            if([[NSFileManager defaultManager] fileExistsAtPath:candidate]) { found = YES; break; }
+        }
+        if(!found) continue;
         [flags addObjectsFromArray:@[@"-Xfrontend", @"-import-module", @"-Xfrontend", module]];
     }
     

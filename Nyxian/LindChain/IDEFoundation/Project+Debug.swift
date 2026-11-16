@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-16): diagnostics on a file's copy without #Preview
+    (ForkPreviewStripping) are shown on the real file.
   - 1.0.0 (2026-11-06): Issue Navigator shows "Line N, Col M" and a
     disclosure chevron on navigable rows; "path:line:col" references inside
     linker/internal messages are now tappable too.
@@ -204,6 +206,7 @@ class DebugDatabase: Codable {
     }
 
     func removeFileDebug(ofPath path: String) {
+        let path = ForkPreviewStripping.originalPath(path)
         let absPath = standardize(path)
         
         os_unfair_lock_lock(&lock)
@@ -228,7 +231,7 @@ class DebugDatabase: Codable {
         let absOriginatorPath = standardize(originatorPath)
         
         let grouped = Dictionary(grouping: synItems) { item -> String in
-            let rawPath = item.fileSourceLocation?.fileURL.path ?? ""
+            let rawPath = ForkPreviewStripping.originalPath(item.fileSourceLocation?.fileURL.path ?? "")
             return rawPath.isEmpty ? "" : standardize(rawPath)
         }
         
