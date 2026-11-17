@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.8.0
+ Fork doctoralvarez/Nyxian — version 1.9.0
  Changelog:
+  - 1.9.0 (2026-11-17): "Live Issues (check while typing)" toggle: off, the
+    editor no longer runs the compiler while you type (errors still show
+    when you build).
   - 1.8.0 (2026-11-15): "Appearance": Automatic (follows the device), Light or
     Dark, for Nyxian and the apps it runs.
   - 1.7.0 (2026-11-12): "App Preview (panel at the right, iPad)" toggle.
@@ -103,7 +106,7 @@ class CustomizationViewController: NXUITableViewController {
         case 0:
             return 4
         case 1:
-            return 15
+            return 16
         case 2:
             return self.icons.count
         default:
@@ -192,6 +195,10 @@ int main(void)
                 /* fork: hold ⌘ for the shortcut list */
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
                 (cell as! ToggleTableCell).configure(title: "Shortcut List (hold ⌘)", key: "fork.shortcutHUD", defaultValue: true)
+            } else if indexPath.row == 15 {
+                /* fork: the compiler checking the code while you type */
+                cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
+                (cell as! ToggleTableCell).configure(title: "Live Issues (check while typing)", key: "fork.liveIssues", defaultValue: true)
             } else if indexPath.row == 12 {
                 /* fork: landscape on iPhone too, or one orientation kept */
                 let picker = PickerTableCell(options: ForkOrientation.options, title: "Orientation", key: ForkOrientation.key, defaultValue: 0)

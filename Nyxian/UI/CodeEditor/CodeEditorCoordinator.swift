@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.0
+ Fork doctoralvarez/Nyxian — version 1.5.0
  Changelog:
+  - 1.5.0 (2026-11-17): Settings › Customization › Live Issues off: no
+    check while typing. The text is read on the main thread (it was read
+    from a background thread). A Swift file with #Preview is checked with
+    those blocks blanked out (same lines), so the missing PreviewsMacros
+    plugin is not reported while you type.
   - 1.4.0 (2026-11-12): editing a Swift file of a project tells the App
     Preview panel (it pauses until the code builds again).
   - 1.3.1 (2026-11-09): every issue of the last run (failed tests) is marked.
@@ -89,6 +94,14 @@ class CodeEditorCoordinator: NSObject, TextViewDelegate {
     private func checkPython() {
         guard let parent = self.parent, let url = parent.file.fileURL else { return }
         let text = parent.textView.text
+        /* fork: Live Issues off: the compiler does not check while typing */
+        if !(UserDefaults.standard.object(forKey: "fork.liveIssues") as? Bool ?? true) {
+            self.diag = []
+            self.updateDiag()
+            return
+        }
+        /* fork: the text is read here, on the main thread */
+        let mainText: String = self.parent?.textView.text ?? ""
         self.isProcessing = true
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var found: [MDKDiagnostic] = []
@@ -129,7 +142,8 @@ class CodeEditorCoordinator: NSObject, TextViewDelegate {
             
             if parent.file.isSwift {
                 let swiftFies: [String] = LDEFilesFinder(parent.project?.url.path, ["swift"], ["Resources", "Config"])
-                let current = self.parent?.textView.text ?? ""
+                /* fork: #Preview blocks blanked out (no PreviewsMacros plugin here) */
+                let current = ForkPreviewStripping.blankingPreviews(mainText) ?? mainText
                 /* fork: code that makes the compiler crash takes Nyxian with it (it runs inside the app) */
                 let projectPath = parent.project?.url.path ?? (parent.file.fileURL?.path ?? "")
                 let problem = ForkSwiftCrashGuard.selfInheritance(current: current, currentPath: parent.file.fileURL?.path, files: swiftFies)
@@ -152,7 +166,7 @@ class CodeEditorCoordinator: NSObject, TextViewDelegate {
                 server.reparseFile(current, withArgs: (parent.project?.projectConfig.swiftFlags ?? []) + swiftFies)
                 ForkSwiftCrashGuard.end()
             } else if parent.file.isClang {
-                server.reparseFile(self.parent?.textView.text, withArgs: flags)
+                server.reparseFile(mainText, withArgs: flags)
             }
             let diag = self.parent?.languageServer?.getDiagnostics() ?? []
             

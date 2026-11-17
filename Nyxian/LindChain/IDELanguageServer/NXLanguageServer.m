@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.5.0
+ Fork doctoralvarez/Nyxian — version 1.6.0
  Changelog:
+  - 1.6.0 (2026-11-17): the Swift checks (live issues, completion, help,
+    symbols) run on a thread with a 64 MB stack instead of a 512 KB one.
+    The Swift type checker goes deep on long SwiftUI files and could run off
+    the small stack, which closed Nyxian while a project opened.
   - 1.5.0 (2026-11-14): -releaseMemory never waits. Closing a file while its
     code was still being checked (a Swift check can take several seconds)
     froze Nyxian: the editor released the server on the main thread and had
@@ -44,6 +48,46 @@
 #import <strings.h>
 #include <os/lock.h>
 #include <stdatomic.h>
+
+#include <pthread.h>
+
+/* fork: the Swift type checker recurses deeply on big SwiftUI files; GCD
+   threads have 512 KB of stack, so Swift work runs on a thread with 64 MB
+   (only reserved, used as needed) and the caller waits for it */
+static __thread bool g_forkOnLargeStack = false;
+
+static void *NXForkLargeStackEntry(void *context)
+{
+    @autoreleasepool {
+        void (^block)(void) = (__bridge_transfer void (^)(void))context;
+        g_forkOnLargeStack = true;
+        block();
+    }
+    return NULL;
+}
+
+static void NXForkRunOnLargeStack(void (^block)(void))
+{
+    if(g_forkOnLargeStack)
+    {
+        block();
+        return;
+    }
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 64 * 1024 * 1024);
+    void *context = (__bridge_retained void *)[block copy];
+    pthread_t thread;
+    if(pthread_create(&thread, &attr, NXForkLargeStackEntry, context) != 0)
+    {
+        pthread_attr_destroy(&attr);
+        void (^again)(void) = (__bridge_transfer void (^)(void))context;
+        again();
+        return;
+    }
+    pthread_attr_destroy(&attr);
+    pthread_join(thread, NULL);
+}
 
 #pragma mark - SynpushServer
 
@@ -80,6 +124,13 @@
 
 - (void)reparseFile:(NSString*)content withArgs:(NSArray*)args
 {
+    /* fork: on a big stack */
+    if(_file.isSwift && !g_forkOnLargeStack)
+    {
+        NXForkRunOnLargeStack(^{ [self reparseFile:content withArgs:args]; });
+        return;
+    }
+
     /* getting data from content (dont allow lossy conversion, because otherwise chineese, japanese, etc users are pissed off)*/
     NSData *newData = [content dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO];
     if(!newData)
@@ -191,6 +242,14 @@
 
 - (NSArray<NSDictionary<NSString*,id>*>*)completionsAtLine:(NSInteger)line utf8Column:(NSInteger)column content:(NSString*)content
 {
+    /* fork: on a big stack */
+    if(_file.isSwift && !g_forkOnLargeStack)
+    {
+        __block NSArray<NSDictionary<NSString*,id>*> * result = nil;
+        NXForkRunOnLargeStack(^{ result = [self completionsAtLine:line utf8Column:column content:content]; });
+        return result;
+    }
+
     NSData *data = [content dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO];
     if(data == nil)
     {
@@ -214,6 +273,14 @@
 
 - (NSDictionary<NSString*,id>*)signatureHelpAtLine:(NSInteger)line utf8Column:(NSInteger)column content:(NSString*)content
 {
+    /* fork: on a big stack */
+    if(_file.isSwift && !g_forkOnLargeStack)
+    {
+        __block NSDictionary<NSString*,id> * result = nil;
+        NXForkRunOnLargeStack(^{ result = [self signatureHelpAtLine:line utf8Column:column content:content]; });
+        return result;
+    }
+
     NSData *data = [content dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO];
     if(data == nil)
     {
@@ -236,6 +303,14 @@
 
 - (NSArray<NSDictionary<NSString*,id>*>*)getFixIts
 {
+    /* fork: on a big stack */
+    if(_file.isSwift && !g_forkOnLargeStack)
+    {
+        __block NSArray<NSDictionary<NSString*,id>*> * result = nil;
+        NXForkRunOnLargeStack(^{ result = [self getFixIts]; });
+        return result;
+    }
+
     os_unfair_lock_lock(&_lock);
     NSArray<NSDictionary<NSString*,id>*> *fixIts = (_unit != nil) ? [_unit fixIts] : @[];
     os_unfair_lock_unlock(&_lock);
@@ -244,6 +319,14 @@
 
 - (NSDictionary<NSString*,id>*)swiftSymbolAtLine:(NSInteger)line utf8Column:(NSInteger)column content:(NSString*)content inFile:(NSString*)path
 {
+    /* fork: on a big stack */
+    if(_file.isSwift && !g_forkOnLargeStack)
+    {
+        __block NSDictionary<NSString*,id> * result = nil;
+        NXForkRunOnLargeStack(^{ result = [self swiftSymbolAtLine:line utf8Column:column content:content inFile:path]; });
+        return result;
+    }
+
     NSData *data = [content dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO];
     if(data == nil)
     {
@@ -272,6 +355,14 @@
 
 - (MDKFileSourceLocation*)getDefinitionAtLocation:(MDKSourceLocation)location
 {
+    /* fork: on a big stack */
+    if(_file.isSwift && !g_forkOnLargeStack)
+    {
+        __block MDKFileSourceLocation * result = nil;
+        NXForkRunOnLargeStack(^{ result = [self getDefinitionAtLocation:location]; });
+        return result;
+    }
+
     os_unfair_lock_lock(&_lock);
     MDKFileSourceLocation *fileSourceLocation = [_unit fileSourceLocationForDefinitionAtLocation:location];
     os_unfair_lock_unlock(&_lock);

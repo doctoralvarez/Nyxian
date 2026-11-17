@@ -4,6 +4,20 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.73.0 — 2026-11-17
+
+- **Crash while opening a big Swift file:** the live Swift checks (issues while
+  typing, completion, parameter help, symbols) ran on a background thread with
+  512 KB of stack; the Swift type checker goes deep on long SwiftUI files and
+  could run off it, closing Nyxian. They now run on a thread with a 64 MB
+  stack.
+- **Settings › Customization › Live Issues (check while typing):** turn it off
+  and the editor no longer runs the compiler while you type (errors still show
+  when you build).
+- Live checking reads the text on the main thread, and checks a file with
+  #Preview with those blocks blanked out (no "PreviewsMacros" error while
+  typing).
+
 ## 1.72.2 — 2026-11-17
 
 - Kernel log: no more `issue failed: …/SystemData`. Programs with host access
