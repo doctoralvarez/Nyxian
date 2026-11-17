@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.9.0
+ Fork doctoralvarez/Nyxian — version 1.10.0
  Changelog:
+  - 1.10.0 (2026-11-16): a build that fails without any error is done once
+    more from a clean state (the project's compiled files and Nyxian's build
+    notes removed, file by file); if it still fails, what the compiler
+    printed (driver errors went only to the system log) is shown under
+    Internal. Fixes projects that built on one device and not on another
+    because of files left by an earlier build.
   - 1.9.0 (2026-11-16): Run with nothing changed opens the installed app at
     once: no compiling, linking, signing or installing again (ForkRunStamp:
     every file of the project, the build flags, the bundle id and this
@@ -163,6 +169,28 @@ final class NXBuilder: NSObject {
         }
     }
     
+    /// fork: any error at all in the Issue Navigator
+    private func forkHasAnyError() -> Bool {
+        for (key, object) in self.database.debugObjects where key != "Internal" {
+            if object.debugItems.contains(where: { $0.severity == .error || $0.severity == .fatal }) { return true }
+        }
+        return false
+    }
+    
+    /// fork: object files and Nyxian's build notes of this project, for a clean build
+    private func forkRemoveBuildProducts() {
+        let fm = FileManager.default
+        let cache = self.project.cacheURL
+        for name in ["NoPreviews", "WholeModule", "fork-swift-sources.txt", "fork-swift-interfaces.json", "fork-run-stamp.txt", "args.txt"] {
+            try? fm.removeItem(at: cache.appendingPathComponent(name))
+        }
+        if let walker = fm.enumerator(at: cache, includingPropertiesForKeys: nil) {
+            for case let file as URL in walker where file.pathExtension == "o" {
+                try? fm.removeItem(at: file)
+            }
+        }
+    }
+    
     /// fork: an error in one of the project's Swift files
     private func forkHasSwiftErrors() -> Bool {
         for (key, object) in self.database.debugObjects where key.hasSuffix(".swift") {
@@ -235,6 +263,36 @@ final class NXBuilder: NSObject {
                 ok = runner.runPhases()
                 if ok {
                     self.database.addMessage(message: "Swift in One Pass did not work here, so the project was compiled file by file (Settings › Toolchain › Speed).", severity: .warning)
+                }
+            }
+        }
+        /* fork: still failing with no error at all: once more from a clean state */
+        if !ok, !NXBuilder.forkCancelRequested, !self.forkHasAnyError() {
+            self.forkRemoveBuildProducts()
+            ForkBuildSpeed.forcePerFile = true
+            defer { ForkBuildSpeed.forcePerFile = false }
+            let engine = try NXPhaseEngine(project: self.project)
+            engine.delegate = self
+            if let runner = NXPhaseRunner(engine: engine) {
+                runner.delegate = self
+                self.phaseRunner = runner
+                self.projectDirty = true
+                var printed = ""
+                let earlier = self.database.debugObjects["Internal"]
+                self.database.debugObjects["Internal"] = nil
+                ok = ForkStderrCapture.run(into: &printed) { runner.runPhases() }
+                if ok {
+                    self.database.addMessage(message: "The first build failed without an error in the code; it worked after a clean build.", severity: .warning)
+                } else if self.database.debugObjects["Internal"] == nil, let earlier {
+                    self.database.debugObjects["Internal"] = earlier
+                }
+                if !ok && !self.forkHasAnyError() {
+                    let lines = printed.split(separator: "\n").map(String.init)
+                        .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+                    let wanted = lines.filter { $0.localizedCaseInsensitiveContains("error") }
+                    for line in (wanted.isEmpty ? Array(lines.suffix(12)) : Array(wanted.suffix(12))) {
+                        self.database.addMessage(message: line, severity: .error)
+                    }
                 }
             }
         }
@@ -622,6 +680,38 @@ enum ForkRunStamp {
         lines.append("nyxian:" + nyxian)
         let digest = SHA256.hash(data: Data(lines.joined(separator: "\n").utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+// MARK: - fork: what the compiler printed
+
+/// Runs `body` with this process's standard error going to a file, and gives
+/// back what was written: the Swift and clang drivers print their own errors
+/// there (not to the Issue Navigator).
+enum ForkStderrCapture {
+    private static let lock = NSLock()
+
+    static func run(into text: inout String, _ body: () -> Bool) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let path = NSTemporaryDirectory() + "fork-stderr-\(getpid()).txt"
+        let fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0o600)
+        guard fd >= 0 else { return body() }
+        fflush(stderr)
+        let saved = dup(STDERR_FILENO)
+        dup2(fd, STDERR_FILENO)
+        let result = body()
+        fflush(stderr)
+        if saved >= 0 {
+            dup2(saved, STDERR_FILENO)
+            close(saved)
+        }
+        close(fd)
+        if let data = FileManager.default.contents(atPath: path) {
+            text = String(decoding: data.suffix(64 * 1024), as: UTF8.self)
+        }
+        unlink(path)
+        return result
     }
 }
 

@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-16): no more silent "Failed to run project.": errors
+    without a file ("could not build module", "unable to open output file",
+    ...) are shown under Internal (they were dropped), and a step that fails
+    without any message says which one and on which file.
   - 1.0.0 (2026-11-15): threads from ForkBuildSpeed (every core with more
     memory); a finished Swift job is reported for the "nothing changed"
     skip, and in one pass the diagnostics left by single-file builds go.
@@ -77,6 +81,28 @@ extension NXBuilder: MDKPhaseRunnerDelegate {
                     self.database.removeFileDebug(ofPath: source)
                 }
             }
+        }
+        /* fork: messages without a file used to vanish (grouped by an empty path) */
+        let fileless = (diagnostics ?? []).filter {
+            ($0.fileSourceLocation?.fileURL.path ?? "").isEmpty && $0.level != .note && $0.level != .remark
+        }
+        for item in fileless {
+            self.database.addMessage(message: item.message, severity: item.level)
+        }
+        if !success && (diagnostics ?? []).filter({ $0.level == .error || $0.level == .fatal }).isEmpty {
+            let file = ForkIncrementalSwift.primaryFile(of: job)
+                ?? job.inputFileURLs?.first?.path
+                ?? ForkBuildSpeed.swiftJobFiles(job).sources.first
+                ?? (job.baseArguments ?? []).prefix(3).joined(separator: " ")
+            let kind: String
+            switch job.type {
+            case .swiftCompiler: kind = "Swift compile"
+            case .compiler: kind = "C / Objective-C compile"
+            case .linker: kind = "link"
+            default: kind = "build"
+            }
+            let name = (file as NSString).lastPathComponent
+            self.database.addMessage(message: "The \(kind) step for \(name) stopped without a message: the compiler may have crashed or run out of memory.", severity: .error)
         }
         if let diagnostics = diagnostics,
            let mainSource = mainSource {

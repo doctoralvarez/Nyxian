@@ -4,6 +4,19 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.72.1 — 2026-11-16
+
+- **No more silent "Failed to run project."** Compiler errors without a file
+  ("could not build module", "unable to open output file", ...) were dropped;
+  they now show under Internal. A step that fails without any message says
+  which one and on which file (e.g. the compiler crashed or ran out of
+  memory).
+- A build that fails without any error in the code is done once more from a
+  clean state (the project's object files and Nyxian's build notes removed,
+  compiled file by file). If that still fails, what the compiler printed is
+  shown under Internal. Meant for projects that build on one device and not
+  on another because of files left by an earlier build.
+
 ## 1.72.0 — 2026-11-16
 
 - **Only the Swift files that changed are compiled again.** A file whose
