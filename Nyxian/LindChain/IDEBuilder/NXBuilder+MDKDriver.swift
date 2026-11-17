@@ -21,8 +21,18 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 2.2.0
+ Fork doctoralvarez/Nyxian — version 2.3.0
  Changelog:
+  - 2.3.0 (2026-11-16): only the Swift files that changed are compiled again
+    (ForkIncrementalSwift). A file whose change is only inside function,
+    initializer or computed-property bodies (var body { ... } of a view, ...)
+    is compiled alone; a change to anything other files can see (a type, a
+    stored property, a signature, ...) or a file added or removed compiles
+    every file, as before. If such a partial build fails without an error in
+    the code (a link error, ...), the project is compiled whole at once.
+    Swift in One Pass, Automatic: only with Incremental Build off (each build
+    compiles everything then); with it on, compiling only what changed is
+    faster for the edit-and-run loop.
   - 2.2.0 (2026-11-16): #Preview blocks no longer stop a build ("plugin for
     module 'PreviewsMacros' not found": that macro plugin only ships with
     Xcode). A Swift file with #Preview is compiled from a copy in the project
@@ -55,7 +65,9 @@
     each other (forkSkipSwiftCompileIfUnchanged).
 */
 
+import Foundation
 import MobileDevelopmentKit
+import CryptoKit
 
 extension NXBuilder: MDKDriverDelegate {
     func driver(_ driver: MDKDriver,
@@ -71,13 +83,22 @@ extension NXBuilder: MDKDriverDelegate {
             /* fork: one pass (-wmo -num-threads): its extra object files get fixed paths */
             let stable = ForkBuildSpeed.stableWholeModuleOutputs(withoutPreviews, cacheURL: self.project.cacheURL)
             let manifest = self.project.cacheURL.appendingPathComponent("fork-swift-sources.txt")
-            if !(self.projectDirty || !self.incrementalBuild),
-               let skipped = NXBuilder.forkSkipSwiftCompileIfUnchanged(stable, manifestURL: manifest) {
-                return skipped
+            let interfaces = self.project.cacheURL.appendingPathComponent("fork-swift-interfaces.json")
+            if !(self.projectDirty || !self.incrementalBuild) {
+                if let skipped = NXBuilder.forkSkipSwiftCompileIfUnchanged(stable, manifestURL: manifest) {
+                    ForkBuildSpeed.beginSwiftCompile(jobs: [], allJobs: stable, manifestURL: manifest, interfacesURL: interfaces, partial: false)
+                    return skipped
+                }
+                /* fork: only the files that changed, when only their bodies did */
+                if let changedOnly = ForkIncrementalSwift.changedOnly(stable, manifestURL: manifest, interfacesURL: interfaces) {
+                    ForkBuildSpeed.beginSwiftCompile(jobs: changedOnly, allJobs: stable, manifestURL: manifest, interfacesURL: interfaces, partial: true)
+                    return changedOnly
+                }
             }
-            /* compiling: the list of sources is written again once every Swift job succeeded */
+            /* compiling everything: the lists are written again once every Swift job succeeded */
             try? FileManager.default.removeItem(at: manifest)
-            ForkBuildSpeed.beginSwiftCompile(jobs: stable, manifestURL: manifest)
+            try? FileManager.default.removeItem(at: interfaces)
+            ForkBuildSpeed.beginSwiftCompile(jobs: stable, allJobs: stable, manifestURL: manifest, interfacesURL: interfaces, partial: false)
             return stable
         }
         
@@ -293,6 +314,9 @@ extension NXBuilder {
 
     static var onePassMode: Int { UserDefaults.standard.integer(forKey: onePassKey) }
 
+    /// Settings › Toolchain › Incremental Build (on by default)
+    static var incrementalBuildOn: Bool { UserDefaults.standard.object(forKey: "LDEIncrementalBuild") as? Bool ?? true }
+
     /// Whether this build compiles all Swift files in one run
     /// set while a failed one-pass build is done again file by file
     static var forcePerFile = false
@@ -305,7 +329,8 @@ extension NXBuilder {
         switch onePassMode {
         case 1: return swiftFileCount >= 1
         case 2: return false
-        default: return swiftFileCount >= 2 && hasMoreMemory
+        /* with Incremental Build on, compiling only what changed is faster */
+        default: return swiftFileCount >= 2 && hasMoreMemory && !incrementalBuildOn
         }
     }
 
@@ -397,27 +422,36 @@ extension NXBuilder {
         sources.sorted().joined(separator: "\n")
     }
 
-    // MARK: the sources of the last good compile
+    // MARK: the sources (and interfaces) of the last good compile
 
     private static var lock = os_unfair_lock()
     private static var pendingJobs = 0
     private static var pendingFailed = false
     private static var pendingSources: Set<String> = []
+    private static var pendingInterfaces: [String: String] = [:]
     private static var pendingManifest: URL?
+    private static var pendingInterfacesURL: URL?
+    /// the last plan compiled only the files that changed
+    private(set) static var lastPlanPartial = false
 
-    static func beginSwiftCompile(jobs: [MDKJob], manifestURL: URL) {
+    static func beginSwiftCompile(jobs: [MDKJob], allJobs: [MDKJob], manifestURL: URL, interfacesURL: URL, partial: Bool) {
         let swiftJobs = jobs.filter { $0.type == .swiftCompiler }
         var sources: Set<String> = []
-        for job in swiftJobs { sources.formUnion(swiftJobFiles(job).sources) }
+        for job in allJobs where job.type == .swiftCompiler { sources.formUnion(swiftJobFiles(job).sources) }
+        /* the interfaces as they are now: what the next build compares with */
+        let interfaces = swiftJobs.isEmpty ? [:] : ForkIncrementalSwift.interfaceHashes(of: sources)
         os_unfair_lock_lock(&lock)
+        lastPlanPartial = partial
         pendingJobs = swiftJobs.count
         pendingFailed = false
         pendingSources = sources
+        pendingInterfaces = interfaces
         pendingManifest = swiftJobs.isEmpty ? nil : manifestURL
+        pendingInterfacesURL = swiftJobs.isEmpty ? nil : interfacesURL
         os_unfair_lock_unlock(&lock)
     }
 
-    /// Called for every finished Swift job; the last good one writes the list
+    /// Called for every finished Swift job; the last good one writes the lists
     static func finishedSwiftJob(success: Bool) {
         os_unfair_lock_lock(&lock)
         guard let manifest = pendingManifest else {
@@ -429,14 +463,352 @@ extension NXBuilder {
         let done = pendingJobs <= 0
         let write = done && !pendingFailed
         let text = manifestText(pendingSources)
-        if done { pendingManifest = nil }
+        let interfaces = pendingInterfaces
+        let interfacesURL = pendingInterfacesURL
+        if done {
+            pendingManifest = nil
+            pendingInterfacesURL = nil
+        }
         os_unfair_lock_unlock(&lock)
         if write {
             try? text.write(to: manifest, atomically: true, encoding: .utf8)
+            if let interfacesURL, !interfaces.isEmpty,
+               let data = try? JSONSerialization.data(withJSONObject: interfaces, options: [.sortedKeys]) {
+                try? data.write(to: interfacesURL, options: .atomic)
+            }
         }
     }
 }
 
+// MARK: - fork: compile only the Swift files that changed
+
+/// Which file-by-file Swift jobs must run. A Swift file is "changed" when it is
+/// newer than its object file. If every changed file changed only inside bodies
+/// (functions, initializers, computed properties and subscripts), the other
+/// files cannot see the change and only the changed ones are compiled. Anything
+/// else (types, stored properties, signatures, a file added or removed, a file
+/// that could not be read) means everything, as before.
+enum ForkIncrementalSwift {
+    /// The jobs to run when only some files need compiling; nil = compile all
+    static func changedOnly(_ jobs: [MDKJob], manifestURL: URL, interfacesURL: URL) -> [MDKJob]? {
+        let swiftJobs = jobs.filter { $0.type == .swiftCompiler }
+        guard !swiftJobs.isEmpty else { return nil }
+
+        var sources: Set<String> = []
+        for job in swiftJobs { sources.formUnion(ForkBuildSpeed.swiftJobFiles(job).sources) }
+        /* the same Swift files as in the last good compile */
+        guard let saved = try? String(contentsOf: manifestURL, encoding: .utf8),
+              saved == ForkBuildSpeed.manifestText(sources) else { return nil }
+        guard let data = try? Data(contentsOf: interfacesURL),
+              let stored = (try? JSONSerialization.jsonObject(with: data)) as? [String: String] else { return nil }
+
+        let fm = FileManager.default
+        func modified(_ path: String) -> Date? {
+            (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        }
+
+        var selected: Set<Int> = []
+        for (index, job) in jobs.enumerated() where job.type == .swiftCompiler {
+            /* only file-by-file jobs (one primary file, one object file) */
+            guard let primary = primaryFile(of: job) else { return nil }
+            let outputs = ForkBuildSpeed.swiftJobFiles(job).outputs
+            guard outputs.count == 1 else { return nil }
+            var changed = true
+            if let objectDate = modified(outputs[0]), let sourceDate = modified(primary) {
+                changed = sourceDate >= objectDate
+            }
+            guard changed else { continue }
+            /* changed: only bodies may differ */
+            guard let text = try? String(contentsOfFile: primary, encoding: .utf8),
+                  let hash = interfaceHash(text),
+                  let before = stored[primary], before == hash else { return nil }
+            selected.insert(index)
+        }
+        guard !selected.isEmpty else { return nil }
+        return jobs.enumerated().compactMap { index, job in
+            (job.type != .swiftCompiler || selected.contains(index)) ? job : nil
+        }
+    }
+
+    static func primaryFile(of job: MDKJob) -> String? {
+        let args = job.baseArguments ?? []
+        guard let at = args.firstIndex(of: "-primary-file"), at + 1 < args.count else { return nil }
+        return args[at + 1]
+    }
+
+    static func interfaceHashes(of sources: Set<String>) -> [String: String] {
+        var hashes: [String: String] = [:]
+        for path in sources {
+            if let text = try? String(contentsOfFile: path, encoding: .utf8), let hash = interfaceHash(text) {
+                hashes[path] = hash
+            }
+        }
+        return hashes
+    }
+
+    // MARK: the part of a file other files can see
+
+    private static let bodyKeywords: Set<String> = ["func", "init", "deinit"]
+    private static let accessorKeywords: Set<String> = ["var", "subscript"]
+    private static let declarationKeywords: Set<String> = [
+        "let", "case", "struct", "class", "enum", "protocol", "extension", "typealias",
+        "import", "actor", "associatedtype", "operator", "precedencegroup", "macro"
+    ]
+    private static let accessorWords: Set<String> = [
+        "get", "set", "async", "throws", "mutating", "nonmutating", "_read", "_modify", "rethrows"
+    ]
+
+    /// A hash of the file without comments, spacing and the contents of
+    /// function / initializer / computed-property bodies; nil if it cannot be read
+    static func interfaceHash(_ text: String) -> String? {
+        let s = Array(text.utf16)
+        var out: [UInt16] = []
+        out.reserveCapacity(s.count / 2)
+        var i = 0
+        var parenDepth = 0
+        var pending = 0          /* 0 none, 1 body follows (func/init), 2 accessor block may follow (var/subscript) */
+        var pendingBase = 0
+        var last: UInt16 = 0     /* last character written that is not a space */
+
+        func emit(_ c: UInt16) {
+            if c == 32 {
+                if out.last != 32 { out.append(32) }
+            } else {
+                out.append(c)
+                last = c
+            }
+        }
+        func emit(_ string: String) { for c in string.utf16 { emit(c) } }
+
+        while i < s.count {
+            let c = s[i]
+            let next: UInt16 = i + 1 < s.count ? s[i + 1] : 0
+            /* comments */
+            if c == 47 && next == 47 {
+                while i < s.count && s[i] != 10 { i += 1 }
+                emit(32)
+                continue
+            }
+            if c == 47 && next == 42 {
+                guard let end = skipBlockComment(s, i) else { return nil }
+                i = end
+                emit(32)
+                continue
+            }
+            /* spacing */
+            if c == 32 || c == 9 || c == 10 || c == 13 {
+                emit(32)
+                i += 1
+                continue
+            }
+            /* string literals, kept as they are */
+            if c == 34 || (c == 35 && startsRawString(s, i)) {
+                guard let end = skipString(s, i) else { return nil }
+                for k in i..<end { out.append(s[k]) }
+                last = 34
+                i = end
+                continue
+            }
+            /* words */
+            if isIdentifierStart(c) {
+                var end = i
+                while end < s.count && isIdentifierPart(s[end]) { end += 1 }
+                let word = String(utf16CodeUnits: Array(s[i..<end]), count: end - i)
+                let afterDot = last == 46
+                emit(word)
+                if !afterDot {
+                    if bodyKeywords.contains(word) {
+                        pending = 1
+                        pendingBase = parenDepth
+                    } else if accessorKeywords.contains(word) {
+                        pending = 2
+                        pendingBase = parenDepth
+                    } else if declarationKeywords.contains(word) {
+                        pending = 0
+                    }
+                }
+                i = end
+                continue
+            }
+            if c == 40 || c == 91 { parenDepth += 1 }
+            if c == 41 || c == 93 { parenDepth -= 1 }
+            if pending == 2 && c == 61 && parenDepth == pendingBase {
+                /* var x = value: a stored property (its { didSet } stays as it is) */
+                pending = 0
+            }
+            if c == 64 && parenDepth == pendingBase {
+                /* an attribute: the next declaration starts */
+                pending = 0
+            }
+            if c == 123 && pending != 0 && parenDepth == pendingBase {
+                guard let close = matchingBrace(s, i) else { return nil }
+                if pending == 1 {
+                    emit("{}")
+                } else {
+                    emit(accessorSummary(s, from: i + 1, to: close))
+                }
+                pending = 0
+                i = close + 1
+                continue
+            }
+            if c == 125 && parenDepth == pendingBase {
+                pending = 0
+            }
+            emit(c)
+            i += 1
+        }
+        let digest = SHA256.hash(data: Data(String(utf16CodeUnits: out, count: out.count).utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// What callers can see of a var / subscript block: a protocol requirement
+    /// ({ get set }) as it is; a computed body only as "get" or "get set"
+    private static func accessorSummary(_ s: [UInt16], from start: Int, to end: Int) -> String {
+        var words: [String] = []
+        var hasBraces = false
+        var depth = 0
+        var i = start
+        while i < end {
+            let c = s[i]
+            if c == 123 { depth += 1; hasBraces = true; i += 1; continue }
+            if c == 125 { depth -= 1; i += 1; continue }
+            if c == 34 || (c == 35 && startsRawString(s, i)) {
+                i = skipString(s, i) ?? end
+                continue
+            }
+            if isIdentifierStart(c) {
+                var e = i
+                while e < end && isIdentifierPart(s[e]) { e += 1 }
+                if depth == 0 { words.append(String(utf16CodeUnits: Array(s[i..<e]), count: e - i)) }
+                i = e
+                continue
+            }
+            i += 1
+        }
+        if !hasBraces && !words.isEmpty && words.allSatisfy({ accessorWords.contains($0) }) {
+            return "{" + words.joined(separator: " ") + "}"
+        }
+        let settable = words.contains("set") || words.contains("_modify")
+        return settable ? "{get set}" : "{get}"
+    }
+
+    private static func isIdentifierStart(_ c: UInt16) -> Bool {
+        (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 || c >= 128
+    }
+    private static func isIdentifierPart(_ c: UInt16) -> Bool {
+        isIdentifierStart(c) || (c >= 48 && c <= 57)
+    }
+
+    /// #"..."# or ##"..."## starts here
+    private static func startsRawString(_ s: [UInt16], _ at: Int) -> Bool {
+        var i = at
+        while i < s.count && s[i] == 35 { i += 1 }
+        return i < s.count && s[i] == 34 && i > at
+    }
+
+    /// Index after the block comment starting at `at` (comments may nest)
+    private static func skipBlockComment(_ s: [UInt16], _ at: Int) -> Int? {
+        var depth = 0
+        var i = at
+        while i < s.count {
+            let next: UInt16 = i + 1 < s.count ? s[i + 1] : 0
+            if s[i] == 47 && next == 42 { depth += 1; i += 2; continue }
+            if s[i] == 42 && next == 47 {
+                depth -= 1
+                i += 2
+                if depth == 0 { return i }
+                continue
+            }
+            i += 1
+        }
+        return nil
+    }
+
+    /// Index after the string literal starting at `at` ("...", """...""", #"..."#, with \( ) inside)
+    private static func skipString(_ s: [UInt16], _ at: Int) -> Int? {
+        var i = at
+        var hashes = 0
+        while i < s.count && s[i] == 35 { hashes += 1; i += 1 }
+        guard i < s.count && s[i] == 34 else { return nil }
+        let multiline = i + 2 < s.count && s[i + 1] == 34 && s[i + 2] == 34
+        i += multiline ? 3 : 1
+        while i < s.count {
+            let c = s[i]
+            if c == 92 {
+                /* an escape needs as many # as the literal has */
+                var k = i + 1
+                var count = 0
+                while count < hashes && k < s.count && s[k] == 35 { count += 1; k += 1 }
+                if count == hashes {
+                    if k < s.count && s[k] == 40 {
+                        /* interpolation: up to the matching ) */
+                        guard let close = matchingParen(s, k) else { return nil }
+                        i = close + 1
+                    } else {
+                        i = k + 1
+                    }
+                    continue
+                }
+            }
+            if !multiline && c == 10 && hashes == 0 { return nil }
+            if c == 34 {
+                let quoteEnd = multiline ? i + 3 : i + 1
+                if multiline && !(i + 2 < s.count && s[i + 1] == 34 && s[i + 2] == 34) {
+                    i += 1
+                    continue
+                }
+                var k = quoteEnd
+                var count = 0
+                while count < hashes && k < s.count && s[k] == 35 { count += 1; k += 1 }
+                if count == hashes { return k }
+                i += 1
+                continue
+            }
+            i += 1
+        }
+        return nil
+    }
+
+    /// The ) matching the ( at `open`, with strings and comments skipped
+    private static func matchingParen(_ s: [UInt16], _ open: Int) -> Int? {
+        matching(s, open, opening: 40, closing: 41)
+    }
+
+    /// The } matching the { at `open`, with strings and comments skipped
+    private static func matchingBrace(_ s: [UInt16], _ open: Int) -> Int? {
+        matching(s, open, opening: 123, closing: 125)
+    }
+
+    private static func matching(_ s: [UInt16], _ open: Int, opening: UInt16, closing: UInt16) -> Int? {
+        var depth = 0
+        var i = open
+        while i < s.count {
+            let c = s[i]
+            let next: UInt16 = i + 1 < s.count ? s[i + 1] : 0
+            if c == 47 && next == 47 {
+                while i < s.count && s[i] != 10 { i += 1 }
+                continue
+            }
+            if c == 47 && next == 42 {
+                guard let end = skipBlockComment(s, i) else { return nil }
+                i = end
+                continue
+            }
+            if c == 34 || (c == 35 && startsRawString(s, i)) {
+                guard let end = skipString(s, i) else { return nil }
+                i = end
+                continue
+            }
+            if c == opening { depth += 1 }
+            if c == closing {
+                depth -= 1
+                if depth == 0 { return i }
+            }
+            i += 1
+        }
+        return nil
+    }
+}
 
 // MARK: - fork: #Preview without Xcode's macro plugin
 

@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.1
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-16): the footer explains that with Incremental Build on
+    only the Swift files that changed are compiled, and that Automatic One
+    Pass is then off.
   - 1.0.1 (2026-11-15): choosing a Swift in One Pass option tries it again
     after it failed on this device; the footer says when it is off for that.
   - 1.0.0 (2026-11-15): "Speed" section: the memory iOS gives Nyxian, Swift
@@ -163,7 +166,7 @@ enum ForkBuildSpeedFooter {
             : "Now: normal memory, builds use \(ForkBuildSpeed.threads) threads (\(cores))."
         let failed = UserDefaults.standard.bool(forKey: ForkBuildSpeed.onePassFailedKey)
             ? " One Pass failed here once, so Automatic leaves it off; choose an option to try it again." : ""
-        return "Swift in One Pass compiles all Swift files of a project in a single run (whole module): SwiftUI and the other frameworks are loaded, and the code is checked, once instead of once per file, It needs more memory, so Automatic turns it on with Increased Memory Limit (or 4 GB or more) and two or more Swift files; a project of one Swift file builds the same either way. If a one-pass build fails without an error in the code, it is compiled file by file at once. All Cores uses the efficiency cores too when there is more memory. Changing these compiles the project again once. " + now + failed
+        return "Swift in One Pass compiles all Swift files of a project in a single run (whole module): SwiftUI and the other frameworks are loaded, and the code is checked, once instead of once per file, With Incremental Build on, only the Swift files that changed are compiled again when the change is inside bodies (a view's body, a function), which is faster for edit and run, so Automatic leaves One Pass off then; with Incremental Build off it turns One Pass on with Increased Memory Limit (or 4 GB or more) and two or more Swift files. Run with nothing changed opens the installed app at once. If a one-pass build fails without an error in the code, it is compiled file by file at once. All Cores uses the efficiency cores too when there is more memory. Changing these compiles the project again once. " + now + failed
     }
 }
 

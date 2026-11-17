@@ -4,6 +4,22 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.72.0 — 2026-11-16
+
+- **Only the Swift files that changed are compiled again.** A file whose
+  change is only inside bodies (a view's `var body { ... }`, a function, an
+  initializer, a computed property) is compiled alone; the others keep their
+  object files. A change other files can see (a type, a stored property, a
+  signature, ...) or a Swift file added or removed compiles everything, as
+  before. If such a build then fails without an error in the code (e.g. the
+  link), it is done again whole at once.
+- **Run with nothing changed opens the installed app at once:** no compiling,
+  linking, signing or installing (every file of the project, the build flags,
+  the bundle id and the Nyxian build must be the same, and the app installed).
+- Swift in One Pass, Automatic: now only with Incremental Build off (then
+  every build compiles everything); with it on, compiling only what changed
+  is faster for edit and run. On still forces One Pass.
+
 ## 1.71.0 — 2026-11-16
 
 - **New names for the app test switches.** Programs now start with

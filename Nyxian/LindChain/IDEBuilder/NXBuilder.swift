@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.8.0
+ Fork doctoralvarez/Nyxian — version 1.9.0
  Changelog:
+  - 1.9.0 (2026-11-16): Run with nothing changed opens the installed app at
+    once: no compiling, linking, signing or installing again (ForkRunStamp:
+    every file of the project, the build flags, the bundle id and this
+    Nyxian; the app must still be installed). A build that compiled only
+    the Swift files that changed and then fails without an error in the code
+    is done again whole.
   - 1.8.0 (2026-11-15): a one-pass Swift build that fails with no error in
     the code is done again file by file at once (and Automatic stops using
     One Pass here), so the project still builds and runs.
@@ -56,6 +62,7 @@
 import Foundation
 import Combine
 import MobileDevelopmentKit
+import CryptoKit
 
 final class NXBuilder: NSObject {
     private(set) var project: NXProject
@@ -200,6 +207,18 @@ final class NXBuilder: NSObject {
     func build() throws {
         let usedOnePass = ForkBuildSpeed.usesOnePass(swiftFileCount: ForkBuildSpeed.swiftFileCount(in: self.project.url))
         var ok = self.phaseRunner.runPhases()
+        /* fork: compiled only the changed files and failed without an error in the
+           code (e.g. the link): compile everything */
+        if !ok, !usedOnePass, ForkBuildSpeed.lastPlanPartial, !NXBuilder.forkCancelRequested, !self.forkHasSwiftErrors() {
+            let engine = try NXPhaseEngine(project: self.project)
+            engine.delegate = self
+            if let runner = NXPhaseRunner(engine: engine) {
+                runner.delegate = self
+                self.phaseRunner = runner
+                self.projectDirty = true
+                ok = runner.runPhases()
+            }
+        }
         /* fork: One Pass failed without an error in the code: build file by file */
         if !ok, usedOnePass, !NXBuilder.forkCancelRequested, !self.forkHasSwiftErrors() {
             if ForkBuildSpeed.onePassMode == 0 {
@@ -394,6 +413,17 @@ final class NXBuilder: NSObject {
                     return
                 }
                 
+                /* fork: nothing changed since the installed run: open it again at once */
+                let runStamp: String? = (buildType == .run && project.projectConfig.schemeKind == .app && builder.incrementalBuild && !builder.projectDirty)
+                    ? ForkRunStamp.compute(project: project, args: builder.argsString) : nil
+                if let runStamp, ForkRunStamp.saved(project) == runStamp,
+                   let bundleID = project.projectConfig.bundleid,
+                   LDEApplicationWorkspace.shared().applicationInstalled(withBundleID: bundleID) {
+                    completion(true, nil)
+                    return
+                }
+                ForkRunStamp.clear(project)
+                
                 var resetNeeded: Bool = false
                 func progressStage(systemName: String? = nil, increment: Double? = nil, handler: () throws -> Void) throws {
                     if NXBuilder.forkCancelRequested { throw CancellationError() }
@@ -441,6 +471,8 @@ final class NXBuilder: NSObject {
                     builder.database.addMessage(message: error.localizedDescription, severity: .error)
                 }
                 if NXBuilder.forkCancelRequested { result = false }
+                /* fork: what is installed now, for the next Run */
+                if result, buildType == .run, let runStamp { ForkRunStamp.save(project, runStamp) }
                 builder.database.saveDatabase(toPath: project.cacheURL.appendingPathComponent("debug.json").path)
                 
                 completion(result, execPath)
@@ -540,3 +572,56 @@ extension NXBuilder {
         try? combined.write(to: bundleURL.appendingPathComponent("NyxianShaders.metal"), atomically: true, encoding: .utf8)
     }
 }
+
+// MARK: - fork: Run when nothing changed
+
+/// A fingerprint of everything a Run installs: every file of the project (path,
+/// size, date), the build flags, the bundle id and this Nyxian build. Saved after
+/// a Run that installed the app; the same fingerprint later means the installed
+/// app is still current.
+enum ForkRunStamp {
+    static func url(_ project: NXProject) -> URL {
+        project.cacheURL.appendingPathComponent("fork-run-stamp.txt")
+    }
+
+    static func saved(_ project: NXProject) -> String? {
+        try? String(contentsOf: url(project), encoding: .utf8)
+    }
+
+    static func save(_ project: NXProject, _ stamp: String) {
+        try? stamp.write(to: url(project), atomically: true, encoding: .utf8)
+    }
+
+    static func clear(_ project: NXProject) {
+        try? FileManager.default.removeItem(at: url(project))
+    }
+
+    static func compute(project: NXProject, args: String) -> String? {
+        let root = project.url.standardizedFileURL
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys, options: []) else { return nil }
+        var lines: [String] = []
+        let rootPath = root.path
+        for case let file as URL in walker {
+            guard let values = try? file.resourceValues(forKeys: Set(keys)), values.isRegularFile == true else { continue }
+            let ext = file.pathExtension.lowercased()
+            if ext == "o" || ext == "tmp" { continue }
+            var path = file.standardizedFileURL.path
+            if path.hasPrefix(rootPath) { path = String(path.dropFirst(rootPath.count)) }
+            let date = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+            lines.append("\(path)|\(values.fileSize ?? -1)|\(Int64(date * 1000))")
+        }
+        lines.sort()
+        var nyxian = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? ""
+        if let exe = Bundle.main.executableURL,
+           let date = (try? exe.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate {
+            nyxian += "|\(Int64(date.timeIntervalSince1970))"
+        }
+        lines.append("args:" + args)
+        lines.append("bundle:" + (project.projectConfig.bundleid ?? ""))
+        lines.append("nyxian:" + nyxian)
+        let digest = SHA256.hash(data: Data(lines.joined(separator: "\n").utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
