@@ -180,7 +180,7 @@ final class NXBuilder: NSObject {
     /// fork: object files and Nyxian's build notes of this project, for a clean build
     private func forkRemoveBuildProducts() {
         let fm = FileManager.default
-        let cache = self.project.cacheURL
+        guard let cache: URL = self.project.cacheURL else { return }
         for name in ["NoPreviews", "WholeModule", "fork-swift-sources.txt", "fork-swift-interfaces.json", "fork-run-stamp.txt", "args.txt"] {
             try? fm.removeItem(at: cache.appendingPathComponent(name))
         }
