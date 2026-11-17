@@ -94,14 +94,6 @@ class CodeEditorCoordinator: NSObject, TextViewDelegate {
     private func checkPython() {
         guard let parent = self.parent, let url = parent.file.fileURL else { return }
         let text = parent.textView.text
-        /* fork: Live Issues off: the compiler does not check while typing */
-        if !(UserDefaults.standard.object(forKey: "fork.liveIssues") as? Bool ?? true) {
-            self.diag = []
-            self.updateDiag()
-            return
-        }
-        /* fork: the text is read here, on the main thread */
-        let mainText: String = self.parent?.textView.text ?? ""
         self.isProcessing = true
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var found: [MDKDiagnostic] = []
@@ -131,6 +123,14 @@ class CodeEditorCoordinator: NSObject, TextViewDelegate {
             checkPython()
             return
         }
+        /* fork: Live Issues off: the compiler does not check while typing */
+        if !(UserDefaults.standard.object(forKey: "fork.liveIssues") as? Bool ?? true) {
+            self.diag = []
+            self.updateDiag()
+            return
+        }
+        /* fork: the text is read here, on the main thread */
+        let mainText: String = self.parent?.textView.text ?? ""
         self.isProcessing = true
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
