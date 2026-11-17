@@ -22,8 +22,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-17): "<container>/*" no longer lists SystemData. It is
+    the system's folder in the app container: iOS never lets an app hand out
+    access to it, so every program with host access logged
+    "issue failed: …/SystemData" (harmless, nothing used it). The recovery
+    terminal already left it out.
   - 1.2.0 (2026-11-13): NXForkPermissionICloudSimulated — per-program
     "simulate iCloud" switch (default on) read by PEProcess.
   - 1.1.0 (2026-11-12): NXForkPermissionStoreKitSimulated — per-program
@@ -300,6 +305,8 @@ static NSArray<NSString *> *PEResolveEntitlementPaths(NSString *pathTemplate,
     NSMutableArray<NSString *> *paths = [NSMutableArray arrayWithCapacity:entries.count];
     for(NSString *name in entries)
     {
+        /* fork: the system's folder in the container; iOS refuses access to it */
+        if([name isEqualToString:@"SystemData"]) continue;
         [paths addObject:[dir stringByAppendingPathComponent:name]];
     }
     [paths sortUsingSelector:@selector(compare:)];

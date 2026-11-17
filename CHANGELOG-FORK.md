@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.72.2 — 2026-11-17
+
+- Kernel log: no more `issue failed: …/SystemData`. Programs with host access
+  are given every folder of the app container, and the list included
+  SystemData, the system's own folder there, which iOS never lets an app share
+  (nothing used it, the message was harmless). It is now left out, as the
+  recovery terminal already did.
+
 ## 1.72.1 — 2026-11-16
 
 - **No more silent "Failed to run project."** Compiler errors without a file
