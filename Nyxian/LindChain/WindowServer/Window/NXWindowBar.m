@@ -20,6 +20,15 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-17): iPhone: the title bar is 32 pt high instead of 50
+    (more room for the app) with a smaller title, and shows close (red) and
+    minimize (yellow) buttons at the left, like the iPad shows close and
+    maximize. Pulling the bar down still minimizes.
+*/
+
 #import <LindChain/WindowServer/Window/NXWindowBar.h>
 
 static inline UIColor *RGBHex(uint32_t hex)
@@ -58,7 +67,8 @@ static inline UIColor *RGBHex(uint32_t hex)
     self.clipsToBounds = NO;
     
     BOOL isiPad  = (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad);
-    CGFloat barH = isiPad ? 38.0 : 50.0;
+    /* fork: a lower bar on iPhone leaves more room for the app */
+    CGFloat barH = isiPad ? 38.0 : 32.0;
     
     _safeAreaFill = [[UIView alloc] init];
     _safeAreaFill.translatesAutoresizingMaskIntoConstraints = NO;
@@ -87,7 +97,7 @@ static inline UIColor *RGBHex(uint32_t hex)
     _titleLabel.text = title;
     _titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
     _titleLabel.textAlignment = NSTextAlignmentCenter;
-    _titleLabel.font = [UIFont systemFontOfSize:isiPad ? 13 : 17 weight:UIFontWeightSemibold];
+    _titleLabel.font = [UIFont systemFontOfSize:isiPad ? 13 : 14 weight:UIFontWeightSemibold];
     [self addSubview:_titleLabel];
     
     UIView *border = [[UIView alloc] init];
@@ -212,6 +222,32 @@ static inline UIColor *RGBHex(uint32_t hex)
         UITapGestureRecognizer *bgTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleBackgroundTap:)];
         bgTap.cancelsTouchesInView = NO;
         [self addGestureRecognizer:bgTap];
+    }
+    
+    if(!isiPad)
+    {
+        /* fork: close and minimize at the left, like close and maximize on iPad */
+        _closeButton = [self _phoneButtonWithImage:@"xmark.circle.fill" color:RGBHex(0xFF5F57) callback:closeCallback];
+        __weak typeof(self) weakSelf = self;
+        _minimizeButton = [self _phoneButtonWithImage:@"minus.circle.fill" color:RGBHex(0xFEBC2E) callback:^{
+            void (^minimize)(void) = weakSelf.minimizeCallback;
+            if(minimize) minimize();
+        }];
+        UIStackView *phoneStack = [[UIStackView alloc] initWithArrangedSubviews:@[_closeButton, _minimizeButton]];
+        phoneStack.translatesAutoresizingMaskIntoConstraints = NO;
+        phoneStack.axis = UILayoutConstraintAxisHorizontal;
+        phoneStack.spacing = 10.0;
+        [self addSubview:phoneStack];
+        [NSLayoutConstraint activateConstraints:@[
+            [phoneStack.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:10.0],
+            [phoneStack.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+            [_closeButton.widthAnchor constraintEqualToConstant:24.0],
+            [_closeButton.heightAnchor constraintEqualToConstant:24.0],
+            [_minimizeButton.widthAnchor constraintEqualToConstant:24.0],
+            [_minimizeButton.heightAnchor constraintEqualToConstant:24.0],
+            /* the title never runs under the buttons */
+            [_titleLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:phoneStack.trailingAnchor constant:8.0],
+        ]];
     }
     
     UIBlurEffect *barBlur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterial];
@@ -345,6 +381,29 @@ static inline UIColor *RGBHex(uint32_t hex)
     {
         [btn addAction:[UIAction actionWithHandler:^(__kindof UIAction *a) {
             [self resetCollapseTimer];
+            callback();
+        }] forControlEvents:UIControlEventTouchUpInside];
+    }
+    return btn;
+}
+
+/* fork: an iPhone bar button (no island there) */
+- (NXHitSurfaceButton *)_phoneButtonWithImage:(NSString *)name
+                                        color:(UIColor *)color
+                                     callback:(void (^)(void))callback
+{
+    UIButtonConfiguration *cfg = [UIButtonConfiguration plainButtonConfiguration];
+    cfg.preferredSymbolConfigurationForImage = [UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold];
+    cfg.image = [UIImage systemImageNamed:name];
+    cfg.baseForegroundColor = color;
+    cfg.contentInsets = NSDirectionalEdgeInsetsZero;
+    
+    NXHitSurfaceButton *btn = [NXHitSurfaceButton buttonWithConfiguration:cfg primaryAction:nil];
+    btn.hitSurface = UIEdgeInsetsMake(-6, -6, -6, -6);
+    btn.translatesAutoresizingMaskIntoConstraints = NO;
+    if(callback)
+    {
+        [btn addAction:[UIAction actionWithHandler:^(__kindof UIAction *a) {
             callback();
         }] forControlEvents:UIControlEventTouchUpInside];
     }

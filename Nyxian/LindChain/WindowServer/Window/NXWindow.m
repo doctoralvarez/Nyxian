@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-17): iPhone: the bar's minimize button sends the app to
+    the background the same way as pulling the bar down.
   - 1.0.0 (2026-11-15): when light / dark mode changes, the app inside the
     window gets it (forkApplyInterfaceStyle).
 */
@@ -167,6 +169,11 @@
     }
     else
     {
+        /* fork: the minimize button in the bar */
+        _windowBar.minimizeCallback = ^{
+            [weakSelf forkMinimizeAnimated];
+        };
+        
         /* this is to close the app on iPhone lol */
         UIPanGestureRecognizer *pullDownGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(minimizeWindow:)];
         [_windowBar addGestureRecognizer:pullDownGesture];
@@ -508,6 +515,23 @@ static inline CGSize EVSizeForAspect(CGSize base,
     }
 }
 
+/* fork: slides the window down and sends the app to the background
+   (pulling the bar down, or the iPhone minimize button) */
+- (void)forkMinimizeAnimated
+{
+    UIView *windowView = self.view;
+    [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionCurveEaseInOut | UIViewAnimationOptionBeginFromCurrentState animations:^{
+        windowView.transform = CGAffineTransformMakeTranslation(0, windowView.bounds.size.height + 100);
+        windowView.alpha = 0;
+    } completion:^(BOOL finished) {
+        windowView.transform = CGAffineTransformIdentity;
+        windowView.alpha = 1.0;
+        [windowView removeFromSuperview];
+        [self.session deactivateWindow];
+        [self.delegate windowWantsToMinimize:self];
+    }];
+}
+
 - (void)minimizeWindow:(UIPanGestureRecognizer *)gesture
 {
     UIView *windowView = self.view;
@@ -533,16 +557,7 @@ static inline CGSize EVSizeForAspect(CGSize base,
             BOOL shouldDismiss = (offsetY > 150 || velocityY > 600);
             if(shouldDismiss)
             {
-                [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionCurveEaseInOut | UIViewAnimationOptionBeginFromCurrentState animations:^{
-                    windowView.transform = CGAffineTransformMakeTranslation(0, windowView.bounds.size.height + 100);
-                    windowView.alpha = 0;
-                } completion:^(BOOL finished) {
-                    windowView.transform = CGAffineTransformIdentity;
-                    windowView.alpha = 1.0;
-                    [windowView removeFromSuperview];
-                    [self.session deactivateWindow];
-                    [self.delegate windowWantsToMinimize:self];
-                }];
+                [self forkMinimizeAnimated];
             }
             else
             {

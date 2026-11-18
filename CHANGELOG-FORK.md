@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.74.0 — 2026-11-17
+
+- **iPhone: a lower title bar for apps** (32 pt instead of 50, smaller title),
+  so the app gets more of the screen.
+- **iPhone: close and minimize buttons in that bar** (red ✕ and yellow −, at
+  the left), like the iPad shows close and maximize. Minimize sends the app to
+  the background the same way as pulling the bar down (which still works).
+
 ## 1.73.0 — 2026-11-17
 
 - **Crash while opening a big Swift file:** the live Swift checks (issues while

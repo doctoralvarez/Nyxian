@@ -20,6 +20,13 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-17): iPhone: minimizeButton and minimizeCallback (the bar
+    shows close and minimize, like the iPad shows close and maximize).
+*/
+
 #ifndef NXWINDOWBAR_H
 #define NXWINDOWBAR_H
 
@@ -32,6 +39,9 @@
 
 @property (nonatomic,strong) NXHitSurfaceButton *closeButton;
 @property (nonatomic,strong) NXHitSurfaceButton *maximizeButton;
+/* fork: iPhone only */
+@property (nonatomic,strong) NXHitSurfaceButton *minimizeButton;
+@property (nonatomic,copy) void (^minimizeCallback)(void);
 @property (nonatomic,strong,getter=getTitle,setter=setTitle:) NSString *title;
 
 - (instancetype)initWithTitle:(NSString*)title withCloseCallback:(void (^)(void))closeCallback withMaximizeCallback:(void (^)(void))maximizeCallback;
