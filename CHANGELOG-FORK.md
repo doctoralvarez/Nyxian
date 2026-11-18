@@ -4,6 +4,13 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.75.0 — 2026-11-17
+
+- A build started in **Low Power Mode**, or while iOS is slowing the device
+  down because it is **hot**, leaves a warning under "Device" in the Issue
+  Navigator saying why it may be slower (the result is the same). Replaced on
+  every build; nothing when all is normal.
+
 ## 1.74.0 — 2026-11-17
 
 - **iPhone: a lower title bar for apps** (32 pt instead of 50, smaller title),

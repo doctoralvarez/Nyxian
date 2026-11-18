@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.10.0
+ Fork doctoralvarez/Nyxian — version 1.11.0
  Changelog:
+  - 1.11.0 (2026-11-17): a build started in Low Power Mode, or while iOS is
+    slowing the device down because it is hot, leaves a warning under
+    "Device" in the Issue Navigator saying why it may be slower (replaced
+    on every build; nothing when all is normal).
   - 1.10.0 (2026-11-16): a build that fails without any error is done once
     more from a clean state (the project's compiled files and Nyxian's build
     notes removed, file by file); if it still fails, what the compiler
@@ -482,6 +486,9 @@ final class NXBuilder: NSObject {
                 }
                 ForkRunStamp.clear(project)
                 
+                /* fork: why this build may be slower (Low Power Mode, heat) */
+                ForkDeviceSpeedNotice.report(into: builder.database)
+                
                 var resetNeeded: Bool = false
                 func progressStage(systemName: String? = nil, increment: Double? = nil, handler: () throws -> Void) throws {
                     if NXBuilder.forkCancelRequested { throw CancellationError() }
@@ -712,6 +719,30 @@ enum ForkStderrCapture {
         }
         unlink(path)
         return result
+    }
+}
+
+// MARK: - fork: Low Power Mode and heat
+
+/// A build in Low Power Mode, or while iOS slows the device down because it is
+/// hot, takes longer; a warning under "Device" says so (only then).
+enum ForkDeviceSpeedNotice {
+    static let title = "Device"
+
+    static func report(into database: DebugDatabase) {
+        database.debugObjects[title] = nil
+        let info = ProcessInfo.processInfo
+        if info.isLowPowerModeEnabled {
+            database.addMessage(message: "Low Power Mode is on: iOS runs the processor slower, so building (and the app) can take noticeably longer. The result is the same.", title: title, severity: .warning)
+        }
+        switch info.thermalState {
+        case .serious:
+            database.addMessage(message: "The device is hot and iOS is slowing it down: building can take longer until it cools.", title: title, severity: .warning)
+        case .critical:
+            database.addMessage(message: "The device is very hot and iOS is slowing it down a lot: building will be much slower until it cools.", title: title, severity: .warning)
+        default:
+            break
+        }
     }
 }
 
