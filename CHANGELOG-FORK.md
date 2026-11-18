@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.78.0 — 2026-11-18
+
+- **Settings › Customization › This Device** (under Live Issues): the model
+  code Nyxian sees (`iPhone19,4`, `iPad16,5`, …) with its common name (iPhone
+  18 Pro Max, iPad Pro 13" (M4), iPhone Duo, …), the screen size in inches,
+  the screen right now in points and pixels, iOS version, RAM and the layout
+  Nyxian uses (on iPhone Duo also which screen is in use). Tap to copy.
+  Covers iPhone 11 to iPhone 18 / Duo and iPads from 2021 on.
+
 ## 1.77.0 — 2026-11-18
 
 - **iPhone Duo:** Nyxian recognizes it (iPhone19,4). On its large inner screen

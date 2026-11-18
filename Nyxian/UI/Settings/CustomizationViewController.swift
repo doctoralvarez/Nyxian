@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.10.0
+ Fork doctoralvarez/Nyxian — version 1.11.0
  Changelog:
+  - 1.11.0 (2026-11-18): "This Device" under Live Issues: the model code
+    (iPhone19,4 …) with its common name, screen size in inches, the screen
+    in points and pixels now, iOS version, RAM and the layout Nyxian uses
+    (iPad / iPhone). Tap it to copy. The iPhone Duo Layout row moves one
+    down.
   - 1.10.0 (2026-11-18): on iPhone Duo, "iPhone Duo Layout": Automatic (the
     iPad layout when Nyxian starts on the large inner screen), iPad or
     iPhone; it applies the next time Nyxian opens.
@@ -110,7 +115,7 @@ class CustomizationViewController: NXUITableViewController {
             return 4
         case 1:
             /* fork: one more row on iPhone Duo */
-            return NXForkIsIPhoneDuo() ? 17 : 16
+            return NXForkIsIPhoneDuo() ? 18 : 17
         case 2:
             return self.icons.count
         default:
@@ -199,13 +204,23 @@ int main(void)
                 /* fork: hold ⌘ for the shortcut list */
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
                 (cell as! ToggleTableCell).configure(title: "Shortcut List (hold ⌘)", key: "fork.shortcutHUD", defaultValue: true)
-            } else if indexPath.row == 16 {
+            } else if indexPath.row == 17 {
                 /* fork: iPhone Duo's large inner screen */
                 let picker = PickerTableCell(options: ["Automatic", "iPad (large screen)", "iPhone"], title: "iPhone Duo Layout", key: "fork.duoLayout", defaultValue: 0)
                 picker.callback = { _ in
                     NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Close and open Nyxian again to use the new layout", withDelay: 0.0)
                 }
                 cell = picker
+            } else if indexPath.row == 16 {
+                /* fork: which device Nyxian is running on */
+                let info = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+                info.textLabel?.text = "This Device"
+                info.detailTextLabel?.text = ForkDeviceInfo.summary(view: tableView)
+                info.detailTextLabel?.numberOfLines = 0
+                info.detailTextLabel?.font = UIFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+                info.detailTextLabel?.textColor = .secondaryLabel
+                info.imageView?.image = UIImage(systemName: NXForkIsPadLayout() ? "ipad" : "iphone")
+                cell = info
             } else if indexPath.row == 15 {
                 /* fork: the compiler checking the code while you type */
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
@@ -279,6 +294,12 @@ int main(void)
     
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
+        /* fork: This Device: copy what it shows */
+        if indexPath.section == 1 && indexPath.row == 16 {
+            UIPasteboard.general.string = ForkDeviceInfo.summary(view: tableView)
+            NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Device info copied", withDelay: 0.0)
+            return
+        }
         guard indexPath.section == 2 else { return }
 
         let iconName = icons[indexPath.row]
@@ -318,6 +339,143 @@ enum ForkAppearance {
             }
         }
         NXWindowServer.shared()?.forkApplyAppearance()
+    }
+}
+
+// MARK: - fork: This Device
+
+/// The device Nyxian runs on: model code (hw.machine), common name, screen size
+enum ForkDeviceInfo {
+    /// model code → (name, screen)
+    static let models: [String: (String, String)] = [
+        /* iPhone */
+        "iPhone12,1": ("iPhone 11", "6.1\""),
+        "iPhone12,3": ("iPhone 11 Pro", "5.8\""),
+        "iPhone12,5": ("iPhone 11 Pro Max", "6.5\""),
+        "iPhone12,8": ("iPhone SE (2nd generation)", "4.7\""),
+        "iPhone13,1": ("iPhone 12 mini", "5.4\""),
+        "iPhone13,2": ("iPhone 12", "6.1\""),
+        "iPhone13,3": ("iPhone 12 Pro", "6.1\""),
+        "iPhone13,4": ("iPhone 12 Pro Max", "6.7\""),
+        "iPhone14,2": ("iPhone 13 Pro", "6.1\""),
+        "iPhone14,3": ("iPhone 13 Pro Max", "6.7\""),
+        "iPhone14,4": ("iPhone 13 mini", "5.4\""),
+        "iPhone14,5": ("iPhone 13", "6.1\""),
+        "iPhone14,6": ("iPhone SE (3rd generation)", "4.7\""),
+        "iPhone14,7": ("iPhone 14", "6.1\""),
+        "iPhone14,8": ("iPhone 14 Plus", "6.7\""),
+        "iPhone15,2": ("iPhone 14 Pro", "6.1\""),
+        "iPhone15,3": ("iPhone 14 Pro Max", "6.7\""),
+        "iPhone15,4": ("iPhone 15", "6.1\""),
+        "iPhone15,5": ("iPhone 15 Plus", "6.7\""),
+        "iPhone16,1": ("iPhone 15 Pro", "6.1\""),
+        "iPhone16,2": ("iPhone 15 Pro Max", "6.7\""),
+        "iPhone17,1": ("iPhone 16 Pro", "6.3\""),
+        "iPhone17,2": ("iPhone 16 Pro Max", "6.9\""),
+        "iPhone17,3": ("iPhone 16", "6.1\""),
+        "iPhone17,4": ("iPhone 16 Plus", "6.7\""),
+        "iPhone17,5": ("iPhone 16e", "6.1\""),
+        "iPhone18,1": ("iPhone 17 Pro", "6.3\""),
+        "iPhone18,2": ("iPhone 17 Pro Max", "6.9\""),
+        "iPhone18,3": ("iPhone 17", "6.3\""),
+        "iPhone18,4": ("iPhone Air", "6.5\""),
+        "iPhone18,5": ("iPhone 17e", "6.1\""),
+        "iPhone19,2": ("iPhone 18 Pro", "6.3\""),
+        "iPhone19,3": ("iPhone 18 Pro Max", "6.9\""),
+        "iPhone19,7": ("iPhone 18 Pro Max", "6.9\""),
+        "iPhone19,4": ("iPhone Duo", "7.6\" inner, 5.4\" outer"),
+        /* iPad */
+        "iPad12,1": ("iPad (9th generation)", "10.2\""),
+        "iPad12,2": ("iPad (9th generation)", "10.2\""),
+        "iPad13,1": ("iPad Air (4th generation)", "10.9\""),
+        "iPad13,2": ("iPad Air (4th generation)", "10.9\""),
+        "iPad13,4": ("iPad Pro 11\" (3rd generation, M1)", "11\""),
+        "iPad13,5": ("iPad Pro 11\" (3rd generation, M1)", "11\""),
+        "iPad13,6": ("iPad Pro 11\" (3rd generation, M1)", "11\""),
+        "iPad13,7": ("iPad Pro 11\" (3rd generation, M1)", "11\""),
+        "iPad13,8": ("iPad Pro 12.9\" (5th generation, M1)", "12.9\""),
+        "iPad13,9": ("iPad Pro 12.9\" (5th generation, M1)", "12.9\""),
+        "iPad13,10": ("iPad Pro 12.9\" (5th generation, M1)", "12.9\""),
+        "iPad13,11": ("iPad Pro 12.9\" (5th generation, M1)", "12.9\""),
+        "iPad13,16": ("iPad Air (5th generation, M1)", "10.9\""),
+        "iPad13,17": ("iPad Air (5th generation, M1)", "10.9\""),
+        "iPad13,18": ("iPad (10th generation)", "10.9\""),
+        "iPad13,19": ("iPad (10th generation)", "10.9\""),
+        "iPad14,1": ("iPad mini (6th generation)", "8.3\""),
+        "iPad14,2": ("iPad mini (6th generation)", "8.3\""),
+        "iPad14,3": ("iPad Pro 11\" (4th generation, M2)", "11\""),
+        "iPad14,4": ("iPad Pro 11\" (4th generation, M2)", "11\""),
+        "iPad14,5": ("iPad Pro 12.9\" (6th generation, M2)", "12.9\""),
+        "iPad14,6": ("iPad Pro 12.9\" (6th generation, M2)", "12.9\""),
+        "iPad14,8": ("iPad Air 11\" (M2)", "11\""),
+        "iPad14,9": ("iPad Air 11\" (M2)", "11\""),
+        "iPad14,10": ("iPad Air 13\" (M2)", "13\""),
+        "iPad14,11": ("iPad Air 13\" (M2)", "13\""),
+        "iPad15,3": ("iPad Air 11\" (M3)", "11\""),
+        "iPad15,4": ("iPad Air 11\" (M3)", "11\""),
+        "iPad15,5": ("iPad Air 13\" (M3)", "13\""),
+        "iPad15,6": ("iPad Air 13\" (M3)", "13\""),
+        "iPad15,7": ("iPad (A16)", "11\""),
+        "iPad15,8": ("iPad (A16)", "11\""),
+        "iPad16,1": ("iPad mini (A17 Pro)", "8.3\""),
+        "iPad16,2": ("iPad mini (A17 Pro)", "8.3\""),
+        "iPad16,3": ("iPad Pro 11\" (M4)", "11\""),
+        "iPad16,4": ("iPad Pro 11\" (M4)", "11\""),
+        "iPad16,5": ("iPad Pro 13\" (M4)", "13\""),
+        "iPad16,6": ("iPad Pro 13\" (M4)", "13\""),
+        "iPad16,8": ("iPad Air 11\" (M4)", "11\""),
+        "iPad16,9": ("iPad Air 11\" (M4)", "11\""),
+        "iPad16,10": ("iPad Air 13\" (M4)", "13\""),
+        "iPad16,11": ("iPad Air 13\" (M4)", "13\""),
+        "iPad17,1": ("iPad Pro 11\" (M5)", "11\""),
+        "iPad17,2": ("iPad Pro 11\" (M5)", "11\""),
+        "iPad17,3": ("iPad Pro 13\" (M5)", "13\""),
+        "iPad17,4": ("iPad Pro 13\" (M5)", "13\""),
+        "iPad19,1": ("iPad mini (A20 Pro)", "8.5\""),
+        "iPad19,2": ("iPad mini (A20 Pro)", "8.5\"")
+    ]
+
+    /// hw.machine: "iPhone19,4", "iPad16,5", …
+    static var modelCode: String {
+        var system = utsname()
+        uname(&system)
+        let code = withUnsafePointer(to: &system.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: system.machine)) {
+                String(cString: $0)
+            }
+        }
+        /* the simulator says arm64; the device it plays is in the environment */
+        if let simulated = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] { return simulated }
+        return code
+    }
+
+    static func summary(view: UIView?) -> String {
+        let code = modelCode
+        let known = models[code]
+        let name = known?.0 ?? "Unknown model (newer than Nyxian's list)"
+        var lines: [String] = []
+        lines.append("\(name) · \(code)")
+        if let screen = known?.1 { lines.append("Screen: \(screen)") }
+
+        let windowScene = view?.window?.windowScene
+        let bounds = windowScene?.coordinateSpace.bounds ?? view?.window?.bounds ?? .zero
+        let scale = view?.window?.traitCollection.displayScale ?? view?.traitCollection.displayScale ?? 0
+        if bounds.width > 0 && scale > 0 {
+            let points = "\(Int(bounds.width)) × \(Int(bounds.height)) pt"
+            let pixels = "\(Int(bounds.width * scale)) × \(Int(bounds.height * scale)) px @\(Int(scale))x"
+            lines.append("Now: \(points) · \(pixels)")
+        }
+
+        let device = UIDevice.current
+        let ram = ByteCountFormatter.string(fromByteCount: Int64(ProcessInfo.processInfo.physicalMemory), countStyle: .memory)
+        lines.append("\(device.systemName) \(device.systemVersion) · RAM \(ram)")
+
+        var layout = NXForkIsPadLayout() ? "iPad layout" : "iPhone layout"
+        if NXForkIsIPhoneDuo() {
+            layout += NXForkDuoInnerDisplayNow() ? " · inner screen in use" : " · outer screen in use"
+        }
+        lines.append(layout)
+        return lines.joined(separator: "\n")
     }
 }
 
