@@ -8,6 +8,11 @@ on:
     branches:
       - '**'
   workflow_dispatch:
+    inputs:
+      clean_build:
+        description: 'Clean build (your own Mac: delete the compiled files kept from earlier builds)'
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -368,10 +373,34 @@ jobs:
 
       - name: Build Nyxian
         timeout-minutes: 1200
+        env:
+          # fork: on your own Mac, compiled files are reused from one build to the next
+          # (Xcode's compilation cache in DerivedData). NYXIAN_CLEAN_BUILD = "1" (repository
+          # variable), or "Run workflow" with "clean build", deletes them and builds from zero.
+          OWN_MAC: ${{ runner.environment == 'self-hosted' }}
+          CLEAN_BUILD: ${{ vars.NYXIAN_CLEAN_BUILD == '1' || github.event.inputs.clean_build == 'true' }}
         run: |
           set -e
 
+          if [ "$OWN_MAC" = "true" ]; then
+            if [ "$CLEAN_BUILD" = "true" ]; then
+              echo "Clean build: removing Nyxian's DerivedData"
+              rm -rf "$HOME"/Library/Developer/Xcode/DerivedData/Nyxian-*
+            fi
+            # an xcconfig on top of the project's, read by xcodebuild (Makefile unchanged,
+            # so the LLVM cache key stays the same)
+            cat > "$RUNNER_TEMP/fork-own-mac.xcconfig" <<'XCCONFIG'
+          COMPILATION_CACHE_ENABLE_CACHING = YES
+          XCCONFIG
+            export XCODE_XCCONFIG_FILE="$RUNNER_TEMP/fork-own-mac.xcconfig"
+            du -sh "$HOME"/Library/Developer/Xcode/DerivedData/Nyxian-* 2>/dev/null || echo "No DerivedData yet (first build here)"
+          fi
+
           CHECK_DEPS=0 make all
+
+          if [ "$OWN_MAC" = "true" ]; then
+            echo "DerivedData kept for the next build"
+          fi
 
       # fork: the archive is built without signing, so the IPA carried no entitlements
       # and a signer (SideStore, …) never asked for more memory. ldid writes them into
