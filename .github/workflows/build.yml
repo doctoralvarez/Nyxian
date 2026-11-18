@@ -35,7 +35,11 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version || true
           # Xcode 27 ships without the Metal compiler (Nyxian has .metal shaders)
-          xcrun -f metal >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain || true
+          # (xcrun finds a stub even when it is missing, so check by running it)
+          if ! xcrun metal --version >/dev/null 2>&1; then
+            xcodebuild -downloadComponent MetalToolchain || sudo -n xcodebuild -downloadComponent MetalToolchain || true
+          fi
+          xcrun metal --version 2>&1 | head -2 || true
 
       # fork: LLVM-On-iOS is now part of this repository (was a submodule of emexlab's);
       # libroot and TrollStore are not used by the build, so no submodule is fetched
