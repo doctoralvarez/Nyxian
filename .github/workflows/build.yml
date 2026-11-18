@@ -43,9 +43,19 @@ jobs:
           submodules: false
 
       - name: Set up Python 3.14 (fork, terminal test)
+        id: setup-python
+        # fork: the Xcode 27 Mac has no tool cache under /Users/runner; then Homebrew's
+        continue-on-error: true
         uses: actions/setup-python@v5
         with:
           python-version: '3.14'
+
+      - name: Python 3.14 from Homebrew (fork)
+        if: steps.setup-python.outcome != 'success'
+        run: |
+          brew install python@3.14
+          echo "$(brew --prefix python@3.14)/libexec/bin" >> "$GITHUB_PATH"
+          echo "PIP_BREAK_SYSTEM_PACKAGES=1" >> "$GITHUB_ENV"
 
       - name: Test Python terminal (fork)
         run: python3 tools/fork/test_python_terminal.py
