@@ -22,8 +22,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-18): iPad-only layout checks now ask NXForkIsPadLayout(),
+      so iPhone Duo's large inner screen gets the iPad layout too.
   - 1.0.0 (2026-11-10): no "Welcome to Nyxian" screen (Development,
     MobileDevelopmentKit…) after installing; Recovery › Settings › "Show
     welcome screen" brings it back.
@@ -131,7 +133,7 @@ final class SlotCoordinator: NSObject, UITabBarControllerDelegate, UIOnboardingV
         
         var viewControllers: [UIViewController] = [contentNavigationController, settingsNavigationController]
         
-        if UIDevice.current.userInterfaceIdiom == .phone {
+        if !NXForkIsPadLayout() {
             if #available(iOS 26.0, *) {
                 if !NXApplicationState.extensionLessMode {
                     let fakeViewController = UIViewController()

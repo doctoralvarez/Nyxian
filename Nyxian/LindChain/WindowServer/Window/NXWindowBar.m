@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-18): iPad-only layout checks now ask NXForkIsPadLayout(),
+      so iPhone Duo's large inner screen gets the iPad layout too.
   - 1.0.0 (2026-11-17): iPhone: the title bar is 32 pt high instead of 50
     (more room for the app) with a smaller title, and shows close (red) and
     minimize (yellow) buttons at the left, like the iPad shows close and
@@ -30,6 +32,7 @@
 */
 
 #import <LindChain/WindowServer/Window/NXWindowBar.h>
+#import <LindChain/WindowServer/NXWindowServer.h>
 
 static inline UIColor *RGBHex(uint32_t hex)
 {
@@ -66,7 +69,7 @@ static inline UIColor *RGBHex(uint32_t hex)
     self.translatesAutoresizingMaskIntoConstraints = NO;
     self.clipsToBounds = NO;
     
-    BOOL isiPad  = (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad);
+    BOOL isiPad  = (NXForkIsPadLayout());
     /* fork: a lower bar on iPhone leaves more room for the app */
     CGFloat barH = isiPad ? 38.0 : 32.0;
     
@@ -109,7 +112,7 @@ static inline UIColor *RGBHex(uint32_t hex)
     _windowBarHeightConstraint = [self.heightAnchor constraintEqualToConstant:barH];
     _windowBarHeightConstraint.active = YES;
     
-    if([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad)
+    if(NXForkIsPadLayout())
     {
         [_titleLabel.centerYAnchor constraintEqualToAnchor:self.bottomAnchor constant:-19.0].active = YES;
     }
@@ -431,7 +434,7 @@ static inline UIColor *RGBHex(uint32_t hex)
 
 - (void)setFullscreen:(BOOL)fullscreen animated:(BOOL)animated
 {
-    if([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad)
+    if(NXForkIsPadLayout())
     {
         CGFloat safeTop = self.window.safeAreaInsets.top;
         CGFloat baseHeight = 38.0;

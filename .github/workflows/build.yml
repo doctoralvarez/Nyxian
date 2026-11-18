@@ -17,14 +17,24 @@ jobs:
   build:
     name: Build and Package
     # fork: your own Mac (a self-hosted runner) when the repository variable
-    # NYXIAN_RUNNER is "self-hosted"; otherwise GitHub's Mac. Pull requests always
-    # go to GitHub's Mac, so nobody else's code ever runs on your computer.
-    runs-on: ${{ (github.event_name != 'pull_request' && vars.NYXIAN_RUNNER == 'self-hosted') && fromJSON('["self-hosted","macOS","ARM64"]') || 'macos-latest' }}
+    # NYXIAN_RUNNER is "self-hosted"; otherwise GitHub's Mac with Xcode 27 (iOS 27
+    # SDK: needed for iPhone Duo's inner screen, older SDKs run letterboxed there).
+    # NYXIAN_RUNNER = "macos-latest" goes back to the Xcode 26 Mac. Pull requests
+    # always go to GitHub's Mac, so nobody else's code ever runs on your computer.
+    runs-on: ${{ (github.event_name != 'pull_request' && vars.NYXIAN_RUNNER == 'self-hosted') && fromJSON('["self-hosted","macOS","ARM64"]') || (vars.NYXIAN_RUNNER == 'macos-latest' && 'macos-latest' || 'xcode-27') }}
     env:
       # fork: your PRIVATE backup repository (SDK, toolchain, Python runtime, IPAs); token: secret SDK_REPO_TOKEN
       BACKUP_REPO: ${{ vars.BACKUP_REPO || 'doctoralvarez/nyxian-sdk' }}
 
     steps:
+      - name: Show Xcode
+        # fork: which Xcode and SDK built this IPA (the newest Xcode 27.x when there are several)
+        run: |
+          NEWEST=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | grep -v -i beta | sort -V | tail -1 || true)
+          if [ -n "$NEWEST" ]; then sudo -n xcode-select -s "$NEWEST" || true; fi
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version || true
+
       # fork: LLVM-On-iOS is now part of this repository (was a submodule of emexlab's);
       # libroot and TrollStore are not used by the build, so no submodule is fetched
       - name: Checkout repository

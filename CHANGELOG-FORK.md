@@ -4,6 +4,20 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.77.0 — 2026-11-18
+
+- **iPhone Duo:** Nyxian recognizes it (iPhone19,4). On its large inner screen
+  iOS still reports a phone, so every "iPad layout?" check now asks
+  `NXForkIsPadLayout()`: started on the inner screen, Nyxian uses the iPad
+  layout (side-by-side file list and editor, floating app windows with close
+  and maximize, larger fonts, ...). On the outer screen it stays the iPhone
+  layout. The layout is chosen when Nyxian starts; opening or closing the
+  phone later shows a note to reopen Nyxian. Settings › Customization ›
+  iPhone Duo Layout (only on iPhone Duo): Automatic, iPad or iPhone.
+- **Built with Xcode 27 (iOS 27 SDK)** on GitHub's `xcode-27` Mac: apps built
+  with older SDKs run letterboxed on iPhone Duo's inner screen. The repository
+  variable `NYXIAN_RUNNER = macos-latest` goes back to the Xcode 26 Mac.
+
 ## 1.76.0 — 2026-11-17
 
 - **Build Times in the Issue Navigator** after every build: the total and each

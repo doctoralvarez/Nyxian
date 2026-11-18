@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-18): iPad-only layout checks now ask NXForkIsPadLayout(),
+      so iPhone Duo's large inner screen gets the iPad layout too.
   - 1.0.0 (2026-11-09): -forkProcessSnapshot (every process of Nyxian's
     kernel: pid, parent, group, session, name, state, CPU, memory, threads)
     and -forkSendSignal:toProcessIdentifier: for the process monitor.
@@ -37,6 +39,7 @@
 #import <LindChain/ProcEnvironment/PEProcessManager.h>
 #import <LindChain/ProcEnvironment/Server/Server.h>
 #import <LindChain/WindowServer/Session/NXWindowSessionApplication.h>
+#import <LindChain/WindowServer/NXWindowServer.h>
 #import <Frameworks/LiveProcessLegacy/LindChain/Services/bootstrapd/LDEApplicationWorkspace.h>
 #import <LindChain/IDEFoundation/NXBootstrap.h>
 #import <Nyxian-Swift.h>
@@ -112,7 +115,7 @@
         if(windowSession != nil && windowSession.window != nil && !doRestartIfRunning)
         {
             
-            if(UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone)
+            if(!NXForkIsPadLayout())
             {
                 [[NXWindowServer shared] activateWindowForIdentifier:windowSession.windowIdentifier animated:true withCompletion:nil];
             }

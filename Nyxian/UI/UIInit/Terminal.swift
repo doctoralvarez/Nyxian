@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.6.2
+ Fork doctoralvarez/Nyxian — version 1.7.0
  Changelog:
+  - 1.7.0 (2026-11-18): iPad-only layout checks now ask NXForkIsPadLayout(),
+      so iPhone Duo's large inner screen gets the iPad layout too.
   - 1.6.2 (2026-11-10): more local-server lines open the browser ("listening
     at", "Local:" of Vite, "Servidor en", node servers).
   - 1.6.1 (2026-11-10): the key bar scrolls sideways when the slide starts on
@@ -140,7 +142,7 @@ import UIKit
         self.backgroundColor = LDETheme.currentTheme?.backgroundColor ?? .secondarySystemBackground
         self.nativeForegroundColor = LDETheme.currentTheme?.textColor ?? gibDynamicColor(light: .label, dark: self.nativeForegroundColor)
         self.caretTextColor = LDETheme.currentTheme?.textColor ?? gibDynamicColor(light: .label, dark: self.nativeForegroundColor)
-        self.font = UIFont.monospacedSystemFont(ofSize: (UIDevice.current.userInterfaceIdiom == .pad) ? 14 : 10, weight: .regular)
+        self.font = UIFont.monospacedSystemFont(ofSize: (NXForkIsPadLayout()) ? 14 : 10, weight: .regular)
         
         self.ttyHandle?.readabilityHandler = { [weak self] fileHandle in
             guard let self = self else { return }
@@ -396,7 +398,7 @@ final class ForkTerminalKeyBar: UIInputView {
     
     init(terminal: TerminalViewObjC) {
         self.terminal = terminal
-        let height: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? 40 : 48
+        let height: CGFloat = !NXForkIsPadLayout() ? 40 : 48
         super.init(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: height), inputViewStyle: .keyboard)
         /* fixed height from the frame: with self-sizing the bar could come back with no height */
         allowsSelfSizing = false
@@ -512,7 +514,7 @@ final class ForkTerminalKeyBar: UIInputView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     
     override var intrinsicContentSize: CGSize {
-        CGSize(width: UIView.noIntrinsicMetric, height: UIDevice.current.userInterfaceIdiom == .phone ? 40 : 48)
+        CGSize(width: UIView.noIntrinsicMetric, height: !NXForkIsPadLayout() ? 40 : 48)
     }
     
     private func send(_ bytes: [UInt8]) {
@@ -521,7 +523,7 @@ final class ForkTerminalKeyBar: UIInputView {
     }
     
     private func makeKey(title: String?, symbol: String?, tint: UIColor = .label, action: @escaping () -> Void) -> UIButton {
-        let phone = UIDevice.current.userInterfaceIdiom == .phone
+        let phone = !NXForkIsPadLayout()
         var configuration = UIButton.Configuration.gray()
         configuration.cornerStyle = .medium
         configuration.contentInsets = NSDirectionalEdgeInsets(top: 2, leading: phone ? 6 : 8, bottom: 2, trailing: phone ? 6 : 8)

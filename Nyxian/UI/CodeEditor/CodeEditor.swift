@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.21.0
+ Fork doctoralvarez/Nyxian — version 1.22.0
  Changelog:
+  - 1.22.0 (2026-11-18): iPad-only layout checks now ask
+      NXForkIsPadLayout(), so iPhone Duo's large inner screen gets the iPad
+      layout too.
   - 1.21.0 (2026-11-12): saving a Swift file (⌘S) tells the App Preview
     panel, which builds again and comes back when there are no errors.
   - 1.20.0 (2026-11-10): Java — .java files run with miniJVM (▶, ⌘R, Run
@@ -213,7 +216,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         
         NXDocumentManager.shared().open(URL(fileURLWithPath: self.file.fileURL.path)) { [weak self] doc in
             guard let doc = doc else {
-                if UIDevice.current.userInterfaceIdiom != .pad {
+                if !NXForkIsPadLayout() {
                     self?.dismiss(animated: true)
                 } else {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: {
@@ -292,7 +295,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             self.textView.textContainerInset = UIEdgeInsets(top: 2, left: 2, bottom: 2, right: 0)
         } else {
             if #available(iOS 26.0, *),
-               UIDevice.current.userInterfaceIdiom == .pad {
+               NXForkIsPadLayout() {
                 self.textView.textContainerInset = UIEdgeInsets(top: 20, left: 2, bottom: 20, right: 0)
                 self.textView.gutterLeadingPadding = 10
             } else {
@@ -377,7 +380,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             textView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
         
-        if UIDevice.current.userInterfaceIdiom == .phone {
+        if !NXForkIsPadLayout() {
             self.setupToolbar(textView: self.textView)
         } else if #unavailable(iOS 26.0) {
             if GCKeyboard.coalesced == nil {
@@ -617,7 +620,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         
         /* fork: on iPhone the bar has no room for every key (the last one, hide
            keyboard, ended up cut off): the less used ones go into a ⋯ menu */
-        let compactBar = UIDevice.current.userInterfaceIdiom == .phone
+        let compactBar = !NXForkIsPadLayout()
         var moreActions: [UIAction] = []
         func addKey(_ symbol: String, _ title: String, _ action: @escaping () -> Void) {
             if compactBar {
@@ -820,7 +823,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
     }
     
     private func showSaveAnimation() {
-        if UIDevice.current.userInterfaceIdiom == .pad {
+        if NXForkIsPadLayout() {
             let layer = view.layer
             
             let originalColor = layer.borderColor ?? UIColor.clear.cgColor
@@ -852,12 +855,12 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(updateUndoRedoButtons), name: .NSUndoManagerDidRedoChange, object: textView.undoManager)
         NotificationCenter.default.addObserver(self, selector: #selector(updateUndoRedoButtons), name: .NSUndoManagerDidCloseUndoGroup, object: textView.undoManager)
         
-        if UIDevice.current.userInterfaceIdiom == .pad {
+        if NXForkIsPadLayout() {
             NotificationCenter.default.addObserver(self, selector: #selector(hardwareKeyboardDidConnect), name: .GCKeyboardDidConnect, object: nil)
             NotificationCenter.default.addObserver(self, selector: #selector(hardwareKeyboardDidDisconnect), name: .GCKeyboardDidDisconnect, object: nil)
         }
         
-        if UIDevice.current.userInterfaceIdiom == .pad {
+        if NXForkIsPadLayout() {
             self.coordinator?.textViewDidChange(self.textView)
         }
     }
@@ -1094,7 +1097,7 @@ class CodeEditorViewController: UIViewController, NXDocumentDelegate {
             isInsideProject = false
         }
         
-        if UIDevice.current.userInterfaceIdiom != .pad {
+        if !NXForkIsPadLayout() {
             guard let destEditor = CodeEditorViewController(project: isInsideProject ? self.project : nil, url: def.fileURL, line: def.location.line, column: def.location.column, isReadOnly: !isInsideProject) else {
                 return
             }
@@ -3231,7 +3234,7 @@ extension CodeEditorViewController {
             return
         }
         let isInsideProject = self.project.map { url.path.hasPrefix(($0.url as URL).path) } ?? false
-        if UIDevice.current.userInterfaceIdiom != .pad {
+        if !NXForkIsPadLayout() {
             guard let editor = CodeEditorViewController(project: isInsideProject ? self.project : nil, url: url, line: line, column: column, isReadOnly: !isInsideProject) else { return }
             let navigation = UINavigationController(rootViewController: editor)
             navigation.modalPresentationStyle = .pageSheet

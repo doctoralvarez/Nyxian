@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.41.0
+ Fork doctoralvarez/Nyxian — version 1.42.0
  Changelog:
+  - 1.42.0 (2026-11-18): iPad-only layout checks now ask
+      NXForkIsPadLayout(), so iPhone Duo's large inner screen gets the iPad
+      layout too.
   - 1.41.0 (2026-11-15): hold a project and drag it up or down to put it
     where you want inside its section; the order is kept.
   - 1.40.0 (2026-11-13): Playgrounds sync (ForkPlaygroundsSync.swift): the
@@ -649,7 +652,7 @@ import Network
         let project: NXProject = sectionProjects[indexPath.row]
         let cell: ProjectTableCell = self.tableView.dequeueReusableCell(withIdentifier: ProjectTableCell.reuseIdentifier) as! ProjectTableCell
         let (icon, iconKey) = forkProjectIcon(project)
-        cell.configure(displayName: project.projectConfig.displayName, bundleIdentifier: project.projectConfig.bundleid, appIcon: icon, showArrow: UIDevice.current.userInterfaceIdiom != .pad, cacheKey: iconKey)
+        cell.configure(displayName: project.projectConfig.displayName, bundleIdentifier: project.projectConfig.bundleid, appIcon: icon, showArrow: !NXForkIsPadLayout(), cacheKey: iconKey)
         return cell
     }
     
@@ -668,7 +671,7 @@ import Network
         
         let selectedProject: NXProject = sectionProjects[indexPath.row]
         
-        if UIDevice.current.userInterfaceIdiom == .pad {
+        if NXForkIsPadLayout() {
             let padFileVC: MainSplitViewController = MainSplitViewController(project: selectedProject)
             padFileVC.modalPresentationStyle = .fullScreen
             self.present(padFileVC, animated: true)
@@ -2880,7 +2883,7 @@ final class ForkPythonCellOutputsViewController: UIViewController {
         header.text = "In [\(n)]" + String(format: "  ·  %.2f s", seconds) + (failed ? "  ·  error" : "")
         box.addArrangedSubview(header)
         
-        let size: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 14 : 12
+        let size: CGFloat = NXForkIsPadLayout() ? 14 : 12
         let source = (cell["source"] as? String ?? "").trimmingCharacters(in: .newlines)
         let lines = source.components(separatedBy: "\n")
         let code = UILabel()
@@ -3061,7 +3064,7 @@ enum ForkOrientation {
         switch UserDefaults.standard.integer(forKey: key) {
         case 1: return .portrait
         case 2: return .landscape
-        default: return UIDevice.current.userInterfaceIdiom == .pad ? .all : .allButUpsideDown
+        default: return NXForkIsPadLayout() ? .all : .allButUpsideDown
         }
     }
     
@@ -7696,7 +7699,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     /// UserDefaults key of the font size of Python windows (Settings → Customization, A−/A+ in the key bar).
     static let fontSizeKey = "fork.python.fontSize.v2"   /* v2: new defaults, earlier sizes are not kept */
     /// 24 pt on iPad, 18 on iPhone (Nyxian's terminal: 14 and 10).
-    static var defaultFontSize: Int { UIDevice.current.userInterfaceIdiom == .pad ? 24 : 18 }
+    static var defaultFontSize: Int { NXForkIsPadLayout() ? 24 : 18 }
     static var fontSize: Int {
         let saved = UserDefaults.standard.integer(forKey: fontSizeKey)
         return saved > 0 ? saved : defaultFontSize
@@ -8023,7 +8026,7 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                 let source = root.appendingPathComponent(relative)
                 ForkPythonIssues.setRuntime(file: source, line: line, message: info["message"] as? String ?? "Error")
                 DispatchQueue.main.async {
-                    if UIDevice.current.userInterfaceIdiom == .pad, FileManager.default.fileExists(atPath: source.path) {
+                    if NXForkIsPadLayout(), FileManager.default.fileExists(atPath: source.path) {
                         NotificationCenter.default.post(name: Notification.Name("FileListAct"), object: ["open", source.path, "\(line)", "1", "0"])
                     }
                 }
@@ -10294,7 +10297,7 @@ extension ContentViewController {
 
     /// Opens a project as a tap on its row does, then one of its files.
     func forkOpenProject(_ project: NXProject, file: URL?) {
-        if UIDevice.current.userInterfaceIdiom == .pad {
+        if NXForkIsPadLayout() {
             let padFileVC = MainSplitViewController(project: project)
             padFileVC.modalPresentationStyle = .fullScreen
             present(padFileVC, animated: true) {
@@ -10549,7 +10552,7 @@ final class ForkNotebookViewController: UIViewController {
     }
 
     private func render() {
-        let size: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 14 : 12
+        let size: CGFloat = NXForkIsPadLayout() ? 14 : 12
         let mono = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
         var count = 0
         for cell in notebook.cells {
@@ -10683,5 +10686,27 @@ extension ContentViewController: UITableViewDragDelegate, UITableViewDropDelegat
         projectsList[key] = list
         ForkManualOrder.save(list.map { $0.url.lastPathComponent }, for: "projects:" + key)
     }
+}
+
+// MARK: - fork: iPhone Duo opened or closed
+
+extension ContentViewController {
+    /// The layout is chosen when Nyxian starts; opening or closing an iPhone
+    /// Duo later says how to switch (Automatic only)
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        guard NXForkIsIPhoneDuo(), UserDefaults.standard.integer(forKey: "fork.duoLayout") == 0 else { return }
+        coordinator.animate(alongsideTransition: nil) { _ in
+            let inner = NXForkDuoInnerDisplayNow()
+            guard inner != NXForkIsPadLayout(), inner != ContentViewController.forkLastDuoNotice else { return }
+            ContentViewController.forkLastDuoNotice = inner
+            let message = inner
+                ? "Large screen: close and open Nyxian again to use the iPad layout"
+                : "Small screen: close and open Nyxian again to use the iPhone layout"
+            NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: message, withDelay: 0.0)
+        }
+    }
+
+    private static var forkLastDuoNotice: Bool? = nil
 }
 

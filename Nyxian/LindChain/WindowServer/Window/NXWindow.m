@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-18): iPad-only layout checks now ask NXForkIsPadLayout(),
+      so iPhone Duo's large inner screen gets the iPad layout too.
   - 1.1.0 (2026-11-17): iPhone: the bar's minimize button sends the app to
     the background the same way as pulling the bar down.
   - 1.0.0 (2026-11-15): when light / dark mode changes, the app inside the
@@ -101,7 +103,7 @@
     _contentStack.backgroundColor = UIColor.systemBackgroundColor;
     
     _contentStack.layer.cornerRadius = 20;
-    if(UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone)
+    if(!NXForkIsPadLayout())
     {
         _contentStack.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner;
     }
@@ -134,7 +136,7 @@
     [_contentStack sendSubviewToBack:_session.view];
     [_session didMoveToParentViewController:self];
     
-    if(UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad)
+    if(NXForkIsPadLayout())
     {
         /* this is to move the window obviously */
         UIPanGestureRecognizer *moveGesture =
@@ -235,7 +237,7 @@
 {
     assert([NSThread isMainThread]);
     
-    if(UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone)
+    if(!NXForkIsPadLayout())
     {
         return;
     }
@@ -309,7 +311,7 @@
             self.view.frame = newFrame;
             [self.view layoutIfNeeded];
             
-            if(UIDevice.currentDevice.userInterfaceIdiom != UIUserInterfaceIdiomPhone)
+            if(NXForkIsPadLayout())
             {
                 self->_contentStack.layer.cornerRadius = 20;
             }
@@ -335,7 +337,7 @@
             self.view.frame = newFrame;
             [self.view layoutIfNeeded];
             
-            if(UIDevice.currentDevice.userInterfaceIdiom != UIUserInterfaceIdiomPhone)
+            if(NXForkIsPadLayout())
             {
                 self->_contentStack.layer.cornerRadius = 0;
             }
@@ -578,7 +580,7 @@ static inline CGSize EVSizeForAspect(CGSize base,
     
     dispatch_once(&_viewDidAppearOnceDispatch, ^{
         // MARK: Suppose to only run on phones
-        if([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPhone)
+        if(!NXForkIsPadLayout())
         {
             [self maximizeWindow:NO];
         }

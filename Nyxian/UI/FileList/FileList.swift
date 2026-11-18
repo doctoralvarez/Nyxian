@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.15.0
+ Fork doctoralvarez/Nyxian — version 1.16.0
  Changelog:
+  - 1.16.0 (2026-11-18): iPad-only layout checks now ask
+      NXForkIsPadLayout(), so iPhone Duo's large inner screen gets the iPad
+      layout too.
   - 1.15.0 (2026-11-15): hold a file or folder and drag it up or down to put
     it where you want; each folder and subfolder keeps its own order.
   - 1.14.0 (2026-11-12): Export .ipa › Capabilities: iCloud, Increased Memory
@@ -224,7 +227,7 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             self.title = URL(fileURLWithPath: self.path).lastPathComponent
         }
         
-        if UIDevice.current.userInterfaceIdiom == .pad, !self.isSublink {
+        if NXForkIsPadLayout(), !self.isSublink {
             self.navigationItem.setLeftBarButton(UIBarButtonItem(primaryAction: UIAction(title: "Close") { [weak self] _ in
                 guard let self = self else { return }
                 UserDefaults.standard.set(nil, forKey: "LDELastProjectSelected")
@@ -288,7 +291,7 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             navigationController?.setToolbarHidden(true, animated: true)
             tabBarController?.tabBar.isHidden = false
             
-            if UIDevice.current.userInterfaceIdiom == .pad,
+            if NXForkIsPadLayout(),
                !self.isSublink {
                 self.navigationItem.setLeftBarButton(UIBarButtonItem(primaryAction: UIAction(title: "Close") { [weak self] _ in
                     guard let self = self else { return }
@@ -537,7 +540,7 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
         var rootMenuChildren: [UIMenu] = []
         
         // Project Roots Menu in case its the root of the project obviously
-        if !self.isSublink, UIDevice.current.userInterfaceIdiom != .pad, let project = self.project {
+        if !self.isSublink, !NXForkIsPadLayout(), let project = self.project {
             var projectMenuElements: [UIMenuElement] = []
             if !NXApplicationState.extensionLessMode {
                 projectMenuElements.append(UIAction(title: "Run", image: UIImage(systemName: "play.fill"), handler: { [weak self] _ in
@@ -3526,7 +3529,7 @@ final class ForkDebugSession {
             guard let self else { return }
             self.stopNumber += 1
             self.lastStop = stop
-            if UIDevice.current.userInterfaceIdiom != .pad {
+            if !NXForkIsPadLayout() {
                 ForkPhoneConsole.shared.show()
             } else if let threads = stop["threads"] as? [[String: Any]],
                       let index = stop["thread"] as? Int, index < threads.count,
@@ -3750,7 +3753,7 @@ final class ForkStopViewController: UITableViewController {
         tableView.deselectRow(at: indexPath, animated: true)
         let frame = threads[indexPath.section].frames[indexPath.row]
         guard let file = frame["file"] as? String, let line = frame["line"] as? Int, FileManager.default.fileExists(atPath: file) else { return }
-        if UIDevice.current.userInterfaceIdiom == .pad {
+        if NXForkIsPadLayout() {
             dismiss(animated: true) {
                 NotificationCenter.default.post(name: Notification.Name("FileListAct"), object: ["open", file, "\(line)", "1", "0"])
             }

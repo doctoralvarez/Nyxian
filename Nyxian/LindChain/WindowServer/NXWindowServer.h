@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-18): NXForkIsPadLayout / NXForkIsIPhoneDuo /
+    NXForkDuoInnerDisplayNow (iPhone Duo's large inner screen gets the iPad
+    layout).
   - 1.0.0 (2026-11-15): NXForkAppearanceOverride / NXForkAppearanceStyle and
     -forkApplyAppearance (Customization › Appearance).
 */
@@ -89,6 +92,15 @@ static NXWindowServerPresentationState const NXWindowServerPresentationStateOutO
    Style = what an app scene gets (the device's mode when automatic). */
 UIKIT_EXTERN UIUserInterfaceStyle NXForkAppearanceOverride(void);
 UIKIT_EXTERN UIUserInterfaceStyle NXForkAppearanceStyle(void);
+
+/* fork: iPhone Duo (iPhone19,4). Its inner screen is iPad-sized but iOS still
+   reports a phone, so the layout question is asked here instead of the idiom.
+   NXForkIsPadLayout: iPad, or iPhone Duo opened on its inner screen when
+   Nyxian started (Settings › Customization › iPhone Duo Layout); decided once
+   per launch. NXForkDuoInnerDisplayNow: the inner screen is in use now. */
+UIKIT_EXTERN BOOL NXForkIsPadLayout(void);
+UIKIT_EXTERN BOOL NXForkIsIPhoneDuo(void);
+UIKIT_EXTERN BOOL NXForkDuoInnerDisplayNow(void);
 
 #endif /* NXWINDOWSERVER_H */
 

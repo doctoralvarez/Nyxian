@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.6.0
+ Fork doctoralvarez/Nyxian — version 1.7.0
  Changelog:
+  - 1.7.0 (2026-11-18): iPad-only layout checks now ask NXForkIsPadLayout(),
+      so iPhone Duo's large inner screen gets the iPad layout too.
   - 1.6.0 (2026-11-16): the switches are called "Review StoreKit" and "Review
     iCloud" and the footer names REVISAR_STOREKIT and REVISAR_ICLOUD.
   - 1.5.1 (2026-11-14): the footer names the new variables Simulate_StoreKit
@@ -763,7 +765,7 @@ final class ForkKernelLogViewController: UIViewController, UISearchBarDelegate {
     private func render(_ text: String, scrollToEnd: Bool) {
         let atEnd = textView.contentOffset.y + textView.bounds.height >= textView.contentSize.height - 40
         let body = filtered(text)
-        let size: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 13 : 11
+        let size: CGFloat = NXForkIsPadLayout() ? 13 : 11
         let font = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
         let result = NSMutableAttributedString()
         if body.isEmpty {

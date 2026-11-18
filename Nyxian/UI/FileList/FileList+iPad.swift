@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.5.0
+ Fork doctoralvarez/Nyxian — version 1.6.0
  Changelog:
+  - 1.6.0 (2026-11-18): iPad-only layout checks now ask NXForkIsPadLayout(),
+      so iPhone Duo's large inner screen gets the iPad layout too.
   - 1.5.0 (2026-11-12): App Preview — a panel at the right of the editor
     (app projects, iPad) with the running app inside, like the preview of
     Swift Playgrounds, without #Preview or PreviewProvider. It loads once
@@ -1095,7 +1097,7 @@ enum ForkAppPreview {
     }
 
     static func isAvailable(for project: NXProject) -> Bool {
-        UIDevice.current.userInterfaceIdiom == .pad
+        NXForkIsPadLayout()
             && isEnabled
             && !NXApplicationState.extensionLessMode
             && project.projectConfig.schemeKind == .app

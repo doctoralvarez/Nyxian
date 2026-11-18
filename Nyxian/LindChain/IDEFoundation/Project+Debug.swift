@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-18): iPad-only layout checks now ask NXForkIsPadLayout(),
+      so iPhone Duo's large inner screen gets the iPad layout too.
   - 1.2.0 (2026-11-17): Build Times rows use digits of equal width (the
     bars and seconds line up).
   - 1.1.0 (2026-11-16): diagnostics on a file's copy without #Preview
@@ -479,7 +481,7 @@ class UIDebugViewController: UITableViewController {
         
         let fileURL = URL(fileURLWithPath: target.path)
         
-        if UIDevice.current.userInterfaceIdiom == .pad {
+        if NXForkIsPadLayout() {
             NotificationCenter.default.post(name: Notification.Name("FileListAct"), object: ["open",fileURL.path,"\(target.line)","\(target.column)"])
             self.dismiss(animated: true)
         } else {

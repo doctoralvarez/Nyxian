@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-18): iPad-only layout checks now ask NXForkIsPadLayout(),
+      so iPhone Duo's large inner screen gets the iPad layout too.
   - 1.3.0 (2026-11-15): -forkApplyAppearance: the window server takes the
     appearance chosen in Customization (or follows the device) and every app
     window inside gets its light / dark mode.
@@ -97,7 +99,7 @@
         _activeWindowIdentifier = (id_t)-1;
         _appSwitcherView = nil;
         
-        if(UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad)
+        if(NXForkIsPadLayout())
         {
             [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
             [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(orientationChanged:) name:UIDeviceOrientationDidChangeNotification object:nil];
@@ -328,7 +330,7 @@
 
 - (void)windowsGetOutOfMyWay
 {
-    if(UIDevice.currentDevice.userInterfaceIdiom != UIUserInterfaceIdiomPad)
+    if(!NXForkIsPadLayout())
     {
         return;
     }
@@ -340,7 +342,7 @@
 
 - (void)windowsGetInMyWay
 {
-    if(UIDevice.currentDevice.userInterfaceIdiom != UIUserInterfaceIdiomPad)
+    if(!NXForkIsPadLayout())
     {
         return;
     }
@@ -388,7 +390,7 @@
     
     NXWindow *window = self.windows[@(_activeWindowIdentifier)];
     if(window != nil &&
-       [[UIDevice currentDevice] userInterfaceIdiom] != UIUserInterfaceIdiomPad)
+       !NXForkIsPadLayout())
     {
         // close first the old one and wait
         [self deactivateWindowByPullDown:YES withIdentifier:_activeWindowIdentifier withCompletion:^{
@@ -441,7 +443,7 @@
     [self bringSubviewToFront:_windowLayer];
     [_windowLayer setUserInteractionEnabled:YES];
 
-    if(UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone)
+    if(!NXForkIsPadLayout())
     {
         /* iOS 26 and above uses the tabbar button instead of gesture */
         if(@available(iOS 26.0, *))
@@ -1050,7 +1052,7 @@
     /* checking if maximised */
     if(window.isMaximized)
     {
-        if([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad)
+        if(NXForkIsPadLayout())
         {
             return self.bounds;
         }

@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-18): NXForkIsPadLayout and the iPhone Duo checks; the
+    iPad-only window behavior here also applies to iPhone Duo's inner screen.
   - 1.0.0 (2026-11-15): apps run inside Nyxian follow light / dark mode. Their
     scene never got a user interface style, so they stayed in one mode (in
     Swift Playgrounds they follow the device). The scene now starts with the
@@ -35,6 +37,7 @@
 #import <LindChain/WindowServer/NXWindowServer.h>
 #import <LindChain/ProcEnvironment/PEExtension.h>
 #import <LindChain/Utils/Swizzle.h>
+#include <sys/sysctl.h>
 #import <Frameworks/LiveProcessLegacy/LindChain/Services/bootstrapd/LDEApplicationWorkspace.h>
 #import <LindChain/ProcEnvironment/Surface/libkern/klog.h>
 #import <objc/runtime.h>
@@ -110,6 +113,63 @@ static os_unfair_lock g_window_rects_lock = OS_UNFAIR_LOCK_INIT;
     }
     
     _contentView = contentView;
+}
+
+/* fork: iPhone Duo */
+BOOL NXForkIsIPhoneDuo(void)
+{
+    static BOOL duo = NO;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        char machine[64] = {0};
+        size_t length = sizeof(machine) - 1;
+        if(sysctlbyname("hw.machine", machine, &length, NULL, 0) == 0)
+        {
+            duo = (strcmp(machine, "iPhone19,4") == 0);
+        }
+    });
+    return duo;
+}
+
+BOOL NXForkDuoInnerDisplayNow(void)
+{
+    if(!NXForkIsIPhoneDuo()) return NO;
+    CGSize size = CGSizeZero;
+    for(UIScene *scene in UIApplication.sharedApplication.connectedScenes)
+    {
+        if([scene isKindOfClass:UIWindowScene.class])
+        {
+            UIWindowScene *windowScene = (UIWindowScene *)scene;
+            for(UIWindow *window in windowScene.windows)
+            {
+                if(window.bounds.size.width > size.width) size = window.bounds.size;
+            }
+            if(CGSizeEqualToSize(size, CGSizeZero)) size = windowScene.coordinateSpace.bounds.size;
+            break;
+        }
+    }
+    if(CGSizeEqualToSize(size, CGSizeZero)) size = UIScreen.mainScreen.bounds.size;
+    /* outer screen about 466 x 678 pt, inner about 626 x 890 pt */
+    return MIN(size.width, size.height) >= 560.0;
+}
+
+BOOL NXForkIsPadLayout(void)
+{
+    static BOOL value = NO;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        if(UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad)
+        {
+            value = YES;
+            return;
+        }
+        if(!NXForkIsIPhoneDuo()) return;
+        /* 0 Automatic (the screen in use when Nyxian starts), 1 iPad layout, 2 iPhone layout */
+        NSInteger mode = [NSUserDefaults.standardUserDefaults integerForKey:@"fork.duoLayout"];
+        if(mode == 2) return;
+        value = (mode == 1) || NXForkDuoInnerDisplayNow();
+    });
+    return value;
 }
 
 UIUserInterfaceStyle NXForkAppearanceOverride(void)
@@ -188,7 +248,7 @@ UIUserInterfaceStyle NXForkAppearanceStyle(void)
 + (void)bringSessionToFrontWithBundleIdentifier:(NSString*)bundleIdentifier
 {
     assert([NSThread isMainThread]);
-    if(UIDevice.currentDevice.userInterfaceIdiom != UIUserInterfaceIdiomPad) return;
+    if(!NXForkIsPadLayout()) return;
     NXWindowServer *windowServer = [NXWindowServer shared];
     assert(windowServer != nil);
     
@@ -223,7 +283,7 @@ UIUserInterfaceStyle NXForkAppearanceStyle(void)
         settings.frame = self.view.frame;
         /* fork: light or dark like the device (or the chosen appearance) */
         settings.userInterfaceStyle = NXForkAppearanceStyle();
-        if(UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone)
+        if(!NXForkIsPadLayout())
         {
             UIEdgeInsets insets = settings.safeAreaInsetsPortrait;
             insets.bottom = NXWindowServer.shared.safeAreaInsets.bottom;
@@ -322,7 +382,7 @@ UIUserInterfaceStyle NXForkAppearanceStyle(void)
     }
     os_unfair_lock_unlock(&g_window_rects_lock);
     
-    if(UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad &&
+    if(NXForkIsPadLayout() &&
        self.process.applicationObject != nil && self.process.applicationObject.isFullscreenRequired)
     {
         CGRect screenRect = UIScreen.mainScreen.bounds;

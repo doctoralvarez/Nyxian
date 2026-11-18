@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.9.0
+ Fork doctoralvarez/Nyxian — version 1.10.0
  Changelog:
+  - 1.10.0 (2026-11-18): on iPhone Duo, "iPhone Duo Layout": Automatic (the
+    iPad layout when Nyxian starts on the large inner screen), iPad or
+    iPhone; it applies the next time Nyxian opens.
   - 1.9.0 (2026-11-17): "Live Issues (check while typing)" toggle: off, the
     editor no longer runs the compiler while you type (errors still show
     when you build).
@@ -106,7 +109,8 @@ class CustomizationViewController: NXUITableViewController {
         case 0:
             return 4
         case 1:
-            return 16
+            /* fork: one more row on iPhone Duo */
+            return NXForkIsIPhoneDuo() ? 17 : 16
         case 2:
             return self.icons.count
         default:
@@ -195,6 +199,13 @@ int main(void)
                 /* fork: hold ⌘ for the shortcut list */
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
                 (cell as! ToggleTableCell).configure(title: "Shortcut List (hold ⌘)", key: "fork.shortcutHUD", defaultValue: true)
+            } else if indexPath.row == 16 {
+                /* fork: iPhone Duo's large inner screen */
+                let picker = PickerTableCell(options: ["Automatic", "iPad (large screen)", "iPhone"], title: "iPhone Duo Layout", key: "fork.duoLayout", defaultValue: 0)
+                picker.callback = { _ in
+                    NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Close and open Nyxian again to use the new layout", withDelay: 0.0)
+                }
+                cell = picker
             } else if indexPath.row == 15 {
                 /* fork: the compiler checking the code while you type */
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
