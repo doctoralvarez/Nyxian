@@ -437,13 +437,11 @@ enum ForkDeviceInfo {
 
     /// hw.machine: "iPhone19,4", "iPad16,5", …
     static var modelCode: String {
-        var system = utsname()
-        uname(&system)
-        let code = withUnsafePointer(to: &system.machine) {
-            $0.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: system.machine)) {
-                String(cString: $0)
-            }
-        }
+        var size = 0
+        sysctlbyname("hw.machine", nil, &size, nil, 0)
+        var buffer = [CChar](repeating: 0, count: max(size, 1))
+        sysctlbyname("hw.machine", &buffer, &size, nil, 0)
+        let code = String(cString: buffer)
         /* the simulator says arm64; the device it plays is in the environment */
         if let simulated = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] { return simulated }
         return code
