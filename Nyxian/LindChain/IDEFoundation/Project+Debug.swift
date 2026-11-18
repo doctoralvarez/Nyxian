@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-17): Build Times rows use digits of equal width (the
+    bars and seconds line up).
   - 1.1.0 (2026-11-16): diagnostics on a file's copy without #Preview
     (ForkPreviewStripping) are shown on the real file.
   - 1.0.0 (2026-11-06): Issue Navigator shows "Line N, Col M" and a
@@ -391,6 +393,10 @@ class UIDebugViewController: UITableViewController {
         }
         if target == nil {
             cell.textLabel?.font = UIFont.systemFont(ofSize: 14.0, weight: .regular)
+            /* fork: Build Times line up */
+            if sortedDebugObjects[indexPath.section].title == "Build Times" {
+                cell.textLabel?.font = UIFont.monospacedDigitSystemFont(ofSize: 13.0, weight: .regular)
+            }
         }
         cell.textLabel?.translatesAutoresizingMaskIntoConstraints = false
         

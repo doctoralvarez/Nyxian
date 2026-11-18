@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.76.0 — 2026-11-17
+
+- **Build Times in the Issue Navigator** after every build: the total and each
+  stage (prepare, Swift compile, C / Objective-C compile, link, other build
+  work, sign and install), each with a bar, the previous build's time and the
+  difference, plus the settings it ran with (threads, Low Power Mode, heat,
+  Incremental, One Pass, daemon), to compare them. Jobs that run side by side
+  also show their added-up time. A Run with nothing changed says "Up to date".
+
 ## 1.75.0 — 2026-11-17
 
 - A build started in **Low Power Mode**, or while iOS is slowing the device

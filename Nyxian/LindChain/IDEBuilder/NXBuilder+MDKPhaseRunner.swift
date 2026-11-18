@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-17): every job is timed for Build Times.
   - 1.1.0 (2026-11-16): no more silent "Failed to run project.": errors
     without a file ("could not build module", "unable to open output file",
     ...) are shown under Internal (they were dropped), and a step that fails
@@ -42,6 +43,8 @@ extension NXBuilder: MDKPhaseRunnerDelegate {
         var localDiags: NSArray?
         var localSource: NSString?
         
+        let jobStart = CFAbsoluteTimeGetCurrent()
+        defer { ForkBuildTimer.current?.job(ForkBuildTimer.kind(of: job), start: jobStart, end: CFAbsoluteTimeGetCurrent()) }
         let ok: Bool
         if self.useRemoteServiceIfAvailable,
             let remoteCompiler = self.remoteCompiler {

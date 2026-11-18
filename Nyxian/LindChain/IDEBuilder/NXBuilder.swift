@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.11.0
+ Fork doctoralvarez/Nyxian — version 1.12.0
  Changelog:
+  - 1.12.0 (2026-11-17): "Build Times" in the Issue Navigator after every
+    build: total and each stage (prepare, Swift compile, C / Objective-C
+    compile, link, other build work, sign and install) with a bar, the
+    previous build's time and the difference, and the settings it ran with
+    (threads, Low Power Mode, heat, incremental, One Pass, daemon).
   - 1.11.0 (2026-11-17): a build started in Low Power Mode, or while iOS is
     slowing the device down because it is hot, leaves a warning under
     "Device" in the Issue Navigator saying why it may be slower (replaced
@@ -478,9 +483,14 @@ final class NXBuilder: NSObject {
                 /* fork: nothing changed since the installed run: open it again at once */
                 let runStamp: String? = (buildType == .run && project.projectConfig.schemeKind == .app && builder.incrementalBuild && !builder.projectDirty)
                     ? ForkRunStamp.compute(project: project, args: builder.argsString) : nil
+                let timer = ForkBuildTimer(useDaemon: builder.useRemoteServiceIfAvailable && builder.remoteCompiler != nil)
+                ForkBuildTimer.current = timer
                 if let runStamp, ForkRunStamp.saved(project) == runStamp,
                    let bundleID = project.projectConfig.bundleid,
                    LDEApplicationWorkspace.shared().applicationInstalled(withBundleID: bundleID) {
+                    /* fork: the times say so too */
+                    timer.reportUpToDate(into: builder.database)
+                    builder.database.saveDatabase(toPath: project.cacheURL.appendingPathComponent("debug.json").path)
                     completion(true, nil)
                     return
                 }
@@ -511,16 +521,17 @@ final class NXBuilder: NSObject {
                 
                 do {
                     // prepare
+                    /* fork: every stage is timed (Build Times) */
                     var flow: [(String?,Double?,() throws -> Void)] = [
-                        (nil,nil,{ try builder.headsup(buildType: buildType) }),
-                        (nil,nil,{ try builder.clean() }),
-                        (nil,nil,{ try builder.prepare() }),
-                        (nil,nil,{ try builder.build() })
+                        (nil,nil,timer.timed(.prepare) { try builder.headsup(buildType: buildType) }),
+                        (nil,nil,timer.timed(.prepare) { try builder.clean() }),
+                        (nil,nil,timer.timed(.prepare) { try builder.prepare() }),
+                        (nil,nil,timer.timed(.build) { try builder.build() })
                     ];
                     
                     /* fork: a plain build stops after compiling and linking */
                     if buildType != .build {
-                        flow.append(("arrow.down.app.fill",nil,{try builder.install(buildType: buildType, executablePathCallback: { path in
+                        flow.append(("arrow.down.app.fill",nil,timer.timed(.install) {try builder.install(buildType: buildType, executablePathCallback: { path in
                             execPath = path
                         }) }))
                     }
@@ -538,6 +549,8 @@ final class NXBuilder: NSObject {
                 if NXBuilder.forkCancelRequested { result = false }
                 /* fork: what is installed now, for the next Run */
                 if result, buildType == .run, let runStamp { ForkRunStamp.save(project, runStamp) }
+                timer.report(into: builder.database, project: project, succeeded: result)
+                ForkBuildTimer.current = nil
                 builder.database.saveDatabase(toPath: project.cacheURL.appendingPathComponent("debug.json").path)
                 
                 completion(result, execPath)
@@ -742,6 +755,163 @@ enum ForkDeviceSpeedNotice {
             database.addMessage(message: "The device is very hot and iOS is slowing it down a lot: building will be much slower until it cools.", title: title, severity: .warning)
         default:
             break
+        }
+    }
+}
+
+// MARK: - fork: Build Times
+
+/// How long each stage of a build took, shown under "Build Times" in the Issue
+/// Navigator with the previous build's times, to compare settings (threads, Low
+/// Power Mode, One Pass, ...).
+final class ForkBuildTimer {
+    enum Stage: String {
+        case prepare = "Prepare (check, clean, bundle)"
+        case build = "Build"
+        case install = "Sign and install"
+    }
+
+    static let title = "Build Times"
+    /// the build running now (builds run one at a time)
+    static var current: ForkBuildTimer?
+
+    private var lock = os_unfair_lock()
+    private let started = CFAbsoluteTimeGetCurrent()
+    private var stages: [Stage: Double] = [:]
+    /// per kind of job: how many, total time, first start, last end
+    private var jobs: [String: (count: Int, total: Double, first: Double, last: Double)] = [:]
+    private let useDaemon: Bool
+
+    init(useDaemon: Bool) {
+        self.useDaemon = useDaemon
+    }
+
+    func timed(_ stage: Stage, _ body: @escaping () throws -> Void) -> () throws -> Void {
+        return { [self] in
+            let start = CFAbsoluteTimeGetCurrent()
+            defer {
+                let elapsed = CFAbsoluteTimeGetCurrent() - start
+                os_unfair_lock_lock(&lock)
+                stages[stage, default: 0] += elapsed
+                os_unfair_lock_unlock(&lock)
+            }
+            try body()
+        }
+    }
+
+    static func kind(of job: MDKJob) -> String {
+        switch job.type {
+        case .swiftCompiler: return "Compile Swift"
+        case .compiler: return "Compile C / Objective-C"
+        case .linker: return "Link"
+        default: return "Other jobs"
+        }
+    }
+
+    /// one compiler / linker job finished (jobs can run side by side)
+    func job(_ kind: String, start: Double, end: Double) {
+        os_unfair_lock_lock(&lock)
+        var entry = jobs[kind] ?? (0, 0, start, end)
+        entry.count += 1
+        entry.total += end - start
+        entry.first = min(entry.first, start)
+        entry.last = max(entry.last, end)
+        jobs[kind] = entry
+        os_unfair_lock_unlock(&lock)
+    }
+
+    // MARK: report
+
+    private static func historyURL(_ project: NXProject) -> URL {
+        project.cacheURL.appendingPathComponent("fork-build-times.json")
+    }
+
+    private static func seconds(_ value: Double) -> String {
+        value < 10 ? String(format: "%.2f s", value) : String(format: "%.1f s", value)
+    }
+
+    private static func bar(_ value: Double, of total: Double) -> String {
+        let width = 12
+        let filled = total > 0 ? Int((value / total * Double(width)).rounded()) : 0
+        let clamped = max(0, min(width, filled))
+        return String(repeating: "█", count: clamped) + String(repeating: "░", count: width - clamped)
+    }
+
+    private static func compare(_ value: Double, _ previous: Double?) -> String {
+        guard let previous else { return "" }
+        let diff = value - previous
+        let sign = diff >= 0 ? "+" : "−"
+        return "  (before \(seconds(previous)), \(sign)\(seconds(abs(diff))))"
+    }
+
+    private func settingsLine() -> String {
+        let info = ProcessInfo.processInfo
+        let heat: String
+        switch info.thermalState {
+        case .nominal: heat = "normal"
+        case .fair: heat = "warm"
+        case .serious: heat = "hot"
+        case .critical: heat = "very hot"
+        @unknown default: heat = "?"
+        }
+        let onePass = ["Automatic", "On", "Off"][max(0, min(2, ForkBuildSpeed.onePassMode))]
+        return "Threads \(ForkBuildSpeed.threads) of \(ForkBuildSpeed.allCores) cores · Low Power \(info.isLowPowerModeEnabled ? "on" : "off") · heat \(heat) · Incremental \(ForkBuildSpeed.incrementalBuildOn ? "on" : "off") · One Pass \(onePass) · daemon \(useDaemon ? "on" : "off")"
+    }
+
+    func reportUpToDate(into database: DebugDatabase) {
+        database.debugObjects[ForkBuildTimer.title] = nil
+        let total = CFAbsoluteTimeGetCurrent() - started
+        database.addMessage(message: "Up to date: nothing changed, the installed app was opened (\(ForkBuildTimer.seconds(total))).", title: ForkBuildTimer.title, severity: .note)
+    }
+
+    func report(into database: DebugDatabase, project: NXProject, succeeded: Bool) {
+        os_unfair_lock_lock(&lock)
+        let stages = self.stages
+        let jobs = self.jobs
+        os_unfair_lock_unlock(&lock)
+        let total = CFAbsoluteTimeGetCurrent() - started
+
+        /* rows: name, seconds, detail */
+        var rows: [(String, Double, String)] = []
+        if let prepare = stages[.prepare] { rows.append((Stage.prepare.rawValue, prepare, "")) }
+        var jobSpan: Double = 0
+        for kind in ["Compile Swift", "Compile C / Objective-C", "Link", "Other jobs"] {
+            guard let entry = jobs[kind] else { continue }
+            let span = max(entry.last - entry.first, 0)
+            jobSpan += span
+            var detail = entry.count == 1 ? "1 job" : "\(entry.count) jobs"
+            if entry.total > span + 0.05 {
+                /* side by side: the jobs added up took longer than the stage */
+                detail += ", \(ForkBuildTimer.seconds(entry.total)) added up"
+            }
+            rows.append((kind, span, detail))
+        }
+        if jobs["Compile Swift"] == nil, stages[.build] != nil {
+            rows.append(("Compile Swift", 0, "nothing to compile"))
+        }
+        if let build = stages[.build] {
+            rows.append(("Other build work (planning, retries)", max(build - jobSpan, 0), ""))
+        }
+        if let install = stages[.install] { rows.append((Stage.install.rawValue, install, "")) }
+
+        let previous = (try? Data(contentsOf: ForkBuildTimer.historyURL(project)))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Double] }
+
+        database.debugObjects[ForkBuildTimer.title] = nil
+        let outcome = succeeded ? "" : " (failed)"
+        database.addMessage(message: "Total \(ForkBuildTimer.seconds(total))\(outcome)\(ForkBuildTimer.compare(total, previous?["Total"]))", title: ForkBuildTimer.title, severity: .note)
+        for (name, value, detail) in rows {
+            let extra = detail.isEmpty ? "" : " · " + detail
+            let line = "\(ForkBuildTimer.bar(value, of: total))  \(name): \(ForkBuildTimer.seconds(value))\(extra)\(ForkBuildTimer.compare(value, previous?[name]))"
+            database.addMessage(message: line, title: ForkBuildTimer.title, severity: .note)
+        }
+        database.addMessage(message: settingsLine(), title: ForkBuildTimer.title, severity: .note)
+
+        /* this build becomes "before" for the next one */
+        var saved: [String: Double] = ["Total": total]
+        for (name, value, _) in rows { saved[name] = value }
+        if let data = try? JSONSerialization.data(withJSONObject: saved) {
+            try? data.write(to: ForkBuildTimer.historyURL(project), options: .atomic)
         }
     }
 }
