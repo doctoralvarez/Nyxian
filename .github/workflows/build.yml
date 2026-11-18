@@ -14,14 +14,57 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # fork: which Mac builds. Your own Mac (a self-hosted runner) when the repository
+  # variable NYXIAN_RUNNER is "self-hosted" AND it is online; if it is off or asleep,
+  # GitHub's Mac instead (seeing your runners needs the secret RUNNER_STATUS_TOKEN,
+  # a fine-grained token with "Administration: Read-only" on this repository;
+  # without it your Mac is used whenever the variable says so, and a build waits
+  # for it). GitHub's Mac has Xcode 27 (iOS 27 SDK: needed for iPhone Duo's inner
+  # screen); NYXIAN_RUNNER = "macos-latest" goes back to the Xcode 26 Mac. Pull
+  # requests always go to GitHub's Mac, so nobody else's code ever runs on your Mac.
+  pick-runner:
+    name: Pick the Mac
+    runs-on: ubuntu-latest
+    outputs:
+      runs_on: ${{ steps.pick.outputs.runs_on }}
+    steps:
+      - id: pick
+        env:
+          WANT: ${{ vars.NYXIAN_RUNNER }}
+          EVENT: ${{ github.event_name }}
+          STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          github_mac='"xcode-27"'
+          if [ "$WANT" = "macos-latest" ]; then github_mac='"macos-latest"'; fi
+          own_mac='["self-hosted","macOS","ARM64"]'
+          choice="$github_mac"
+          if [ "$EVENT" != "pull_request" ] && [ "$WANT" = "self-hosted" ]; then
+            if [ -z "$STATUS_TOKEN" ]; then
+              echo "No RUNNER_STATUS_TOKEN: using your Mac (the build waits if it is off)"
+              choice="$own_mac"
+            else
+              online=$(curl -fsS -H "Authorization: Bearer $STATUS_TOKEN" -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/$REPO/actions/runners?per_page=100" \
+                | jq '[.runners[] | select(.status == "online") | select([.labels[].name] | index("self-hosted"))] | length' || echo "error")
+              if [ "$online" = "error" ]; then
+                echo "::warning::Could not read your runners (check RUNNER_STATUS_TOKEN): using your Mac"
+                choice="$own_mac"
+              elif [ "$online" -gt 0 ]; then
+                echo "Your Mac is online: it builds"
+                choice="$own_mac"
+              else
+                echo "::notice::Your Mac is off or asleep: GitHub's Mac builds this one"
+              fi
+            fi
+          fi
+          echo "runs_on=$choice" >> "$GITHUB_OUTPUT"
+          echo "Builds on: $choice"
+
   build:
     name: Build and Package
-    # fork: your own Mac (a self-hosted runner) when the repository variable
-    # NYXIAN_RUNNER is "self-hosted"; otherwise GitHub's Mac with Xcode 27 (iOS 27
-    # SDK: needed for iPhone Duo's inner screen, older SDKs run letterboxed there).
-    # NYXIAN_RUNNER = "macos-latest" goes back to the Xcode 26 Mac. Pull requests
-    # always go to GitHub's Mac, so nobody else's code ever runs on your computer.
-    runs-on: ${{ (github.event_name != 'pull_request' && vars.NYXIAN_RUNNER == 'self-hosted') && fromJSON('["self-hosted","macOS","ARM64"]') || (vars.NYXIAN_RUNNER == 'macos-latest' && 'macos-latest' || 'xcode-27') }}
+    needs: pick-runner
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.runs_on) }}
     env:
       # fork: your PRIVATE backup repository (SDK, toolchain, Python runtime, IPAs); token: secret SDK_REPO_TOKEN
       BACKUP_REPO: ${{ vars.BACKUP_REPO || 'doctoralvarez/nyxian-sdk' }}
