@@ -1,5 +1,7 @@
-# Fork doctoralvarez/Nyxian — version 1.7.0
+# Fork doctoralvarez/Nyxian — version 1.7.1
 # Changelog:
+#  - 1.7.1 (2026-11-19): when your Mac is off, GitHub's Xcode 27 Mac (as the
+#    app build) instead of macos-15, whose queue cancelled the job twice.
 #  - 1.7.0 (2026-11-19): "fortran" input: Fortran libraries for iOS
 #    (experimental: LLVM Flang from Homebrew targeting arm64-apple-ios, and
 #    its runtime flang-rt built for iOS); Nyxian sends builds of the three
@@ -83,7 +85,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          choice='"macos-15"'
+          # the same GitHub Mac as the app build (macos-15 often had no free runner)
+          choice='"xcode-27"'
           if [ "$WANT" = "self-hosted" ]; then
             if [ -z "$STATUS_TOKEN" ]; then
               choice='["self-hosted","macOS","ARM64"]'

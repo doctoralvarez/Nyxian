@@ -4,6 +4,11 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.84.1 — 2026-11-19
+
+- iOS Wheels workflow: with your Mac off it uses GitHub's Xcode 27 Mac, like
+  the app build (macos-15 had no free runner and the job was cancelled).
+
 ## 1.84.0 — 2026-11-19
 
 - Builds for iOS can be sent from Nyxian for three kinds: Python wheels,
