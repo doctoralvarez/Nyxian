@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.3.1
  Changelog:
+  - 1.3.1 (2026-11-19): Build R Package… (CRAN packages for R for iOS).
   - 1.3.0 (2026-11-19): the section is "iOS Builds": besides the token,
     Build Python Wheel, Build C/C++ Library and Build Fortran Library send a
     build to your Mac (or GitHub's); "Build Again" replaces an existing one.
@@ -78,7 +79,7 @@ class ToolChainViewController: NXUITableViewController {
         case 4:
             return ForkBuildSpeedFooter.text
         case 5:
-            return "Builds for iOS run in the \"iOS wheels\" workflow of doctoralvarez/Nyxian: on your Mac if it is on, else on GitHub's. Python wheels go where Nyxian's pip looks (pip also offers one when it finds no iOS wheel); C/C++ and Fortran libraries (static, arm64) go on the ios-native release; Fortran is experimental (LLVM Flang). From the shell: iosbuild python|c|fortran NAME… [--rebuild]. It needs a fine-grained GitHub token for that repository with \"Actions: Read and write\" (you can add that permission to the token you already use for your Mac). It stays in this device's Keychain and is never given to Python or to the packages you install."
+            return "Builds for iOS run in the \"iOS wheels\" workflow of doctoralvarez/Nyxian: on your Mac if it is on, else on GitHub's. Python wheels go where Nyxian's pip looks (pip also offers one when it finds no iOS wheel); C/C++ and Fortran libraries (static, arm64) go on the ios-native release; Fortran is experimental (LLVM Flang). R packages go on the ios-r-packages release. From the shell: iosbuild python|c|fortran|r NAME… [--rebuild]. It needs a fine-grained GitHub token for that repository with \"Actions: Read and write\" (you can add that permission to the token you already use for your Mac). It stays in this device's Keychain and is never given to Python or to the packages you install."
         default:
             return nil
         }

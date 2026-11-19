@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.11.1
+ Fork doctoralvarez/Nyxian — version 1.12.0
  Changelog:
+  - 1.12.0 (2026-11-19): a fourth kind of iOS build: R packages (CRAN) for R
+    for iOS (input "rpkgs"; iosbuild r NAME…, install.packages() offers it).
   - 1.11.1 (2026-11-19): "Open New Window" after pip signs what pip just
     installed first (the new window used the prepared launcher as it was,
     so new binary modules were never signed: "missing code signature",
@@ -721,13 +723,14 @@ final class ForkTerminalKeyBar: UIInputView {
 enum ForkWheelBuilder {
     /// What to build: each kind is one input of the workflow
     enum Kind: String, CaseIterable {
-        case python, native, fortran
+        case python, native, fortran, rpkg
 
         var input: String {
             switch self {
             case .python: return "packages"
             case .native: return "native"
             case .fortran: return "fortran"
+            case .rpkg: return "rpkgs"
             }
         }
         var title: String {
@@ -735,6 +738,7 @@ enum ForkWheelBuilder {
             case .python: return "Python Wheel"
             case .native: return "C/C++ Library"
             case .fortran: return "Fortran Library"
+            case .rpkg: return "R Package"
             }
         }
         var what: String {
@@ -742,6 +746,7 @@ enum ForkWheelBuilder {
             case .python: return "the iOS wheel"
             case .native: return "the C/C++ library for iOS"
             case .fortran: return "the Fortran library for iOS"
+            case .rpkg: return "the R package for iOS"
             }
         }
         var hint: String {
@@ -749,11 +754,13 @@ enum ForkWheelBuilder {
             case .python: return "pip names, e.g. tesserocr pyyaml==6.0"
             case .native: return "leptonica, tesseract, name@version or a source URL (.tar.gz, .zip, .git)"
             case .fortran: return "lapack, flang-rt, name@version or a source URL (.tar.gz, .zip, .git)"
+            case .rpkg: return "CRAN names, e.g. ggplot2 survival"
             }
         }
         func ready(_ names: [String]) -> String {
             switch self {
             case .python: return "iOS wheel ready: run pip install \(names.joined(separator: " ")) again"
+            case .rpkg: return "R package for iOS ready: run install.packages(\"\(names.first ?? "")\") in R again"
             default: return "\(title) for iOS ready: \(names.joined(separator: ", ")) (ios-native release)"
             }
         }

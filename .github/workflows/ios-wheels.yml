@@ -1,5 +1,7 @@
-# Fork doctoralvarez/Nyxian — version 1.8.1
+# Fork doctoralvarez/Nyxian — version 1.9.0
 # Changelog:
+#  - 1.9.0 (2026-11-19): "rpkgs" input: CRAN packages for R for iOS
+#    (tools/fork/ios-r/build_rpkg.sh), published on ios-r-packages.
 #  - 1.8.1 (2026-11-19): Fortran packages: the package's own before-build
 #    (OpenBLAS for Mac/Linux in slycot) is skipped for iOS, and no pure-Python
 #    trial build on the Mac for packages that link iOS libraries.
@@ -63,6 +65,10 @@ on:
         required: false
       fortran:
         description: "Fortran libraries for iOS (experimental, LLVM Flang: lapack, flang-rt, or source URLs)"
+        default: ""
+        required: false
+      rpkgs:
+        description: "R packages (CRAN) for R for iOS, e.g. ggplot2 survival"
         default: ""
         required: false
       rebuild:
@@ -304,6 +310,24 @@ jobs:
             gh release create ios-wheels -R "$GITHUB_REPOSITORY" --title "iOS wheels for Nyxian's Python" \
               --notes "Wheels for CPython 3.14 on iOS (arm64 device) that PyPI and BeeWare's index lack. Nyxian's pip finds them here." --prerelease
           gh release upload ios-wheels wheelhouse/*.whl -R "$GITHUB_REPOSITORY" --clobber
+
+      - name: R packages for iOS
+        if: github.event.inputs.rpkgs != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REBUILD: ${{ github.event.inputs.rebuild || 'false' }}
+          RPKGS: ${{ github.event.inputs.rpkgs }}
+        run: |
+          touch summary.txt
+          set +e
+          bash tools/fork/ios-r/build_rpkg.sh $RPKGS 2>&1 | tee rpkgs.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" = 0 ]; then
+            echo "R packages for iOS ready: $RPKGS (ios-r-packages release)" | tee -a summary.txt
+          else
+            echo "R packages for iOS FAILED: $(grep '^FAILED for iOS' rpkgs.log | cut -d: -f2-)" | tee -a summary.txt
+          fi
 
       - name: Did everything build?
         if: always()

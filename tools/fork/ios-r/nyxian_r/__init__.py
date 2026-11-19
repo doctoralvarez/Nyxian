@@ -1,5 +1,11 @@
-# Fork doctoralvarez/Nyxian — version 0.1.5
+# Fork doctoralvarez/Nyxian — version 0.2.0
 # Changelog:
+#  - 0.2.0 (2026-11-19): install.packages(): the package and the
+#    dependencies it lacks (Depends/Imports from each DESCRIPTION), built for
+#    iOS, from the ios-r-packages release; R's user library is
+#    site-packages/nyxian_r_library, where Nyxian signs binaries as it does
+#    pip's (it offers a fresh window, as after pip); packages not built yet
+#    are offered for building (ESC ] 7770 ; nyxian-build ; rpkg;0;names).
 #  - 0.1.5 (2026-11-19): the C shell hook is set before R starts; default
 #    packages startup missed (utils, stats) are attached after it.
 #  - 0.1.4 (2026-11-19): R's errors and warnings printed as R prints them.
@@ -26,6 +32,8 @@ import tempfile
 
 __version__ = "4.6.2"
 HOME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "R")
+# R packages go next to Python's: Nyxian signs the binaries it finds in site-packages
+LIBRARY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "nyxian_r_library")
 RELEASE = "https://github.com/doctoralvarez/Nyxian/releases/download/ios-r-packages"
 
 _started = False
@@ -83,27 +91,65 @@ def shell(command, stdin_text=""):
     return int(status or 0), text
 
 
+def _description_deps(folder):
+    """Depends + Imports of an installed package (its DESCRIPTION)."""
+    fields, key = {}, None
+    try:
+        with open(os.path.join(folder, "DESCRIPTION"), encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line[:1] in (" ", "\t") and key:
+                    fields[key] += " " + line.strip()
+                elif ":" in line:
+                    key, value = line.split(":", 1)
+                    fields[key] = value.strip()
+    except OSError:
+        return []
+    names = []
+    for field in ("Depends", "Imports"):
+        for item in fields.get(field, "").split(","):
+            name = item.strip().split("(")[0].strip()
+            if name and name != "R":
+                names.append(name)
+    return names
+
+
+def _have(name, libraries):
+    return any(os.path.isfile(os.path.join(lib, name, "DESCRIPTION")) for lib in libraries)
+
+
 def _install(packages, lib):
-    """install.packages(): R packages built for iOS, from the ios-r-packages release."""
+    """install.packages(): R packages built for iOS (and the dependencies they lack)."""
     import io
     import tarfile
     import urllib.request
     os.makedirs(lib, exist_ok=True)
-    missing = []
-    for name in packages:
+    libraries = [lib, LIBRARY, os.path.join(HOME, "library")]
+    todo, done, missing = list(packages), [], []
+    while todo:
+        name = todo.pop(0)
+        if name in done or name in missing:
+            continue
+        if name not in packages and _have(name, libraries):
+            continue
         url = "%s/%s-ios-arm64.tar.gz" % (RELEASE, name)
         try:
-            data = urllib.request.urlopen(url, timeout=60).read()
+            data = urllib.request.urlopen(url, timeout=120).read()
         except Exception:
             missing.append(name)
             continue
         with tarfile.open(fileobj=io.BytesIO(data)) as archive:
             archive.extractall(lib, filter="data")
-        print("installed %s (built for iOS) in %s" % (name, lib))
+        done.append(name)
+        print("installed %s (built for iOS)" % name)
+        todo.extend(d for d in _description_deps(os.path.join(lib, name)) if not _have(d, libraries))
     if missing:
         print("not built for iOS yet: %s" % ", ".join(missing))
         # Nyxian offers to build them (like pip does for wheels)
         _escape("nyxian-build", "rpkg;0;%s" % " ".join(missing))
+    elif done:
+        # their binaries get Nyxian's signature in a fresh window (as after pip install)
+        print("Open a new window (Nyxian offers it) to use them: library(%s)" % packages[0])
+        _escape("nyxian-installed", " ".join(done))
     return len(missing) == 0
 
 
@@ -140,7 +186,7 @@ def start():
         return
     os.environ["R_HOME"] = HOME
     os.environ.setdefault("RPY2_CFFI_MODE", "ABI")
-    os.environ.setdefault("R_LIBS_USER", os.path.join(os.path.expanduser("~"), "Documents", "R", "library"))
+    os.environ.setdefault("R_LIBS_USER", LIBRARY)
     os.makedirs(os.environ["R_LIBS_USER"], exist_ok=True)
     try:
         import certifi

@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.46.0
+ Fork doctoralvarez/Nyxian — version 1.47.0
  Changelog:
+  - 1.47.0 (2026-11-19): iosbuild r NAME… builds R packages (CRAN) for R
+    for iOS.
   - 1.46.0 (2026-11-19): Nyxian Shell: R and Rscript run R for iOS
     (python3 -m nyxian_r, from pip install nyxian-r).
   - 1.45.0 (2026-11-19): Nyxian Shell: iosbuild python|c|fortran NAME…
@@ -5912,16 +5914,18 @@ def b_iosbuild(args, inp, out, err):
     """Builds for iOS on your Mac (or GitHub's): Python wheels, C/C++ or Fortran libraries."""
     kinds = {"python": "python", "py": "python", "wheel": "python", "wheels": "python", "pip": "python",
              "c": "native", "c++": "native", "cpp": "native", "cxx": "native", "native": "native",
-             "fortran": "fortran", "f": "fortran", "f90": "fortran"}
+             "fortran": "fortran", "f": "fortran", "f90": "fortran",
+             "r": "rpkg", "rpkg": "rpkg", "cran": "rpkg"}
     rebuild = any(a in ("--rebuild", "-r", "--again") for a in args)
     args = [a for a in args if a not in ("--rebuild", "-r", "--again")]
     if len(args) < 2 or args[0].lower() not in kinds:
         out.write(
-            "usage: iosbuild python|c|fortran NAME... [--rebuild]\n"
+            "usage: iosbuild python|c|fortran|r NAME... [--rebuild]\n"
             "  python   pip names: iosbuild python tesserocr pyyaml==6.0\n"
             "  c        C/C++ libraries: a recipe (leptonica, tesseract), name@version or a source URL\n"
             "           (.tar.gz, .zip, .git#tag) built with CMake, Meson or autotools\n"
             "  fortran  Fortran libraries (experimental, LLVM Flang): lapack, flang-rt or a source URL\n"
+            "  r        R packages from CRAN for R for iOS: iosbuild r ggplot2 survival\n"
             "  --rebuild  build again even if one already exists\n"
             "Builds on your Mac if it is on, else GitHub's; needs the token in Settings > Toolchain > iOS Builds.\n")
         return 0 if args[:1] in (["-h"], ["--help"], ["help"]) else 2

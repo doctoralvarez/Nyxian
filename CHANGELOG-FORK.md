@@ -4,6 +4,17 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.89.0 — 2026-11-19
+
+- R packages for iOS: the iOS Wheels workflow's `rpkgs` input builds CRAN
+  packages and their dependencies for R for iOS (`tools/fork/ios-r/
+  build_rpkg.sh`: R for the Mac runs the install, the iOS toolchain
+  compiles) and publishes them on the ios-r-packages release.
+- In R, `install.packages()` installs them with the dependencies they lack
+  into site-packages/nyxian_r_library (signed like pip's packages: Nyxian
+  offers a fresh window); one not built yet is offered for building.
+- `iosbuild r NAME…` and Settings › Toolchain › iOS Builds › Build R Package….
+
 ## 1.88.0 — 2026-11-19
 
 - R for iOS comes inside Nyxian: the Python runtime includes nyxian-r (R
