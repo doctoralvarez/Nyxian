@@ -92,6 +92,7 @@ jobs:
         run: |
           for t in ninja cmake pkg-config autoconf automake libtool; do command -v $t >/dev/null || brew install $t; done
           xcrun --sdk iphoneos --show-sdk-version
+          python -m pip install --quiet wheel
 
       - name: R for iOS
         env:

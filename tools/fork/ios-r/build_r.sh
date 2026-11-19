@@ -1,6 +1,11 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 0.3.1
+# Fork doctoralvarez/Nyxian — version 0.4.0
 # Changelog:
+#  - 0.4.0 (2026-11-19): R's libraries point at each other with @rpath; R
+#    for iOS as a wheel (nyxian_r, with its console) and rpy2 in ABI mode
+#    (taught that iOS loads libR.dylib), both on the ios-wheels release.
+#  - 0.3.2 (2026-11-19): FLIBS_IN_SO given to make (libRlapack still had 19
+#    Fortran runtime symbols to find).
 #  - 0.3.1 (2026-11-19): Flang's runtime linked into R's Fortran libraries
 #    (FLIBS_IN_SO; libRlapack needed it), and checked for every library.
 #  - 0.3.0 (2026-11-19): R_HOME for iOS: R code, lazy-load databases, help and
@@ -172,6 +177,12 @@ log "configured for iOS"
 # iOS cannot run on the Mac. Those parts do not depend on the platform, so they come from R
 # for the Mac (same version, same options); only what is compiled is built here for iOS.
 ( cd "$SRC_IOS"
+  # Flang's runtime on every shared library's link line: libRlapack's Makefile uses
+  # $(FLIBS_IN_SO), which no Makefile defines; written in where it is used
+  for mf in $(grep -rl 'FLIBS_IN_SO)' --include=Makefile . 2>/dev/null); do
+    /usr/bin/sed -i '' "s|\$(FLIBS_IN_SO)|-L$ROOT/flang-rt/lib $RT_LIBS -lc++|g" "$mf"
+    log "Flang's runtime written into $mf"
+  done
   make -k -j "$JOBS" > "$T/ios-make.log" 2>&1 || log "make -k: some steps need R running (done with R for the Mac below)"
   # libR, its BLAS/LAPACK and modules (internet, lapack…)
   make -C src/main -j "$JOBS" >> "$T/ios-make.log" 2>&1 || { log "libR did not build:"; grep -E "error:|Undefined" "$T/ios-make.log" | sort -u | head -60; exit 1; }
@@ -205,6 +216,19 @@ done
 cp -f "$SRC_IOS/etc/Makeconf" "$RH/etc/Makeconf"
 cp -R "$SRC_IOS/include/." "$RH/include/"
 cp -f "$HERE/Rprofile.site" "$RH/etc/Rprofile.site"
+# libraries found next to each other on iOS (R's build wrote absolute /R/lib or build-tree paths)
+relto() { python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$1" "$2"; }
+while IFS= read -r -d '' f; do
+  file "$f" | grep -q "Mach-O" || continue
+  case "$f" in "$RH"/lib/*.dylib) xcrun install_name_tool -id "@rpath/$(basename "$f")" "$f" 2>/dev/null ;; esac
+  for dep in $(xcrun otool -L "$f" | tail -n +2 | awk '{print $1}'); do
+    case "$dep" in @*|/usr/lib/*|/System/*) continue ;; esac
+    b=$(basename "$dep")
+    [ -f "$RH/lib/$b" ] && xcrun install_name_tool -change "$dep" "@rpath/$b" "$f"
+  done
+  xcrun install_name_tool -add_rpath "@loader_path/$(relto "$RH/lib" "$(dirname "$f")")" "$f" 2>/dev/null || true
+done < <(find "$RH" -type f \( -name '*.so' -o -name '*.dylib' \) -print0)
+log "libraries point at each other with @rpath; libR: $(xcrun otool -L "$RH/lib/libR.dylib" | tail -n +2 | awk '{print $1}' | tr '\n' ' ')"
 # every Mach-O must be for iOS (none left from the Mac)
 bad=""
 while IFS= read -r -d '' f; do
@@ -223,6 +247,29 @@ done < <(find "$RH" -type f \( -name '*.so' -o -name '*.dylib' \) -print0)
 if [ -n "$missing" ]; then log "Fortran runtime not linked in:"; printf "$missing\n"; exit 1; fi
 log "R_HOME for iOS: $(du -sh "$RH" | cut -f1); compiled parts:"
 ( cd "$RH" && find . -name '*.so' -o -name '*.dylib' | sort )
+
+# ---------- 6. for Nyxian's pip: R as a wheel, and rpy2 (ABI mode: no compiling) ----------
+WH="$OUT/wheels"; rm -rf "$WH"; mkdir -p "$WH"
+python3 "$HERE/make_wheel.py" "$RH" "$HERE/nyxian_r" "$RVER" "$WH"
+( cd "$T"
+  python3 -m venv rpy2env
+  # rpy2's build asks R for its settings: R for the Mac (same version) answers
+  PATH="$HOST/bin:$PATH" RPY2_CFFI_MODE=ABI rpy2env/bin/pip wheel --quiet --no-deps --no-binary rpy2-rinterface \
+    -w "$WH/rpy2" rpy2-rinterface rpy2-robjects rpy2 )
+# rpy2 knows Linux/Darwin/Windows: iOS loads lib/libR.dylib like Darwin
+for w in "$WH"/rpy2/rpy2_rinterface-*.whl; do
+  [ -f "$w" ] || continue
+  x="$T/rpy2x"; rm -rf "$x"; python3 -m wheel unpack -d "$x" "$w"
+  find "$x" -name '__init__.py' -path '*rpy2/situation/*' -exec /usr/bin/sed -i '' "s/elif system == 'Darwin':/elif system in ('Darwin', 'iOS', 'iPadOS'):/" {} +
+  grep -rq "'iOS', 'iPadOS'" "$x" || { log "rpy2: could not add iOS"; exit 1; }
+  rm -f "$w"; python3 -m wheel pack -d "$WH/rpy2" "$(ls -d "$x"/*/)" >/dev/null
+done
+ls -la "$WH" "$WH/rpy2"
+if [ -n "${GH_TOKEN:-}" ]; then
+  for w in "$WH"/*.whl "$WH"/rpy2/*.whl; do
+    gh release upload ios-wheels "$w" -R "${GITHUB_REPOSITORY:-doctoralvarez/Nyxian}" --clobber >/dev/null && log "published $(basename "$w") on the ios-wheels release"
+  done
+fi
 
 # kept on the ios-r release
 TAR="r-ios-$RVER-arm64.tar.gz"

@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.45.0
+ Fork doctoralvarez/Nyxian — version 1.46.0
  Changelog:
+  - 1.46.0 (2026-11-19): Nyxian Shell: R and Rscript run R for iOS
+    (python3 -m nyxian_r, from pip install nyxian-r).
   - 1.45.0 (2026-11-19): Nyxian Shell: iosbuild python|c|fortran NAME…
     [--rebuild] asks Nyxian to build a Python wheel, a C/C++ library or a
     Fortran library for iOS on your Mac (or GitHub's).
@@ -5862,6 +5864,7 @@ def b_help(args, inp, out, err):
         "  jobs     jobs · fg [%%n] · bg [%%n] · kill [-9|-STOP|-CONT] PID|%%n · ^Z stops the program in front\n"
         "  programs python3 FILE.py · pip install NAME · your command line tools (by path or PATH)\n"
         "  ios      iosbuild python|c|fortran NAME… [--rebuild]: builds a wheel or library for iOS on your Mac\n"
+        "  R        R (console) · Rscript FILE.R [ARGS] · Rscript -e 'CODE'   (after pip install nyxian-r)\n"
         "  node     node [FILE.js] · npm install/run/ls … · npx NAME · commands in node_modules/.bin\n"
         "  java     java FILE.java / java -jar APP.jar / java -cp DIR CLASS · javac -d DIR FILES · jar cf/tf/xf/uf (miniJVM: Java 8 subset)\n"
         "  scripts  sh FILE.sh / source FILE: its lines run in Nyxian Shell · ./tool with #! runs with its interpreter\n"
@@ -6192,9 +6195,12 @@ def run_pipeline(pipeline, background, text):
             stages.append(("noop", command, None))
             continue
         name = argv[0]
-        node_argv = None if name in BUILTINS or name == "pip" else (_java_command(name, list(argv[1:])) or _node_command(name, list(argv[1:])))
+        node_argv = None if name in BUILTINS or name in ("pip", "R", "Rscript") else (_java_command(name, list(argv[1:])) or _node_command(name, list(argv[1:])))
         if name == "pip":
             stages.append(("program", command, [sys.executable, "-m", "nyxian_pip"] + argv[1:]))
+        elif name in ("R", "Rscript"):
+            # R for iOS (pip install nyxian-r): its console, or a script like Rscript
+            stages.append(("program", command, [sys.executable, "-m", "nyxian_r"] + argv[1:]))
         elif name in BUILTINS:
             stages.append(("builtin", command, None))
         elif isinstance(node_argv, str) and node_argv.startswith("status:"):

@@ -4,6 +4,16 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.87.0 — 2026-11-19
+
+- R for iOS: R 4.6.2 compiled for iOS (libR, BLAS/LAPACK, modules, base
+  packages' compiled code; R code and databases from R for the Mac),
+  `system()`/`popen()` in R's C code go to Nyxian Shell (`nyxian_ios.h`),
+  Flang's runtime linked into the Fortran libraries, libraries found with
+  @rpath. Packed as a wheel `nyxian-r` with the `nyxian_r` module (rpy2 in
+  ABI mode, the bridge for Rprofile.site's substitutes, an R console).
+- Nyxian Shell: `R` and `Rscript` commands.
+
 ## 1.86.2 — 2026-11-19
 
 - "Open New Window" after pip signs the new binary modules first, as opening
