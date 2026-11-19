@@ -1,6 +1,11 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 0.2.1
+# Fork doctoralvarez/Nyxian — version 0.3.0
 # Changelog:
+#  - 0.3.0 (2026-11-19): R_HOME for iOS: R code, lazy-load databases, help and
+#    data from R for the Mac (same version and options; R for iOS cannot run
+#    on the Mac to make them); libR, BLAS/LAPACK, modules and every base
+#    package's compiled code built for iOS (all checked to be iOS Mach-O);
+#    Rprofile.site with the substitutes; published on the ios-r release.
 #  - 0.2.1 (2026-11-19): all of R's C and Fortran compiles for iOS; the build
 #    steps that run R use R for the Mac (R_EXE).
 #  - 0.2.0 (2026-11-19): configure passes for iOS. Every C/C++ file includes
@@ -159,14 +164,56 @@ RT_LIBS=$(cd "$ROOT/flang-rt/lib" && ls libflang_rt*.a | sed -E 's/^lib(.*)\.a$/
 )
 log "configured for iOS"
 
-# ---------- 4. compile what builds ----------
+# ---------- 4. the native parts for iOS ----------
+# R's own build runs R many times (base packages' R code, lazy-load databases, help); R for
+# iOS cannot run on the Mac. Those parts do not depend on the platform, so they come from R
+# for the Mac (same version, same options); only what is compiled is built here for iOS.
 ( cd "$SRC_IOS"
-  # -k: every file that does not build for iOS is listed in one run
-  # the steps that run R (base packages' R code, lazy-load databases, help) use R for the
-  # Mac, same version: that work does not depend on the platform; R for iOS cannot run here
-  make -k -j "$JOBS" R_EXE="R_ENABLE_JIT=0 TZ=UTC $HOST/bin/R --vanilla --no-echo" > "$T/ios-make.log" 2>&1 || {
-    log "make stopped; what did not compile for iOS:"
-    grep -E "error:|Error [0-9]|Undefined symbols|ld: " "$T/ios-make.log" | sort | uniq -c | sort -rn | head -80
-    echo "---- end of make log"; tail -40 "$T/ios-make.log"; exit 1; } )
-log "make finished"
-ls -la "$SRC_IOS/lib" || true
+  make -k -j "$JOBS" > "$T/ios-make.log" 2>&1 || log "make -k: some steps need R running (done with R for the Mac below)"
+  # libR, its BLAS/LAPACK and modules (internet, lapack…)
+  make -C src/main -j "$JOBS" >> "$T/ios-make.log" 2>&1 || { log "libR did not build:"; grep -E "error:|Undefined" "$T/ios-make.log" | sort -u | head -60; exit 1; }
+  make -C src/modules -j "$JOBS" >> "$T/ios-make.log" 2>&1 || { log "modules did not build:"; grep -E "error:|Undefined" "$T/ios-make.log" | sort -u | head -60; exit 1; }
+  # each base package's compiled code (stats, graphics, grDevices, utils, methods, tools…)
+  failed=""
+  for d in src/library/*/src; do
+    pkg=$(basename "$(dirname "$d")")
+    [ -f "$d/Makefile" ] || continue
+    if ! make -C "$d" -j "$JOBS" >> "$T/ios-make.log" 2>&1; then failed="$failed $pkg"; fi
+  done
+  [ -z "$failed" ] || { log "packages whose compiled code did not build:$failed"; grep -E "error:|Undefined" "$T/ios-make.log" | sort -u | head -80; exit 1; }
+)
+log "compiled for iOS"
+
+# ---------- 5. R_HOME for iOS ----------
+RH="$OUT/R"
+rm -rf "$RH"; mkdir -p "$RH"
+cp -R "$HOST/lib/R/." "$RH/"
+# compiled parts: from the iOS build
+rm -rf "$RH/bin/exec"
+cp -f "$SRC_IOS"/lib/*.dylib "$RH/lib/"
+mkdir -p "$RH/modules"; cp -f "$SRC_IOS"/modules/*.so "$RH/modules/" 2>/dev/null || true
+for libs in "$SRC_IOS"/library/*/libs; do
+  pkg=$(basename "$(dirname "$libs")")
+  mkdir -p "$RH/library/$pkg/libs"; cp -f "$libs"/*.so "$RH/library/$pkg/libs/"
+done
+cp -f "$SRC_IOS/etc/Makeconf" "$RH/etc/Makeconf"
+cp -R "$SRC_IOS/include/." "$RH/include/"
+cp -f "$HERE/Rprofile.site" "$RH/etc/Rprofile.site"
+# every Mach-O must be for iOS (none left from the Mac)
+bad=""
+while IFS= read -r -d '' f; do
+  if file "$f" | grep -q "Mach-O"; then
+    plat=$(xcrun vtool -show-build "$f" 2>/dev/null | awk '/platform/{print $2; exit}')
+    [ "$plat" = "IOS" ] || bad="$bad\n  $f ($plat)"
+  fi
+done < <(find "$RH" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -111 \) -print0)
+if [ -n "$bad" ]; then log "not built for iOS:"; printf "$bad\n"; exit 1; fi
+log "R_HOME for iOS: $(du -sh "$RH" | cut -f1); compiled parts:"
+( cd "$RH" && find . -name '*.so' -o -name '*.dylib' | sort )
+
+# kept on the ios-r release
+TAR="r-ios-$RVER-arm64.tar.gz"
+tar -czf "$OUT/$TAR" -C "$OUT" R
+if [ -n "${GH_TOKEN:-}" ]; then
+  gh release upload ios-r "$OUT/$TAR" -R "${GITHUB_REPOSITORY:-doctoralvarez/Nyxian}" --clobber >/dev/null && log "published $TAR on the ios-r release"
+fi
