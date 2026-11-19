@@ -4,6 +4,12 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.84.2 — 2026-11-19
+
+- Fortran for iOS: links Fortran code with Apple's clang and Flang's runtime
+  built for iOS (CMake's Fortran checks failed); flang-rt builds without the
+  macOS minimum-version flag its CMake adds on every Apple platform.
+
 ## 1.84.1 — 2026-11-19
 
 - iOS Wheels workflow: with your Mac off it uses GitHub's Xcode 27 Mac, like

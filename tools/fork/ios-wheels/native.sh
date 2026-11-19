@@ -1,6 +1,10 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.1.0
+# Fork doctoralvarez/Nyxian — version 1.1.1
 # Changelog:
+#  - 1.1.1 (2026-11-19): the Fortran wrapper links with Apple's clang for iOS
+#    (plus Flang's runtime for iOS when built), so CMake's Fortran checks
+#    (FortranCInterface in LAPACK) can link; flang-rt no longer gets
+#    -mmacosx-version-min=10.7 next to the iOS target.
 #  - 1.1.0 (2026-11-19): Fortran (experimental): LLVM Flang from Homebrew
 #    compiles for arm64-apple-ios through a wrapper (drops -arch/-isysroot/
 #    -m*-version-min, which flang does not take, and adds --target); CMake,
@@ -143,19 +147,49 @@ fortran_wrapper() {
   [ -n "$FC_WRAP" ] && return 0
   find_flang || return 1
   FC_WRAP="$WORK/ios-flang"
-  cat > "$FC_WRAP" <<EOF
-#!/bin/bash
-args=(); skip=0
-for a in "\$@"; do
-  if [ \$skip = 1 ]; then skip=0; continue; fi
-  case "\$a" in
-    -arch|-isysroot) skip=1 ;;
-    -mios-version-min=*|-miphoneos-version-min=*|-mmacosx-version-min=*|-fembed-bitcode*) ;;
-    *) args+=("\$a") ;;
+  {
+    echo '#!/bin/bash'
+    echo "FLANG='$FLANG'; CC_BIN='$CC_BIN'; SDK='$SDK'; MIN_IOS='$MIN_IOS'; RT='$ROOT/flang-rt/lib'"
+    cat <<'EOF'
+# compiles with flang for arm64-apple-ios; links with Apple's clang for iOS (flang's own
+# link step would use its macOS runtime), adding Flang's runtime built for iOS when present
+args=(); skip=0; link=1; sources=()
+for a in "$@"; do
+  if [ $skip = 1 ]; then skip=0; continue; fi
+  case "$a" in
+    -arch|-isysroot) skip=1; continue ;;
+    -mios-version-min=*|-miphoneos-version-min=*|-mmacosx-version-min=*|-fembed-bitcode*) continue ;;
+    -c|-E|-S|-M|-MM|-fsyntax-only|--version|-cpp-only|-emit-llvm) link=0 ;;
+  esac
+  args+=("$a")
+done
+if [ $link = 0 ] || [ ${#args[@]} = 0 ] || [ "${args[*]}" = "-v" ]; then
+  exec "$FLANG" --target=arm64-apple-ios$MIN_IOS "${args[@]}"
+fi
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+fflags=(); linkargs=(); n=0
+for a in "${args[@]}"; do
+  case "$a" in
+    *.f|*.F|*.for|*.FOR|*.f77|*.F77|*.f90|*.F90|*.f95|*.F95|*.f03|*.F03|*.f08|*.F08)
+      [ -f "$a" ] && sources+=("$a") || linkargs+=("$a") ;;
+    -O*|-g|-f*|-I*|-D*|-J*|-module-dir|-cpp|-nocpp|-ffixed-form|-ffree-form)
+      fflags+=("$a"); case "$a" in -f*|-I*|-J*|-module-dir|-cpp|-nocpp) ;; *) linkargs+=("$a") ;; esac ;;
+    *) linkargs+=("$a") ;;
   esac
 done
-exec "$FLANG" --target=arm64-apple-ios$MIN_IOS "\${args[@]}"
+for f in "${sources[@]}"; do
+  n=$((n + 1))
+  "$FLANG" --target=arm64-apple-ios$MIN_IOS "${fflags[@]}" -c "$f" -o "$tmp/f$n.o" || exit 1
+  linkargs+=("$tmp/f$n.o")
+done
+rt=()
+if [ -d "$RT" ]; then
+  rt+=("-L$RT")
+  for lib in "$RT"/libflang_rt*.a; do [ -f "$lib" ] && { l=${lib##*/lib}; rt+=("-l${l%.a}"); }; done
+fi
+exec "$CC_BIN" -arch arm64 -isysroot "$SDK" -mios-version-min=$MIN_IOS "${linkargs[@]}" "${rt[@]}" -lc++
 EOF
+  } > "$FC_WRAP"
   chmod +x "$FC_WRAP"
 }
 has_fortran() {  # src
@@ -172,6 +206,8 @@ build_flang_rt() {  # tag prefix
   git -C "$src" sparse-checkout set runtimes flang-rt flang/include flang/lib/Decimal flang/lib/Common \
     flang/module flang/cmake cmake llvm/cmake llvm/utils/llvm-lit llvm/utils/merge-json.py third-party >/dev/null 2>&1 \
     || git -C "$src" sparse-checkout set runtimes flang-rt flang cmake llvm/cmake llvm/utils third-party
+  # flang-rt adds -mmacosx-version-min=10.7 for any Apple build: not for iOS
+  /usr/bin/sed -i '' -E 's/-mmacosx-version-min=\$\{DARWIN_osx_BUILTIN_MIN_VER\}//' "$src/flang-rt/cmake/modules/AddFlangRT.cmake"
   cmake -S "$src/runtimes" -B "$bdir" -G Ninja \
     -DLLVM_ENABLE_RUNTIMES=flang-rt \
     -DCMAKE_BUILD_TYPE=Release \
