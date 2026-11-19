@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.42.1
+ Fork doctoralvarez/Nyxian — version 1.43.0
  Changelog:
+  - 1.43.0 (2026-11-18): when pip falls back to building a package from source
+    (no iOS wheel for the version it chose), nyxian_pip looks in PyPI, BeeWare,
+    Flet and the fork's release for the newest version that has an iOS wheel
+    for this Python and offers it ([Y/n]); if pip cannot resolve its pinned
+    iOS dependencies, it installs them and the package one by one
+    (--no-deps). Only when no version has one does it offer a build.
   - 1.42.1 (2026-11-18): pip in Nyxian also recognizes "[Errno 45] ios does
     not support processes … installing build dependencies for X" (pip trying
     to build X from source) as a missing iOS wheel and offers the build.
@@ -4344,8 +4350,9 @@ if __name__ == "__main__":
 # pip in Nyxian: says at once that it started, shows that it is still working
 # when pip prints nothing for a while, and after a long silence prints where
 # it is waiting (to report it). When a package has no wheel for iOS and needs
-# compiling (C, C++, Fortran, Rust), it says so and asks Nyxian to offer a
-# build on your Mac or GitHub's. Run as: python3 -m nyxian_pip install NAME…
+# compiling (C, C++, Fortran, Rust), it looks for the newest version that
+# does have an iOS wheel and offers it; if there is none, it asks Nyxian to
+# offer a build on your Mac or GitHub's. Run as: python3 -m nyxian_pip install NAME…
 import faulthandler
 import os
 import re
@@ -4422,6 +4429,125 @@ def _needs_build(text):
     return found
 
 
+_PYPI = "https://pypi.org/simple"
+
+
+def _indexes():
+    """Where to look: PyPI, the extra indexes (BeeWare, Flet) and the fork's release page."""
+    urls = [_PYPI] + os.environ.get("PIP_EXTRA_INDEX_URL", "").split()
+    return urls, os.environ.get("PIP_FIND_LINKS", "").split()
+
+
+def _ios_wheel_ok(python_tag, abi_tag, platform_tag):
+    if "arm64_iphoneos" not in platform_tag:
+        return False
+    major, minor = sys.version_info[:2]
+    here = "cp%d%d" % (major, minor)
+    for tag in python_tag.split("."):
+        if tag in (here, "py3", "py%d%d" % (major, minor)) and abi_tag in (here, "none", "abi3"):
+            return True
+        if abi_tag == "abi3" and tag.startswith("cp3") and tag[3:].isdigit() and int(tag[3:]) <= minor:
+            return True
+    return False
+
+
+def _ios_wheel_version(name):
+    """The newest version of `name` that has a wheel for this iPhone / iPad, or None."""
+    try:
+        from pip._vendor import requests
+        from pip._vendor.packaging.version import InvalidVersion, Version
+    except Exception:
+        return None
+    normalized = re.sub(r"[-_.]+", "-", name).lower()
+    wheel_name = normalized.replace("-", "_")
+    file_re = re.compile(r"(?i)" + re.escape(wheel_name) + r"-([^-/]+)(?:-\d[^-/]*)?-([^-/]+)-([^-/]+)-([^-/]+?)\.whl")
+    simple, pages = _indexes()
+    urls = ["%s/%s/" % (index.rstrip("/"), normalized) for index in simple] + pages
+    best = None
+    for url in urls:
+        try:
+            answer = requests.get(url, timeout=20)
+            if answer.status_code != 200:
+                continue
+            text = answer.text
+        except Exception:
+            continue
+        for match in file_re.finditer(text):
+            version, python_tag, abi_tag, platform_tag = match.groups()
+            if not _ios_wheel_ok(python_tag, abi_tag, platform_tag):
+                continue
+            try:
+                parsed = Version(version)
+            except InvalidVersion:
+                continue
+            if parsed.is_prerelease:
+                continue
+            if best is None or parsed > best:
+                best = parsed
+    return str(best) if best else None
+
+
+def _wheel_requirements(pip_main, name, version):
+    """What the iOS wheel of name==version needs (for this device), read from the wheel itself."""
+    import tempfile
+    import zipfile
+    try:
+        from pip._vendor.packaging.requirements import Requirement
+    except Exception:
+        return []
+    folder = tempfile.mkdtemp(prefix="nyxian-wheel-")
+    if pip_main(["download", "--quiet", "--no-deps", "--only-binary", ":all:", "-d", folder, "%s==%s" % (name, version)]):
+        return []
+    needs = []
+    for file in os.listdir(folder):
+        if not file.endswith(".whl"):
+            continue
+        with zipfile.ZipFile(os.path.join(folder, file)) as wheel:
+            for entry in wheel.namelist():
+                if entry.endswith(".dist-info/METADATA"):
+                    for line in wheel.read(entry).decode("utf-8", "replace").splitlines():
+                        if not line.startswith("Requires-Dist:"):
+                            continue
+                        try:
+                            requirement = Requirement(line.split(":", 1)[1].strip())
+                        except Exception:
+                            continue
+                        if requirement.marker is not None and not requirement.marker.evaluate({"extra": ""}):
+                            continue
+                        needs.append("%s%s" % (requirement.name, requirement.specifier))
+    return needs
+
+
+def _install_ios_versions(pip_main, versions):
+    """Installs name==version for each; when pip cannot resolve their dependencies
+    (iOS builds that pin each other), installs them one by one without that check."""
+    failed = []
+    for name, version in versions.items():
+        spec = "%s==%s" % (name, version)
+        _write("\n→ pip install %s\n" % spec)
+        if not pip_main(["install", spec]):
+            continue
+        _write("\nThe usual install did not resolve; installing %s and what it needs one by one…\n" % spec)
+        ok = True
+        for need in _wheel_requirements(pip_main, name, version):
+            _write("→ pip install --no-deps %s\n" % need)
+            if pip_main(["install", "--no-deps", "--only-binary", ":all:", need]):
+                ok = False
+        if pip_main(["install", "--no-deps", "--only-binary", ":all:", spec]):
+            ok = False
+        if not ok:
+            failed.append(name)
+    return failed
+
+
+def _ask(question):
+    try:
+        answer = input(question)
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer.strip().lower() in ("", "y", "yes", "s", "si", "sí")
+
+
 def main():
     args = sys.argv[1:] or ["--help"]
     _write("pip %s\n" % " ".join(args))
@@ -4438,16 +4564,36 @@ def main():
     if code and args and args[0] == "install":
         missing = _needs_build(state["tail"])
         if missing:
-            _write("\nNo iOS wheel exists for: %s.\n" % ", ".join(missing))
-            _write("It has code that must be compiled (C, C++, Fortran or Rust), which cannot be done on this device.\n")
-            _write("Nyxian asks whether to build it on your Mac (or GitHub's Mac if yours is off).\n")
-            for stream in (sys.stdout, sys.stderr):
-                try:
-                    stream.flush()
-                except Exception:
-                    pass
-            # private sequence, taken out by Nyxian's terminal before it is drawn
-            os.write(1, ("\x1b]7770;nyxian-wheel;%s\x07" % " ".join(missing)).encode("utf-8"))
+            _write("\nNo iOS wheel for the version pip chose of: %s.\n" % ", ".join(missing))
+            _write("Looking for a version that has one…\n")
+            usable = {}
+            for name in missing:
+                version = _ios_wheel_version(name)
+                if version:
+                    usable[name] = version
+                    _write("  %s %s has an iOS wheel.\n" % (name, version))
+                else:
+                    _write("  %s: no version has an iOS wheel.\n" % name)
+            if usable:
+                listed = ", ".join("%s %s" % item for item in usable.items())
+                if _ask("\nInstall %s? [Y/n] " % listed):
+                    failed = _install_ios_versions(pip_main, usable)
+                    missing = [name for name in missing if name not in usable or name in failed]
+                    if not missing:
+                        code = 0
+                else:
+                    _write("Not installed. Later: pip install %s\n" % " ".join("%s==%s" % item for item in usable.items()))
+                    missing = [name for name in missing if name not in usable]
+            if missing:
+                _write("\n%s must be compiled (C, C++, Fortran or Rust), which cannot be done on this device.\n" % ", ".join(missing))
+                _write("Nyxian asks whether to build it on your Mac (or GitHub's Mac if yours is off).\n")
+                for stream in (sys.stdout, sys.stderr):
+                    try:
+                        stream.flush()
+                    except Exception:
+                        pass
+                # private sequence, taken out by Nyxian's terminal before it is drawn
+                os.write(1, ("\x1b]7770;nyxian-wheel;%s\x07" % " ".join(missing)).encode("utf-8"))
     _write("\n%s in %d s.\n" % ("Done" if not code else "pip ended with errors", time.monotonic() - state["start"]))
     if not code and args and args[0] == "install":
         _write("New binary modules are signed the next time Python opens.\n")

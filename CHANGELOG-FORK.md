@@ -4,6 +4,17 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.80.0 — 2026-11-18
+
+- **pip finds an older version that works on iOS:** when the version pip
+  chose has no iOS wheel (e.g. lxml 6.1.3), Nyxian's pip looks in PyPI,
+  BeeWare, Flet and the fork's ios-wheels release for the newest version that
+  does have one for this Python (lxml 6.1.1) and asks "Install lxml 6.1.1?
+  [Y/n]". If pip then cannot resolve the iOS dependencies those builds pin
+  (flet-libxml2 / flet-libxslt), it installs them and the package one by one
+  (`--no-deps`), as done by hand for lxml. Only when no version has an iOS
+  wheel does it offer the build on your Mac / GitHub's.
+
 ## 1.79.1 — 2026-11-18
 
 - pip: "[Errno 45] ios does not support processes … installing build
