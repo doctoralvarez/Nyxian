@@ -4,6 +4,12 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.82.1 — 2026-11-18
+
+- iOS Wheels workflow: a universal wheel whose code does not compile on Python 3
+  (an old Python 2-only package, like `tesseract` 0.1.3 on PyPI, which is not OCR)
+  is no longer published.
+
 ## 1.82.0 — 2026-11-18
 
 - **After `pip install` works, Nyxian says so and offers "Open New Window":**

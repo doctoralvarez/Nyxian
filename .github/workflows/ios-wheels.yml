@@ -1,5 +1,7 @@
-# Fork doctoralvarez/Nyxian — version 1.5.0
+# Fork doctoralvarez/Nyxian — version 1.5.1
 # Changelog:
+#  - 1.5.1 (2026-11-18): a universal wheel whose code does not compile on
+#    Python 3 (an old Python 2 package) is no longer published.
 #  - 1.5.0 (2026-11-18): a pure-Python package that only has a source package
 #    gets its universal wheel published (pip cannot build it on iOS); your
 #    Mac counts as available while it is busy with another build.
@@ -175,6 +177,14 @@ jobs:
                || python -m pip wheel --quiet --no-deps -w purecheck "$project"; then
               pure=$(ls purecheck/*-none-any.whl 2>/dev/null | head -1)
               if [ -n "$pure" ]; then
+                # an old Python 2-only package (print '...') builds a wheel but cannot run
+                rm -rf purecheck/x && mkdir -p purecheck/x
+                python -m zipfile -e "$pure" purecheck/x
+                if ! python -m compileall -q purecheck/x >purecheck/compile.log 2>&1; then
+                  echo "$spec: not Python 3 code (does not compile), not published" | tee -a summary.txt
+                  head -5 purecheck/compile.log
+                  echo "::endgroup::"; continue
+                fi
                 cp "$pure" wheelhouse/
                 echo "$spec: pure Python, universal wheel $(basename "$pure")" | tee -a summary.txt
                 echo "::endgroup::"; continue
