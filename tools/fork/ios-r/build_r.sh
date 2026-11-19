@@ -1,6 +1,8 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 0.2.0
+# Fork doctoralvarez/Nyxian — version 0.2.1
 # Changelog:
+#  - 0.2.1 (2026-11-19): all of R's C and Fortran compiles for iOS; the build
+#    steps that run R use R for the Mac (R_EXE).
 #  - 0.2.0 (2026-11-19): configure passes for iOS. Every C/C++ file includes
 #    nyxian_ios.h first (system()/popen() go to Nyxian Shell through a hook);
 #    make -k lists every file that does not build yet in one run.
@@ -160,7 +162,9 @@ log "configured for iOS"
 # ---------- 4. compile what builds ----------
 ( cd "$SRC_IOS"
   # -k: every file that does not build for iOS is listed in one run
-  make -k -j "$JOBS" > "$T/ios-make.log" 2>&1 || {
+  # the steps that run R (base packages' R code, lazy-load databases, help) use R for the
+  # Mac, same version: that work does not depend on the platform; R for iOS cannot run here
+  make -k -j "$JOBS" R_EXE="R_ENABLE_JIT=0 TZ=UTC $HOST/bin/R --vanilla --no-echo" > "$T/ios-make.log" 2>&1 || {
     log "make stopped; what did not compile for iOS:"
     grep -E "error:|Error [0-9]|Undefined symbols|ld: " "$T/ios-make.log" | sort | uniq -c | sort -rn | head -80
     echo "---- end of make log"; tail -40 "$T/ios-make.log"; exit 1; } )
