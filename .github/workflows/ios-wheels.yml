@@ -59,9 +59,14 @@ jobs:
             if [ -z "$STATUS_TOKEN" ]; then
               choice='["self-hosted","macOS","ARM64"]'
             else
-              online=$(curl -fsS -H "Authorization: Bearer $STATUS_TOKEN" -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/repos/$REPO/actions/runners?per_page=100" \
-                | jq '[.runners[] | select(.status == "online") | select([.labels[].name] | index("self-hosted"))] | length' || echo "error")
+              # a runner that just took or finished a job can look offline for a moment: ask up to 3 times
+              for attempt in 1 2 3; do
+                online=$(curl -fsS -H "Authorization: Bearer $STATUS_TOKEN" -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/repos/$REPO/actions/runners?per_page=100" \
+                  | jq '[.runners[] | select(.status == "online" or .busy == true) | select([.labels[].name] | index("self-hosted"))] | length' || echo "error")
+                if [ "$online" = "error" ] || [ "$online" -gt 0 ]; then break; fi
+                sleep 10
+              done
               if [ "$online" = "error" ] || [ "$online" -gt 0 ]; then
                 choice='["self-hosted","macOS","ARM64"]'
               else
