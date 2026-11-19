@@ -1,6 +1,7 @@
 /*
- Fork doctoralvarez/Nyxian — version 0.1.0
+ Fork doctoralvarez/Nyxian — version 0.1.1
  Changelog:
+  - 0.1.1 (2026-11-19): the SDK's psort() is renamed (stats has its own).
   - 0.1.0 (2026-11-19): included first in every C/C++ file of R for iOS.
     iOS has no system() or popen() (an app runs no shell or other programs):
     R's calls go to R_nyxian_shell, a function the host sets (Nyxian's
@@ -19,7 +20,11 @@
 
 #include <errno.h>
 #include <stdio.h>
+/* Apple's stdlib.h declares psort(); R's stats has its own static psort: the SDK's is
+   renamed here, as it would be if stdlib.h came after R's headers */
+#define psort nyxian_sdk_psort
 #include <stdlib.h>
+#undef psort
 #include <string.h>
 
 #ifdef __cplusplus

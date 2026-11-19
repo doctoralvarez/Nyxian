@@ -178,6 +178,7 @@ log "configured for iOS"
   for d in src/library/*/src; do
     pkg=$(basename "$(dirname "$d")")
     [ -f "$d/Makefile" ] || continue
+    [ "$pkg" = tcltk ] && continue   # Tcl/Tk: no windows of its own on iOS
     if ! make -C "$d" -j "$JOBS" >> "$T/ios-make.log" 2>&1; then failed="$failed $pkg"; fi
   done
   [ -z "$failed" ] || { log "packages whose compiled code did not build:$failed"; grep -E "error:|Undefined" "$T/ios-make.log" | sort -u | head -80; exit 1; }
