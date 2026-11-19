@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.81.0 — 2026-11-18
+
+- **Paste without the permission prompt:** the paste key of the terminal's
+  key bar (Nyxian Shell, Python, …) is iOS's own paste button
+  (`UIPasteControl`). iOS never asks "Allow paste?" for it, because you tap it
+  yourself. Pasted text is sent as before (bracketed paste when the program
+  asked for it; several lines run one by one in Nyxian Shell).
+
 ## 1.80.2 — 2026-11-18
 
 - **pip repairs itself:** if pip was uninstalled or only part of it is left

@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.8.0
+ Fork doctoralvarez/Nyxian — version 1.9.0
  Changelog:
+  - 1.9.0 (2026-11-18): the key bar's paste key is iOS's own paste button
+    (UIPasteControl): iOS never asks for permission to paste with it,
+    because you tap it yourself. The pasted text goes the same way as
+    before (bracketed paste when the program asked for it).
   - 1.8.0 (2026-11-18): ESC ] 7770 ; nyxian-wheel ; names BEL (pip found no
     iOS wheel for a package that needs compiling): Nyxian asks whether to
     build it; on yes it starts the "iOS wheels" workflow of your fork (your
@@ -173,6 +177,8 @@ import Security
             }
         }
         
+        /* fork: text can come from iOS's paste button (UIPasteControl in the key bar) */
+        self.pasteConfiguration = UIPasteConfiguration(forAccepting: NSString.self)
         /* fork: a key bar whose keyboard button closes the keyboard */
         self.inputAccessoryView = ForkTerminalKeyBar(terminal: self)
         
@@ -321,6 +327,19 @@ import Security
     
     func forkPasteFromClipboard() {
         guard let text = UIPasteboard.general.string, !text.isEmpty else { return }
+        forkPasteText(text)
+    }
+    
+    /* fork: iOS's paste button (UIPasteControl) hands the text here, with no permission prompt */
+    override func paste(itemProviders: [NSItemProvider]) {
+        guard let provider = itemProviders.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else { return }
+        _ = provider.loadObject(ofClass: NSString.self) { [weak self] object, _ in
+            guard let text = object as? String, !text.isEmpty else { return }
+            DispatchQueue.main.async { self?.forkPasteText(text) }
+        }
+    }
+    
+    func forkPasteText(_ text: String) {
         if getTerminal().bracketedPasteMode {
             /* the program asked for pastes marked (Python's console, bash): send the text whole */
             var data = Data([0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e])
@@ -407,6 +426,8 @@ final class ForkTerminalKeyBar: UIInputView {
     private enum Key {
         case bytes([UInt8])
         case action(() -> Void)
+        /* iOS's own paste button: no permission prompt */
+        case paste
     }
     
     init(terminal: TerminalViewObjC) {
@@ -435,7 +456,7 @@ final class ForkTerminalKeyBar: UIInputView {
                 ("end", nil, .bytes([esc, 0x5b, 0x46]))
             ],
             [
-                (nil, "doc.on.clipboard", .action { [weak terminal] in terminal?.forkPasteFromClipboard() }),
+                (nil, "doc.on.clipboard", .paste),
                 ("clear", nil, .bytes([0x0c])),
                 (nil, "chevron.up.2", .action { [weak terminal] in terminal?.forkScrollPage(up: true) }),
                 (nil, "chevron.down.2", .action { [weak terminal] in terminal?.forkScrollPage(up: false) }),
@@ -469,12 +490,18 @@ final class ForkTerminalKeyBar: UIInputView {
                 stack.addArrangedSubview(gap)
             }
             for (title, symbol, key) in group {
+                if case .paste = key, let control = makePasteControl(for: terminal) {
+                    stack.addArrangedSubview(control)
+                    continue
+                }
                 stack.addArrangedSubview(makeKey(title: title, symbol: symbol) { [weak self] in
                     switch key {
                     case .bytes(let bytes): self?.send(bytes)
                     case .action(let action):
                         UIDevice.current.playInputClick()
                         action()
+                    case .paste:
+                        self?.terminal?.forkPasteFromClipboard()
                     }
                 })
             }
@@ -533,6 +560,24 @@ final class ForkTerminalKeyBar: UIInputView {
     private func send(_ bytes: [UInt8]) {
         UIDevice.current.playInputClick()
         terminal?.forkSendKeys(Data(bytes))
+    }
+    
+    /// iOS's paste button, sized like the other keys (nil before iOS 16: the old key is used)
+    private func makePasteControl(for terminal: TerminalViewObjC) -> UIView? {
+        guard #available(iOS 16.0, *) else { return nil }
+        let configuration = UIPasteControl.Configuration()
+        configuration.displayMode = .iconOnly
+        configuration.cornerStyle = .medium
+        configuration.baseForegroundColor = .label
+        configuration.baseBackgroundColor = .tertiarySystemFill
+        let control = UIPasteControl(configuration: configuration)
+        control.target = terminal
+        control.translatesAutoresizingMaskIntoConstraints = false
+        /* iOS only lets a paste button work when it is big enough to see clearly */
+        let width: CGFloat = NXForkIsPadLayout() ? 48 : 44
+        control.widthAnchor.constraint(equalToConstant: width).isActive = true
+        control.setContentHuggingPriority(.required, for: .horizontal)
+        return control
     }
     
     private func makeKey(title: String?, symbol: String?, tint: UIColor = .label, action: @escaping () -> Void) -> UIButton {
