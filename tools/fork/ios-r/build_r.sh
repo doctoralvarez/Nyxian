@@ -1,6 +1,8 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 0.3.0
+# Fork doctoralvarez/Nyxian — version 0.3.1
 # Changelog:
+#  - 0.3.1 (2026-11-19): Flang's runtime linked into R's Fortran libraries
+#    (FLIBS_IN_SO; libRlapack needed it), and checked for every library.
 #  - 0.3.0 (2026-11-19): R_HOME for iOS: R code, lazy-load databases, help and
 #    data from R for the Mac (same version and options; R for iOS cannot run
 #    on the Mac to make them); libR, BLAS/LAPACK, modules and every base
@@ -144,6 +146,7 @@ RT_LIBS=$(cd "$ROOT/flang-rt/lib" && ls libflang_rt*.a | sed -E 's/^lib(.*)\.a$/
     CC="$CC_BIN $IOS" CXX="$CXX_BIN $IOS" OBJC="$CC_BIN $IOS" FC="$FC_WRAP" \
     CPPFLAGS="$DEPS_INC" LDFLAGS="$DEPS_LIB" \
     FLIBS="-L$ROOT/flang-rt/lib $RT_LIBS -lc++" \
+    FLIBS_IN_SO="-L$ROOT/flang-rt/lib $RT_LIBS -lc++" \
     LIBS="-lssl -lcrypto -lz" \
     R_EXE="$HOST/bin/R" \
     > "$T/ios-configure.log" 2>&1 || {
@@ -160,7 +163,7 @@ RT_LIBS=$(cd "$ROOT/flang-rt/lib" && ls libflang_rt*.a | sed -E 's/^lib(.*)\.a$/
     [ -f "$mk" ] || continue
     /usr/bin/sed -i '' -E "s|^(CFLAGS = .*)$|\1 $IOS_INC|; s|^(CXXFLAGS = .*)$|\1 $IOS_INC|; s|^(CXX1[147]FLAGS = .*)$|\1 $IOS_INC|; s|^(CXX2[03]FLAGS = .*)$|\1 $IOS_INC|; s|^(OBJCFLAGS = .*)$|\1 $IOS_INC|" "$mk"
   done
-  grep -E "^(CFLAGS|CXXFLAGS) =" Makeconf
+  grep -E "^(CFLAGS|CXXFLAGS|FLIBS) =" Makeconf
 )
 log "configured for iOS"
 
@@ -211,6 +214,13 @@ while IFS= read -r -d '' f; do
   fi
 done < <(find "$RH" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -111 \) -print0)
 if [ -n "$bad" ]; then log "not built for iOS:"; printf "$bad\n"; exit 1; fi
+# Fortran's runtime must be inside (iOS has none to find at load time)
+missing=""
+while IFS= read -r -d '' f; do
+  n=$(nm -u "$f" 2>/dev/null | grep -cE "_Fortran|7Fortran7runtime" || true)
+  [ "$n" -gt 0 ] && missing="$missing\n  $f ($n Fortran runtime symbols)"
+done < <(find "$RH" -type f \( -name '*.so' -o -name '*.dylib' \) -print0)
+if [ -n "$missing" ]; then log "Fortran runtime not linked in:"; printf "$missing\n"; exit 1; fi
 log "R_HOME for iOS: $(du -sh "$RH" | cut -f1); compiled parts:"
 ( cd "$RH" && find . -name '*.so' -o -name '*.dylib' | sort )
 
