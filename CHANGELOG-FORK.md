@@ -4,6 +4,11 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.84.7 — 2026-11-19
+
+- iOS Wheels workflow: wheels copied from other indexes (scipy from Flet…) get
+  their binaries signed ad-hoc too, like the ones it builds.
+
 ## 1.84.6 — 2026-11-19
 
 - Fortran for iOS: flang-rt now builds; its library and its Fortran modules

@@ -1,5 +1,7 @@
-# Fork doctoralvarez/Nyxian — version 1.7.1
+# Fork doctoralvarez/Nyxian — version 1.7.2
 # Changelog:
+#  - 1.7.2 (2026-11-19): iOS wheels copied from PyPI, BeeWare, Flet or this
+#    release are signed ad-hoc too before they are published here.
 #  - 1.7.1 (2026-11-19): when your Mac is off, GitHub's Xcode 27 Mac (as the
 #    app build) instead of macos-15, whose queue cancelled the job twice.
 #  - 1.7.0 (2026-11-19): "fortran" input: Fortran libraries for iOS
@@ -199,6 +201,8 @@ jobs:
                  --platform ios_13_0_arm64_iphoneos --python-version 3.14 --implementation cp --abi cp314 \
                  --extra-index-url https://pypi.anaconda.org/beeware/simple --extra-index-url https://pypi.flet.dev \
                  --find-links "$FIND_LINKS" "$spec"; then
+              # wheels from elsewhere may come without code signatures: signed like the ones built here
+              bash tools/fork/ios-wheels/sign_wheel.sh mirror/*.whl || true
               cp mirror/*.whl wheelhouse/ 2>/dev/null || true
               echo "$spec: iOS wheel found, copied: $(ls mirror)" | tee -a summary.txt
               echo "::endgroup::"; continue
