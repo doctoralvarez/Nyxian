@@ -1,6 +1,9 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 0.1.2
+# Fork doctoralvarez/Nyxian — version 0.2.0
 # Changelog:
+#  - 0.2.0 (2026-11-19): configure passes for iOS. Every C/C++ file includes
+#    nyxian_ios.h first (system()/popen() go to Nyxian Shell through a hook);
+#    make -k lists every file that does not build yet in one run.
 #  - 0.1.2 (2026-11-19): BLAS/LAPACK for iOS (the Reference-LAPACK built
 #    here) is on the link line: configure's link checks ask for -lblas.
 #  - 0.1.1 (2026-11-19): zlib's version check preset for iOS (zlib comes
@@ -87,6 +90,8 @@ SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 CC_BIN=$(xcrun --sdk iphoneos -f clang)
 CXX_BIN=$(xcrun --sdk iphoneos -f clang++)
 IOS="-arch arm64 -isysroot $SDK -mios-version-min=$MIN_IOS"
+# every C/C++ file sees nyxian_ios.h first: system()/popen() go to Nyxian Shell (iOS has neither)
+IOS_INC="-include $HERE/nyxian_ios.h"
 
 # run-time test results from the Mac (same C library); nothing about programs, flags,
 # frameworks or libraries found, which differ for iOS
@@ -129,7 +134,7 @@ RT_LIBS=$(cd "$ROOT/flang-rt/lib" && ls libflang_rt*.a | sed -E 's/^lib(.*)\.a$/
     --without-readline --without-tcltk --without-cairo --without-libtiff --without-jpeglib \
     --without-libpng --disable-nls --with-internal-tzcode --disable-openmp --without-ICU \
     --with-internal-xdr \
-    CC="$CC_BIN $IOS" CXX="$CXX_BIN $IOS" OBJC="$CC_BIN $IOS" FC="$FC_WRAP" \
+    CC="$CC_BIN $IOS $IOS_INC" CXX="$CXX_BIN $IOS $IOS_INC" OBJC="$CC_BIN $IOS $IOS_INC" FC="$FC_WRAP" \
     CPPFLAGS="$DEPS_INC" LDFLAGS="$DEPS_LIB" \
     FLIBS="-L$ROOT/flang-rt/lib $RT_LIBS -lc++" \
     LIBS="-lssl -lcrypto -lz" \
@@ -148,6 +153,10 @@ log "configured for iOS"
 
 # ---------- 4. compile what builds ----------
 ( cd "$SRC_IOS"
-  make -j "$JOBS" > "$T/ios-make.log" 2>&1 || { log "make stopped:"; tail -100 "$T/ios-make.log"; exit 1; } )
+  # -k: every file that does not build for iOS is listed in one run
+  make -k -j "$JOBS" > "$T/ios-make.log" 2>&1 || {
+    log "make stopped; what did not compile for iOS:"
+    grep -E "error:|Error [0-9]|Undefined symbols|ld: " "$T/ios-make.log" | sort | uniq -c | sort -rn | head -80
+    echo "---- end of make log"; tail -40 "$T/ios-make.log"; exit 1; } )
 log "make finished"
 ls -la "$SRC_IOS/lib" || true
