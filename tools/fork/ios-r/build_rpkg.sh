@@ -1,6 +1,9 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 0.1.0
+# Fork doctoralvarez/Nyxian — version 0.1.1
 # Changelog:
+#  - 0.1.1 (2026-11-19): the iOS copy starts from the Mac install and only
+#    its compiled code is rebuilt for iOS (--libs-only): Matrix runs its own
+#    C code while installing, which the iOS build cannot do on the Mac.
 #  - 0.1.0 (2026-11-19): R packages (CRAN) for R for iOS. Each package and
 #    its dependencies is installed twice: for the Mac (so R for the Mac can
 #    load the dependencies while installing) and for iOS, with R for the Mac
@@ -132,9 +135,18 @@ while read -r pkg; do
   fi
   tarball=$(ls "$SRC"/"${pkg}"_*.tar.gz | head -1)
   log "$pkg: building for iOS"
-  # R for the Mac runs the install (dependencies load from the Mac library); compiling uses the iOS toolchain
-  if R_LIBS="$HOSTLIB" R_LIBS_USER="$HOSTLIB" R_MAKEVARS_USER="$MV" R_MAKEVARS_SITE=/dev/null \
-     "$HOST/bin/R" CMD INSTALL --no-test-load --library="$IOSLIB" "$tarball" > "$T/$pkg.log" 2>&1; then
+  # the Mac install (R code, lazy-load databases, help: the same on any platform; packages
+  # like Matrix run their own C code while installing, which only the Mac build can) is
+  # copied, and only its compiled code is built again for iOS (--libs-only)
+  rm -rf "$IOSLIB/$pkg"; cp -R "$HOSTLIB/$pkg" "$IOSLIB/$pkg"
+  ok=0
+  if [ ! -d "$IOSLIB/$pkg/libs" ]; then
+    ok=1   # R code only
+  elif R_LIBS="$HOSTLIB" R_LIBS_USER="$HOSTLIB" R_MAKEVARS_USER="$MV" R_MAKEVARS_SITE=/dev/null \
+     "$HOST/bin/R" CMD INSTALL --libs-only --no-test-load --library="$IOSLIB" "$tarball" > "$T/$pkg.log" 2>&1; then
+    ok=1
+  fi
+  if [ "$ok" = 1 ]; then
     bad=""
     for so in "$IOSLIB/$pkg"/libs/*.so; do
       [ -f "$so" ] || continue
