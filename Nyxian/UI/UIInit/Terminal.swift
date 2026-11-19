@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.9.2
+ Fork doctoralvarez/Nyxian — version 1.10.0
  Changelog:
+  - 1.10.0 (2026-11-18): after a pip install that worked (ESC ] 7770 ;
+    nyxian-installed ; names BEL) Nyxian says so and offers "Open New
+    Window": this window closes and a new one opens (the same kind; after
+    the pip install window, a Python console), where the package can be
+    imported at once (its binaries get signed when a window opens).
   - 1.9.2 (2026-11-18): the classic paste key is the default again (iOS's
     paste button did not work in the key bar, which lives in the keyboard's
     window); iOS's button is an option (Customization › iOS Paste Button).
@@ -174,11 +179,17 @@ import Security
             pages.append(contentsOf: self.forkLocalServers(in: data))
             /* fork: pip found no iOS wheel for packages that need compiling */
             let wheels = TerminalViewObjC.forkTakeRequests(TerminalViewObjC.wheelStart, from: &data)
+            /* fork: pip installed something: offer a fresh window to import it */
+            let installed = TerminalViewObjC.forkTakeRequests(TerminalViewObjC.installedStart, from: &data)
             
             DispatchQueue.main.async {
                 if !data.isEmpty { self.feed(byteArray: ArraySlice<UInt8>(data)) }
                 if !previews.isEmpty { self.forkShowPreview(previews) }
                 if let page = pages.last { self.forkOpenPage(page) }
+                if let packages = installed.last, let root = self.window?.rootViewController {
+                    _ = self.resignFirstResponder()
+                    self.forkOfferNewWindow(after: packages, from: root)
+                }
                 if let packages = wheels.last, let root = self.window?.rootViewController {
                     _ = self.resignFirstResponder()
                     ForkWheelBuilder.offer(packages: packages, from: root)
@@ -241,6 +252,7 @@ import Security
     
     static let openStart = Array("\u{1b}]7770;nyxian-open;".utf8)
     static let wheelStart = Array("\u{1b}]7770;nyxian-wheel;".utf8)
+    static let installedStart = Array("\u{1b}]7770;nyxian-installed;".utf8)
     
     /// Takes every ESC ] 7770 ; KIND ; text BEL of one kind out of the output; returns the texts.
     static func forkTakeRequests(_ prefix: [UInt8], from data: inout Data) -> [String] {
@@ -366,6 +378,24 @@ import Security
         let step = max(bounds.height - font.lineHeight * 2, font.lineHeight)
         let target = up ? max(0, contentOffset.y - step) : min(maxOffset, contentOffset.y + step)
         setContentOffset(CGPoint(x: contentOffset.x, y: target), animated: true)
+    }
+    
+    /// Opens a new window like this one (set by NXWindowSessionTerminal) and closes this one.
+    @objc var forkReopenWindow: (() -> Void)?
+    
+    /// pip installed `packages`: says so and offers a new window where they import at once
+    func forkOfferNewWindow(after packages: String, from root: UIViewController) {
+        guard let reopen = forkReopenWindow else { return }
+        var top = root
+        while let shown = top.presentedViewController, !shown.isBeingDismissed { top = shown }
+        let names = packages.split(separator: " ").joined(separator: ", ")
+        let alert = UIAlertController(
+            title: names.isEmpty ? "Installed" : "Installed: \(names)",
+            message: "Open a new window to import it right away (its compiled parts get signed when a window opens). This window closes.",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Not Now", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Open New Window", style: .default) { _ in reopen() })
+        top.present(alert, animated: true)
     }
     
     func forkCloseWindowAction() {

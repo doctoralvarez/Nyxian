@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.43.2
+ Fork doctoralvarez/Nyxian — version 1.44.0
  Changelog:
+  - 1.44.0 (2026-11-18): nyxian_pip tells the terminal what it installed, so
+    Nyxian can offer a new window where it imports at once.
   - 1.43.2 (2026-11-18): pip uninstalled or half there ("No module named
     'pip._internal'"): nyxian_pip puts back Python's own copy (ensurepip's
     wheel) and goes on; unpacking the runtime checks pip/_internal, not
@@ -4652,6 +4654,14 @@ def main():
     _write("\n%s in %d s.\n" % ("Done" if not code else "pip ended with errors", time.monotonic() - state["start"]))
     if not code and args and args[0] == "install":
         _write("New binary modules are signed the next time Python opens.\n")
+        installed = [a for a in args[1:] if not a.startswith("-")]
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except Exception:
+                pass
+        # private sequence: Nyxian offers to open a new window, where it can be imported at once
+        os.write(1, ("\x1b]7770;nyxian-installed;%s\x07" % " ".join(installed)).encode("utf-8"))
     sys.exit(code)
 
 

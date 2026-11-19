@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.6.0
+ Fork doctoralvarez/Nyxian — version 1.7.0
  Changelog:
+  - 1.7.0 (2026-11-18): forkReopenWindow: a new window like this one (same
+    program, arguments, folder, title, font), or a Python console after the
+    pip install window, opens and this one closes (after pip install).
   - 1.6.0 (2026-11-09): job control: ^Z stops the program ("[1]+ Stopped")
     and the window takes commands — fg (continue here), bg (continue in the
     background), jobs, kill [-9], help; ^Z stops a job in the background
@@ -213,6 +216,33 @@ typedef NS_ENUM(NSInteger, NXForkJobState) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if(strongSelf == nil) return;
         [[NXWindowServer shared] closeWindowWithIdentifier:strongSelf.windowIdentifier withCompletion:nil];
+    };
+    _terminal.forkReopenWindow = ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if(strongSelf == nil) return;
+        NXWindowSessionTerminal *fresh = [[NXWindowSessionTerminal alloc] initWithUtilityPath:strongSelf.utilityPath];
+        if(fresh == nil) return;
+        BOOL pipWindow = [strongSelf.arguments containsObject:@"nyxian_pip"];
+        if(pipWindow)
+        {
+            /* the pip install window would install again: a Python console instead */
+            fresh.arguments = @[strongSelf.utilityPath, @"-q", @"-m", @"nyxian_repl"];
+            fresh.title = @"Python";
+            fresh.closeOnExit = YES;
+        }
+        else
+        {
+            fresh.arguments = strongSelf.arguments;
+            fresh.title = strongSelf.title;
+            fresh.closeOnExit = strongSelf.closeOnExit;
+            fresh.exitHandler = strongSelf.exitHandler;
+        }
+        fresh.extraEnvironment = strongSelf.extraEnvironment;
+        fresh.workingDirectory = strongSelf.workingDirectory;
+        fresh.fontSize = strongSelf.fontSize;
+        fresh.fontSizeDefaultsKey = strongSelf.fontSizeDefaultsKey;
+        [[NXWindowServer shared] closeWindowWithIdentifier:strongSelf.windowIdentifier withCompletion:nil];
+        [[NXWindowServer shared] openWindowWithSession:fresh withCompletion:nil];
     };
     [_process addObserver:self];
     [self forkStartJobControl];

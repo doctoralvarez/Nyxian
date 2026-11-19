@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.82.0 — 2026-11-18
+
+- **After `pip install` works, Nyxian says so and offers "Open New Window":**
+  the window closes and a new one opens, where the package imports at once
+  (its compiled parts get signed when a window opens). In Nyxian Shell a new
+  Shell opens; after the pip install window, a Python console. "Not Now"
+  keeps the window.
+
 ## 1.81.2 — 2026-11-18
 
 - The terminal's classic paste key is the default again: iOS's paste button
