@@ -1,6 +1,9 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.1.2
+# Fork doctoralvarez/Nyxian — version 1.1.3
 # Changelog:
+#  - 1.1.3 (2026-11-19): flang-rt for iOS leaves out runtime trampolines
+#    (-fsafe-trampoline only): they write code into executable memory, which
+#    iOS does not allow; the entry points stop with a message instead.
 #  - 1.1.2 (2026-11-19): flang-rt for iOS: EXECUTE_COMMAND_LINE answers "not
 #    supported" instead of calling system(), which iOS does not have.
 #  - 1.1.1 (2026-11-19): the Fortran wrapper links with Apple's clang for iOS
@@ -215,6 +218,32 @@ build_flang_rt() {  # tag prefix
     perl -pi -e 's/std::system\(/NyxianSystem(/g' "$ex"
     perl -0pi -e 's/(#include <limits>\n)/$1#if defined(__APPLE__)\n#include <TargetConditionals.h>\n#endif\nstatic int NyxianSystem(const char *cmd) {\n#if defined(__APPLE__) && TARGET_OS_IPHONE\n  (void)cmd;\n  errno = ENOENT;\n  return -1;\n#else\n  return std::system(cmd);\n#endif\n}\n/' "$ex"
     grep -c NyxianSystem "$ex" | sed 's/^/[native] execute.cpp patched: /' >&2
+  fi
+  # runtime trampolines (only for code built with -fsafe-trampoline) write machine code
+  # into executable memory at run time: iOS does not allow that, so on iOS the three entry
+  # points only stop with a message (code built without that flag never calls them)
+  local tr="$src/flang-rt/lib/runtime/trampoline.cpp"
+  if [ -f "$tr" ]; then
+    cat > "$tr" <<'TRAMP'
+// Nyxian fork: iOS build of flang-rt. Runtime trampolines need memory that is
+// written and then executed, which iOS apps cannot have: not supported here.
+#include "flang/Runtime/trampoline.h"
+#include "flang-rt/runtime/terminator.h"
+
+namespace Fortran::runtime {
+extern "C" {
+[[noreturn]] static void NyxianNoTrampolines() {
+  Terminator terminator{__FILE__, __LINE__};
+  terminator.Crash("Runtime trampolines (-fsafe-trampoline) are not available "
+                   "on iOS. Recompile without -fsafe-trampoline.");
+}
+void *RTDEF(TrampolineInit)(void *, const void *, const void *) { NyxianNoTrampolines(); }
+void *RTDEF(TrampolineAdjust)(void *) { NyxianNoTrampolines(); }
+void RTDEF(TrampolineFree)(void *) { NyxianNoTrampolines(); }
+} // extern "C"
+} // namespace Fortran::runtime
+TRAMP
+    log "trampoline.cpp: runtime trampolines left out (not allowed on iOS)"
   fi
   # flang-rt adds -mmacosx-version-min=10.7 for any Apple build: not for iOS
   /usr/bin/sed -i '' -E 's/-mmacosx-version-min=\$\{DARWIN_osx_BUILTIN_MIN_VER\}//' "$src/flang-rt/cmake/modules/AddFlangRT.cmake"
