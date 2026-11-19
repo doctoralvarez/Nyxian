@@ -1,6 +1,8 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.1.1
+# Fork doctoralvarez/Nyxian — version 1.1.2
 # Changelog:
+#  - 1.1.2 (2026-11-19): flang-rt for iOS: EXECUTE_COMMAND_LINE answers "not
+#    supported" instead of calling system(), which iOS does not have.
 #  - 1.1.1 (2026-11-19): the Fortran wrapper links with Apple's clang for iOS
 #    (plus Flang's runtime for iOS when built), so CMake's Fortran checks
 #    (FortranCInterface in LAPACK) can link; flang-rt no longer gets
@@ -206,6 +208,14 @@ build_flang_rt() {  # tag prefix
   git -C "$src" sparse-checkout set runtimes flang-rt flang/include flang/lib/Decimal flang/lib/Common \
     flang/module flang/cmake cmake llvm/cmake llvm/utils/llvm-lit llvm/utils/merge-json.py third-party >/dev/null 2>&1 \
     || git -C "$src" sparse-checkout set runtimes flang-rt flang cmake llvm/cmake llvm/utils third-party
+  # EXECUTE_COMMAND_LINE calls system(), which iOS does not have (an app runs no shell):
+  # on iOS it reports "not supported" (-1, ENOENT) like a system without a shell
+  local ex="$src/flang-rt/lib/runtime/execute.cpp"
+  if [ -f "$ex" ] && ! grep -q NyxianSystem "$ex"; then
+    perl -pi -e 's/std::system\(/NyxianSystem(/g' "$ex"
+    perl -0pi -e 's/(#include <limits>\n)/$1#if defined(__APPLE__)\n#include <TargetConditionals.h>\n#endif\nstatic int NyxianSystem(const char *cmd) {\n#if defined(__APPLE__) && TARGET_OS_IPHONE\n  (void)cmd;\n  errno = ENOENT;\n  return -1;\n#else\n  return std::system(cmd);\n#endif\n}\n/' "$ex"
+    grep -c NyxianSystem "$ex" | sed 's/^/[native] execute.cpp patched: /' >&2
+  fi
   # flang-rt adds -mmacosx-version-min=10.7 for any Apple build: not for iOS
   /usr/bin/sed -i '' -E 's/-mmacosx-version-min=\$\{DARWIN_osx_BUILTIN_MIN_VER\}//' "$src/flang-rt/cmake/modules/AddFlangRT.cmake"
   cmake -S "$src/runtimes" -B "$bdir" -G Ninja \

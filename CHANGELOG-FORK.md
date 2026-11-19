@@ -4,6 +4,11 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.84.3 — 2026-11-19
+
+- Fortran for iOS: flang-rt's EXECUTE_COMMAND_LINE answers "not supported" on
+  iOS instead of calling system(), which iOS does not have.
+
 ## 1.84.2 — 2026-11-19
 
 - Fortran for iOS: links Fortran code with Apple's clang and Flang's runtime
