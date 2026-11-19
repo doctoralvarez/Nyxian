@@ -575,5 +575,6 @@ case "$cmd" in
     echo "PKG_CONFIG_LIBDIR=$(pc_paths) CPPFLAGS='${inc# }' CFLAGS='${inc# }' CXXFLAGS='${inc# }' LDFLAGS='${lib# } -lz -lc++$extra'$fortran" ;;
   fortran) python_fortran "$1" ;;
   hostpy) host_python ;;
+  fc) fortran_wrapper && echo "$FC_WRAP" ;;
   *) echo "usage: native.sh deps <pkg> | ensure <spec>... | env" >&2; exit 2 ;;
 esac

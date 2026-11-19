@@ -62,7 +62,7 @@ cp "$SRC_HOST/config.cache" "$T/host-config.cache"
 # ---------- 2. R's libraries for iOS ----------
 IOS_NATIVE_FORTRAN=1 bash "$NATIVE" ensure xz pcre2 curl
 IOS_NATIVE_FORTRAN=1 bash "$NATIVE" ensure flang-rt
-FC_WRAP="${RUNNER_TEMP:-/tmp}/ios-native-work/ios-flang"
+FC_WRAP=$(bash "$NATIVE" fc)
 [ -x "$FC_WRAP" ] || { log "no Fortran wrapper"; exit 1; }
 
 # ---------- 3. configure for iOS ----------
