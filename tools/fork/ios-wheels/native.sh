@@ -1,6 +1,9 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.1.4
+# Fork doctoralvarez/Nyxian — version 1.1.5
 # Changelog:
+#  - 1.1.5 (2026-11-19): flang-rt built: its library (installed under
+#    lib/clang/<n>/lib/ios) is copied to lib/ (the find pattern skipped it),
+#    and its Fortran modules for iOS go to finclude/, which the wrapper uses.
 #  - 1.1.4 (2026-11-19): flang-rt's sources include libc's shared RPC headers
 #    (io-api-server.cpp needs shared/rpc.h).
 #  - 1.1.3 (2026-11-19): flang-rt for iOS leaves out runtime trampolines
@@ -156,7 +159,7 @@ fortran_wrapper() {
   FC_WRAP="$WORK/ios-flang"
   {
     echo '#!/bin/bash'
-    echo "FLANG='$FLANG'; CC_BIN='$CC_BIN'; SDK='$SDK'; MIN_IOS='$MIN_IOS'; RT='$ROOT/flang-rt/lib'"
+    echo "FLANG='$FLANG'; CC_BIN='$CC_BIN'; SDK='$SDK'; MIN_IOS='$MIN_IOS'; RT='$ROOT/flang-rt/lib'; MODS='$ROOT/flang-rt/finclude'"
     cat <<'EOF'
 # compiles with flang for arm64-apple-ios; links with Apple's clang for iOS (flang's own
 # link step would use its macOS runtime), adding Flang's runtime built for iOS when present
@@ -170,8 +173,11 @@ for a in "$@"; do
   esac
   args+=("$a")
 done
+# Fortran's own modules (iso_c_binding…) built for iOS, once flang-rt exists
+target=(--target=arm64-apple-ios$MIN_IOS)
+[ -d "$MODS" ] && target+=(-fintrinsic-modules-path "$MODS")
 if [ $link = 0 ] || [ ${#args[@]} = 0 ] || [ "${args[*]}" = "-v" ]; then
-  exec "$FLANG" --target=arm64-apple-ios$MIN_IOS "${args[@]}"
+  exec "$FLANG" "${target[@]}" "${args[@]}"
 fi
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 fflags=(); linkargs=(); n=0
@@ -186,7 +192,7 @@ for a in "${args[@]}"; do
 done
 for f in "${sources[@]}"; do
   n=$((n + 1))
-  "$FLANG" --target=arm64-apple-ios$MIN_IOS "${fflags[@]}" -c "$f" -o "$tmp/f$n.o" || exit 1
+  "$FLANG" "${target[@]}" "${fflags[@]}" -c "$f" -o "$tmp/f$n.o" || exit 1
   linkargs+=("$tmp/f$n.o")
 done
 rt=()
@@ -270,9 +276,14 @@ TRAMP
   cmake --build "$bdir" -j "$JOBS"
   cmake --install "$bdir"
   # whatever directory the runtime chose: every .a also in lib/
-  find "$prefix" -name '*.a' -not -path "$prefix/lib/*.a" -exec cp -f {} "$prefix/lib/" \; 2>/dev/null || true
+  # (it goes to lib/clang/<major>/lib/ios/; find's * also crosses "/")
+  find "$prefix/lib" -mindepth 2 -name '*.a' -exec cp -f {} "$prefix/lib/" \; 2>/dev/null || true
+  # its Fortran modules built for iOS (iso_c_binding…), where the wrapper finds them
+  local mods; mods=$(find "$prefix/lib" -type d -path '*finclude/flang*' -name 'arm64-apple-ios*' | head -1)
+  if [ -n "$mods" ]; then mkdir -p "$prefix/finclude"; cp -R "$mods/." "$prefix/finclude/"; fi
+  ls "$prefix"/lib/libflang_rt*.a >/dev/null 2>&1 || { log "flang-rt: no libflang_rt*.a was installed"; return 1; }
   mkdir -p "$prefix/lib/pkgconfig"
-  local libs; libs=$(cd "$prefix/lib" && ls libflang_rt*.a 2>/dev/null | sed -E 's/^lib(.*)\.a$/-l\1/' | tr '\n' ' ')
+  local libs; libs=$(cd "$prefix/lib" && ls libflang_rt*.a | sed -E 's/^lib(.*)\.a$/-l\1/' | tr '\n' ' ')
   cat > "$prefix/lib/pkgconfig/flang-rt.pc" <<EOF
 prefix=$prefix
 libdir=\${prefix}/lib
