@@ -247,7 +247,7 @@ if [ -n "$bad" ]; then log "not built for iOS:"; printf "$bad\n"; exit 1; fi
 nm -gU "$RH"/lib/*.dylib 2>/dev/null | awk '{print $NF}' | sort -u > "$T/r-exports.txt"
 missing=""
 while IFS= read -r -d '' f; do
-  n=$(nm -u "$f" 2>/dev/null | awk '{print $NF}' | grep -E "_Fortran|7Fortran7runtime" | sort -u | comm -23 - "$T/r-exports.txt" | wc -l | tr -d ' ')
+  n=$(set +o pipefail; nm -u "$f" 2>/dev/null | awk '{print $NF}' | { grep -E "_Fortran|7Fortran7runtime" || true; } | sort -u | comm -23 - "$T/r-exports.txt" | wc -l | tr -d ' ')
   [ "$n" -gt 0 ] && missing="$missing\n  $f ($n Fortran runtime symbols found nowhere)"
 done < <(find "$RH" -type f \( -name '*.so' -o -name '*.dylib' \) -print0)
 if [ -n "$missing" ]; then log "Fortran runtime not linked in:"; printf "$missing\n"; exit 1; fi
