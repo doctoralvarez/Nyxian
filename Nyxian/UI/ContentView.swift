@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.47.0
+ Fork doctoralvarez/Nyxian — version 1.47.1
  Changelog:
+  - 1.47.1 (2026-11-19): a Java .class file (same first bytes as a universal
+    binary; R ships getsp.class) is not taken for a binary to sign.
   - 1.47.0 (2026-11-19): iosbuild r NAME… builds R packages (CRAN) for R
     for iOS.
   - 1.46.0 (2026-11-19): Nyxian Shell: R and Rscript run R for iOS
@@ -7569,9 +7571,17 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     private static func isMachO(_ url: URL) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }
-        guard let data = try? handle.read(upToCount: 4), data.count == 4 else { return false }
+        guard let data = try? handle.read(upToCount: 8), data.count == 8 else { return false }
         let magic = data.withUnsafeBytes { $0.load(as: UInt32.self) }
-        return magic == 0xfeedfacf || magic == 0xcffaedfe || magic == 0xbebafeca || magic == 0xcafebabe
+        if magic == 0xfeedfacf || magic == 0xcffaedfe { return true }
+        if magic == 0xbebafeca || magic == 0xcafebabe {
+            /* 0xCAFEBABE is also a Java .class file (R ships one): a universal binary has a
+               handful of slices there, a class file its version (45 and up) */
+            let raw = data.withUnsafeBytes { $0.load(fromByteOffset: 4, as: UInt32.self) }
+            let count = magic == 0xbebafeca ? UInt32(bigEndian: raw) : UInt32(littleEndian: raw)
+            return url.pathExtension != "class" && count > 0 && count < 30
+        }
+        return false
     }
     
     // MARK: warm-up: Python is prepared once, in the background, when Nyxian opens

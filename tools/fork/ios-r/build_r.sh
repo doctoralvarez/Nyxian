@@ -220,6 +220,8 @@ done
 cp -f "$SRC_IOS/etc/Makeconf" "$RH/etc/Makeconf"
 cp -R "$SRC_IOS/include/." "$RH/include/"
 cp -f "$HERE/Rprofile.site" "$RH/etc/Rprofile.site"
+# Java helpers (R CMD javareconf): no Java here, and their 0xCAFEBABE looks like a binary
+rm -rf "$RH/share/java"
 # libraries found next to each other on iOS (R's build wrote absolute /R/lib or build-tree paths)
 relto() { python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$1" "$2"; }
 while IFS= read -r -d '' f; do

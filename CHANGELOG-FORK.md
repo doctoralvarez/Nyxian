@@ -4,6 +4,12 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.89.1 — 2026-11-19
+
+- Python start: a Java .class file is no longer taken for a binary to sign
+  (R's share/java/getsp.class stopped Python with "Could not sign
+  getsp.class"); R for iOS no longer carries those Java helpers.
+
 ## 1.89.0 — 2026-11-19
 
 - R packages for iOS: the iOS Wheels workflow's `rpkgs` input builds CRAN
