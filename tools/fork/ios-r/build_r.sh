@@ -1,6 +1,8 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 0.1.0
+# Fork doctoralvarez/Nyxian — version 0.1.1
 # Changelog:
+#  - 0.1.1 (2026-11-19): zlib's version check preset for iOS (zlib comes
+#    with the SDK); iconv's run-time results come from the Mac too.
 #  - 0.1.0 (2026-11-19): first stage of R for iOS. Builds R for the Mac (the
 #    same version) and configures R for iOS (arm64 device, iOS 13.0) with it:
 #    the results of configure's run-time tests (programs it would run, which
@@ -72,7 +74,7 @@ IOS="-arch arm64 -isysroot $SDK -mios-version-min=$MIN_IOS"
 # run-time test results from the Mac (same C library); nothing about programs, flags,
 # frameworks or libraries found, which differ for iOS
 grep -E '^(r_cv_|ac_cv_func_|ac_cv_c_bigendian|ac_cv_sizeof_|ac_cv_alignof_|gl_cv_|am_cv_|ac_cv_have_decl_|ac_cv_type_|r_cv_func)' "$T/host-config.cache" \
-  | grep -vE '^(r_cv_prog_|r_cv_path_|r_cv_header_|r_cv_check_fw|r_cv_.*FOUNDATION|r_cv_objc|r_cv_OBJC|r_cv_have_|r_cv_lapack|r_cv_zdotu|r_cv_complete_blas|r_cv_atlas|r_cv_dep_lapackblas|r_cv_icu|r_cv_cache_foundation|ac_cv_func_iconv|r_cv_func_iconv|am_cv_func_iconv)' \
+  | grep -vE '^(r_cv_prog_|r_cv_path_|r_cv_header_|r_cv_check_fw|r_cv_.*FOUNDATION|r_cv_objc|r_cv_OBJC|r_cv_have_|r_cv_lapack|r_cv_zdotu|r_cv_complete_blas|r_cv_atlas|r_cv_dep_lapackblas|r_cv_icu|r_cv_cache_foundation)' \
   > "$T/ios-config.cache" || true
 cat >> "$T/ios-config.cache" <<CACHE
 r_cv_have_curl728=\${r_cv_have_curl728=yes}
@@ -80,7 +82,9 @@ r_cv_have_curl_https=\${r_cv_have_curl_https=yes}
 r_cv_have_pcre2utf=\${r_cv_have_pcre2utf=yes}
 r_cv_have_bzlib=\${r_cv_have_bzlib=yes}
 r_cv_have_lzma=\${r_cv_have_lzma=yes}
-r_cv_have_zlib=\${r_cv_have_zlib=yes}
+r_cv_header_zlib_h=\${r_cv_header_zlib_h=yes}
+r_cv_have_zstd=\${r_cv_have_zstd=no}
+r_cv_have_pcre832=\${r_cv_have_pcre832=no}
 r_cv_prog_fc_append_underscore=\${r_cv_prog_fc_append_underscore=yes}
 r_cv_prog_fc_append_second_underscore=\${r_cv_prog_fc_append_second_underscore=no}
 r_cv_prog_fc_can_run=\${r_cv_prog_fc_can_run=yes}
