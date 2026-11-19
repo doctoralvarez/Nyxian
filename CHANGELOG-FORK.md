@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.80.2 — 2026-11-18
+
+- **pip repairs itself:** if pip was uninstalled or only part of it is left
+  ("No module named 'pip._internal'"), the next `pip` command puts back the
+  copy that comes with Python (ensurepip's wheel) and goes on.
+- Unpacking the Python runtime reinstalls pip when `pip/_internal` is
+  missing; a leftover empty `pip` folder used to hide that pip was gone, so
+  Reinstall Python Runtime did not bring it back.
+
 ## 1.80.1 — 2026-11-18
 
 - **Nyxian Shell: pasting several lines runs them one by one.** They were

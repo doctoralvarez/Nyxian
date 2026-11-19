@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.43.1
+ Fork doctoralvarez/Nyxian — version 1.43.2
  Changelog:
+  - 1.43.2 (2026-11-18): pip uninstalled or half there ("No module named
+    'pip._internal'"): nyxian_pip puts back Python's own copy (ensurepip's
+    wheel) and goes on; unpacking the runtime checks pip/_internal, not
+    just a pip folder (the leftover folder hid that pip was gone).
   - 1.43.1 (2026-11-18): Nyxian Shell: several lines pasted at the prompt are
     several commands, run one after another (they were joined into one
     line: "pip uninstall -y lxml" + "pip install lxml" uninstalled pip
@@ -4552,6 +4556,31 @@ def _install_ios_versions(pip_main, versions):
     return failed
 
 
+def _restore_pip():
+    """Unpacks the pip wheel that comes with Python (ensurepip) into site-packages."""
+    import glob
+    import importlib
+    import shutil
+    import sysconfig
+    import zipfile
+    wheels = sorted(glob.glob(os.path.join(os.path.dirname(os.__file__), "ensurepip", "_bundled", "pip-*.whl")))
+    if not wheels:
+        _write("pip is missing and Python's own copy was not found: use Reinstall Python Runtime.\n", 2)
+        return False
+    site = sysconfig.get_paths()["purelib"]
+    _write("pip is missing or incomplete: putting back Python's own copy (%s)…\n" % os.path.basename(wheels[-1]))
+    shutil.rmtree(os.path.join(site, "pip"), ignore_errors=True)
+    for old in glob.glob(os.path.join(site, "pip-*.dist-info")):
+        shutil.rmtree(old, ignore_errors=True)
+    with zipfile.ZipFile(wheels[-1]) as wheel:
+        wheel.extractall(site)
+    for name in list(sys.modules):
+        if name == "pip" or name.startswith("pip."):
+            del sys.modules[name]
+    importlib.invalidate_caches()
+    return True
+
+
 def _ask(question):
     try:
         answer = input(question)
@@ -4577,7 +4606,13 @@ def main():
     sys.stderr = _Tracking(sys.stderr, state)
     threading.Thread(target=_watch, args=(state,), daemon=True).start()
     try:
-        from pip._internal.cli.main import main as pip_main
+        try:
+            from pip._internal.cli.main import main as pip_main
+        except ImportError:
+            # pip was uninstalled (or only part of it is left): put back Python's own copy
+            if not _restore_pip():
+                raise
+            from pip._internal.cli.main import main as pip_main
         code = pip_main(args)
     finally:
         state["done"] = True
@@ -7645,7 +7680,8 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
                 try? fm.moveItem(at: kept, to: sitePackages)
             }
             defaults.set(bundledList, forKey: bundledMergedKey)
-            if !fm.fileExists(atPath: sitePackages.appendingPathComponent("pip").path) {
+            /* fork: a pip folder left behind without its code (after pip was uninstalled) counts as missing */
+            if !fm.fileExists(atPath: sitePackages.appendingPathComponent("pip/_internal/__init__.py").path) {
                 progress("Installing pip…")
                 try? fm.createDirectory(at: sitePackages, withIntermediateDirectories: true)
                 let bundled = home.appendingPathComponent("lib/python\(version)/ensurepip/_bundled")
