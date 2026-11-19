@@ -244,7 +244,14 @@ while IFS= read -r -d '' f; do
   n=$(nm -u "$f" 2>/dev/null | grep -cE "_Fortran|7Fortran7runtime" || true)
   [ "$n" -gt 0 ] && missing="$missing\n  $f ($n Fortran runtime symbols)"
 done < <(find "$RH" -type f \( -name '*.so' -o -name '*.dylib' \) -print0)
-if [ -n "$missing" ]; then log "Fortran runtime not linked in:"; printf "$missing\n"; exit 1; fi
+if [ -n "$missing" ]; then
+  log "Fortran runtime not linked in:"; printf "$missing\n"
+  echo "---- how libRlapack was linked"; grep -n "libRlapack.dylib" "$T/ios-make.log" | grep -v "^.*cp " | head -5 | cut -c1-3000
+  echo "---- the missing symbols, and where flang-rt has them"
+  nm -u "$RH/lib/libRlapack.dylib" | grep -E "_Fortran|7Fortran7runtime" | head -5
+  for a in "$ROOT"/flang-rt/lib/*.a; do echo "$a: $(nm "$a" 2>/dev/null | grep -c ' T .*FortranAAssign')"; done
+  exit 1
+fi
 log "R_HOME for iOS: $(du -sh "$RH" | cut -f1); compiled parts:"
 ( cd "$RH" && find . -name '*.so' -o -name '*.dylib' | sort )
 
