@@ -1,5 +1,7 @@
-# Fork doctoralvarez/Nyxian — version 0.1.1
+# Fork doctoralvarez/Nyxian — version 0.1.2
 # Changelog:
+#  - 0.1.2 (2026-11-19): rpy2 3.6 starts R with initr() (initr_simple is
+#    gone); no LD_LIBRARY_PATH lookup through Rscript (a process).
 #  - 0.1.1 (2026-11-19): tells rpy2 where libR is on iOS itself (whichever
 #    rpy2-rinterface wheel pip picks).
 #  - 0.1.0 (2026-11-19): R for iOS inside Nyxian's Python (rpy2, ABI mode).
@@ -143,8 +145,10 @@ def start():
     # rpy2 knows Linux/Darwin/Windows: on iOS R is lib/libR.dylib, as on the Mac
     import rpy2.situation as situation
     situation.get_rlib_path = lambda r_home, system: os.path.join(r_home, "lib", "libR.dylib")
+    # rpy2 asks Rscript (a process) for LD_LIBRARY_PATH: nothing to ask on iOS
+    situation.r_ld_library_path_from_subprocess = lambda r_home: ""
     import rpy2.rinterface as ri
-    ri.initr_simple()
+    ri.initr(interactive=False)
     _set_c_shell()
 
     def r_shell(cmd, stdin_text):
