@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.11.0
+ Fork doctoralvarez/Nyxian — version 1.12.0
  Changelog:
+  - 1.12.0 (2026-11-18): "Classic Paste Key" toggle (the terminal key bar's
+    old paste key instead of iOS's paste button); the iPhone Duo Layout row
+    moves one down.
   - 1.11.0 (2026-11-18): "This Device" under Live Issues: the model code
     (iPhone19,4 …) with its common name, screen size in inches, the screen
     in points and pixels now, iOS version, RAM and the layout Nyxian uses
@@ -115,7 +118,7 @@ class CustomizationViewController: NXUITableViewController {
             return 4
         case 1:
             /* fork: one more row on iPhone Duo */
-            return NXForkIsIPhoneDuo() ? 18 : 17
+            return NXForkIsIPhoneDuo() ? 19 : 18
         case 2:
             return self.icons.count
         default:
@@ -204,13 +207,17 @@ int main(void)
                 /* fork: hold ⌘ for the shortcut list */
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
                 (cell as! ToggleTableCell).configure(title: "Shortcut List (hold ⌘)", key: "fork.shortcutHUD", defaultValue: true)
-            } else if indexPath.row == 17 {
+            } else if indexPath.row == 18 {
                 /* fork: iPhone Duo's large inner screen */
                 let picker = PickerTableCell(options: ["Automatic", "iPad (large screen)", "iPhone"], title: "iPhone Duo Layout", key: "fork.duoLayout", defaultValue: 0)
                 picker.callback = { _ in
                     NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Close and open Nyxian again to use the new layout", withDelay: 0.0)
                 }
                 cell = picker
+            } else if indexPath.row == 17 {
+                /* fork: the terminal's paste key: iOS's paste button, or the classic key */
+                cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
+                (cell as! ToggleTableCell).configure(title: "Classic Paste Key (terminal)", key: "fork.classicPasteKey", defaultValue: false)
             } else if indexPath.row == 16 {
                 /* fork: which device Nyxian is running on */
                 let info = UITableViewCell(style: .subtitle, reuseIdentifier: nil)

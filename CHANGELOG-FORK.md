@@ -4,6 +4,16 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.81.1 — 2026-11-18
+
+- The terminal's paste button showed blank and did nothing: iOS switches off
+  a paste button whose colors are see-through, and the key bar used a
+  translucent fill. It now has opaque colors (light and dark) and the keys'
+  height.
+- Settings › Customization › **Classic Paste Key (terminal)**: the old key
+  instead of iOS's button. With Settings › Apps › Nyxian › Paste from Other
+  Apps › Allow, it does not ask either.
+
 ## 1.81.0 — 2026-11-18
 
 - **Paste without the permission prompt:** the paste key of the terminal's

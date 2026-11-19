@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.9.0
+ Fork doctoralvarez/Nyxian — version 1.9.1
  Changelog:
+  - 1.9.1 (2026-11-18): the paste button showed blank and did nothing: iOS
+    disables a paste button whose colors are see-through (the key bar used
+    a translucent fill). It now has opaque colors and the keys' height.
+    Settings › Customization › Classic Paste Key goes back to the old key
+    (with Settings › Apps › Nyxian › Paste from Other Apps › Allow it does
+    not ask either).
   - 1.9.0 (2026-11-18): the key bar's paste key is iOS's own paste button
     (UIPasteControl): iOS never asks for permission to paste with it,
     because you tap it yourself. The pasted text goes the same way as
@@ -565,17 +571,25 @@ final class ForkTerminalKeyBar: UIInputView {
     /// iOS's paste button, sized like the other keys (nil before iOS 16: the old key is used)
     private func makePasteControl(for terminal: TerminalViewObjC) -> UIView? {
         guard #available(iOS 16.0, *) else { return nil }
+        /* Settings › Customization › Classic Paste Key */
+        if UserDefaults.standard.bool(forKey: "fork.classicPasteKey") { return nil }
         let configuration = UIPasteControl.Configuration()
         configuration.displayMode = .iconOnly
         configuration.cornerStyle = .medium
-        configuration.baseForegroundColor = .label
-        configuration.baseBackgroundColor = .tertiarySystemFill
+        /* opaque colors: iOS turns off a paste button it cannot see clearly (translucent fill = blank, inert) */
+        configuration.baseForegroundColor = UIColor { $0.userInterfaceStyle == .dark ? .white : .black }
+        configuration.baseBackgroundColor = UIColor { $0.userInterfaceStyle == .dark
+            ? UIColor(red: 0.30, green: 0.30, blue: 0.32, alpha: 1)
+            : UIColor(red: 0.82, green: 0.82, blue: 0.84, alpha: 1) }
         let control = UIPasteControl(configuration: configuration)
         control.target = terminal
         control.translatesAutoresizingMaskIntoConstraints = false
         /* iOS only lets a paste button work when it is big enough to see clearly */
         let width: CGFloat = NXForkIsPadLayout() ? 48 : 44
         control.widthAnchor.constraint(equalToConstant: width).isActive = true
+        let height = control.heightAnchor.constraint(greaterThanOrEqualToConstant: NXForkIsPadLayout() ? 36 : 30)
+        height.priority = .defaultHigh
+        height.isActive = true
         control.setContentHuggingPriority(.required, for: .horizontal)
         return control
     }
