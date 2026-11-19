@@ -1,6 +1,7 @@
 # Fork doctoralvarez/Nyxian — version 1.6.1
 # Changelog:
-#  - 1.6.1 (2026-11-19): every wheel built here gets its binaries signed ad-hoc
+#  - 1.6.1 (2026-11-19): input "rebuild" builds again even if an iOS wheel
+#    exists; every wheel built here gets its binaries signed ad-hoc
 #    (sign_wheel.sh): Nyxian refused an unsigned .so ("missing code signature").
 #  - 1.6.0 (2026-11-19): C and C++ libraries for iOS (tools/fork/ios-wheels/
 #    native.sh): "native:<name or URL>" in the package list (or the new
@@ -44,6 +45,10 @@ on:
         description: "C/C++ libraries for iOS alone (recipe names like leptonica tesseract, or source URLs)"
         default: ""
         required: false
+      rebuild:
+        description: "Build again even if an iOS wheel already exists (replaces the one on this release)"
+        type: boolean
+        default: false
   push:
     branches: [mejoras-editor-ipad]
     paths:
@@ -112,6 +117,7 @@ jobs:
     env:
       PACKAGES: ${{ github.event.inputs.packages || 'scipy scikit-learn pandas joblib threadpoolctl' }}
       NATIVE: ${{ github.event.inputs.native || '' }}
+      REBUILD: ${{ github.event.inputs.rebuild || 'false' }}
       FIND_LINKS: https://github.com/${{ github.repository }}/releases/expanded_assets/ios-wheels
     steps:
       - uses: actions/checkout@v4
@@ -177,7 +183,7 @@ jobs:
             # already built somewhere? (PyPI, BeeWare, Flet's mobile index, this release):
             # a copy goes on this release too, so Nyxian does not depend on the others
             rm -rf mirror && mkdir -p mirror
-            if python -m pip download --quiet --no-deps --only-binary :all: -d mirror \
+            if [ "$REBUILD" != "true" ] && python -m pip download --quiet --no-deps --only-binary :all: -d mirror \
                  --platform ios_13_0_arm64_iphoneos --python-version 3.14 --implementation cp --abi cp314 \
                  --extra-index-url https://pypi.anaconda.org/beeware/simple --extra-index-url https://pypi.flet.dev \
                  --find-links "$FIND_LINKS" "$spec"; then
