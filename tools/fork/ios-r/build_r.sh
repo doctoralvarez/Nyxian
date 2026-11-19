@@ -1,6 +1,8 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 0.4.0
+# Fork doctoralvarez/Nyxian — version 0.4.1
 # Changelog:
+#  - 0.4.1 (2026-11-19): Flang's runtime linked by the archive's full path
+#    (with -l, libRlapack still left 19 of its symbols undefined).
 #  - 0.4.0 (2026-11-19): R's libraries point at each other with @rpath; R
 #    for iOS as a wheel (nyxian_r, with its console) and rpy2 in ABI mode
 #    (taught that iOS loads libR.dylib), both on the ios-wheels release.
@@ -136,7 +138,9 @@ for d in xz pcre2 curl openssl flang-rt lapack; do
   [ -d "$ROOT/$d/include" ] && DEPS_INC="$DEPS_INC -I$ROOT/$d/include"
   [ -d "$ROOT/$d/lib" ] && DEPS_LIB="$DEPS_LIB -L$ROOT/$d/lib"
 done
-RT_LIBS=$(cd "$ROOT/flang-rt/lib" && ls libflang_rt*.a | sed -E 's/^lib(.*)\.a$/-l\1/' | tr '\n' ' ')
+# by full path (as slycot's wheel links it): with -lflang_rt.runtime the linker left its
+# symbols for run time (-undefined dynamic_lookup), where iOS has nothing to give them
+RT_LIBS=$(ls "$ROOT"/flang-rt/lib/libflang_rt*.a | tr '\n' ' ')
 ( cd "$SRC_IOS"
   # cross-compiling: the build is said to be x86_64 so configure does not try to run iOS programs
   PKG_CONFIG_LIBDIR="$ROOT/xz/lib/pkgconfig:$ROOT/pcre2/lib/pkgconfig:$ROOT/curl/lib/pkgconfig:$ROOT/openssl/lib/pkgconfig" \
