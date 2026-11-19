@@ -4,6 +4,16 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.83.0 — 2026-11-19
+
+- iOS Wheels workflow: builds C and C++ libraries for iOS
+  (`tools/fork/ios-wheels/native.sh`: CMake, Meson or autotools; arm64 device,
+  iOS 13.0; static `.a`, headers and pkg-config files). Recipes for Leptonica
+  and Tesseract, or any source archive / git URL. Each library is published on
+  the `ios-native` release and reused from there. Run it alone with the
+  `native` input (or `native:<lib>` in the package list); a Python package that
+  links one (tesserocr) gets its libraries first, linked into its wheel.
+
 ## 1.82.1 — 2026-11-18
 
 - iOS Wheels workflow: a universal wheel whose code does not compile on Python 3

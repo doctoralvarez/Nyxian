@@ -1,5 +1,11 @@
-# Fork doctoralvarez/Nyxian — version 1.5.1
+# Fork doctoralvarez/Nyxian — version 1.6.0
 # Changelog:
+#  - 1.6.0 (2026-11-19): C and C++ libraries for iOS (tools/fork/ios-wheels/
+#    native.sh): "native:<name or URL>" in the package list (or the new
+#    "native" input) builds a library alone and publishes it on the
+#    "ios-native" release; a Python package that links one (tesserocr:
+#    Leptonica + Tesseract) gets it built or downloaded first, statically
+#    linked into its wheel.
 #  - 1.5.1 (2026-11-18): a universal wheel whose code does not compile on
 #    Python 3 (an old Python 2 package) is no longer published.
 #  - 1.5.0 (2026-11-18): a pure-Python package that only has a source package
@@ -32,6 +38,10 @@ on:
       packages:
         description: "Packages (pip specs, space separated)"
         default: "scipy scikit-learn pandas"
+      native:
+        description: "C/C++ libraries for iOS alone (recipe names like leptonica tesseract, or source URLs)"
+        default: ""
+        required: false
   push:
     branches: [mejoras-editor-ipad]
     paths:
@@ -99,6 +109,7 @@ jobs:
     timeout-minutes: 240
     env:
       PACKAGES: ${{ github.event.inputs.packages || 'scipy scikit-learn pandas joblib threadpoolctl' }}
+      NATIVE: ${{ github.event.inputs.native || '' }}
       FIND_LINKS: https://github.com/${{ github.repository }}/releases/expanded_assets/ios-wheels
     steps:
       - uses: actions/checkout@v4
@@ -123,6 +134,9 @@ jobs:
           python -m pip show cibuildwheel | head -2
           brew list ninja >/dev/null 2>&1 || brew install ninja
           brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
+          command -v cmake >/dev/null || brew install cmake
+          for t in autoconf automake libtool; do command -v $t >/dev/null || brew list $t >/dev/null 2>&1 || brew install $t; done
+          cmake --version | head -1
           ninja --version
           xcrun --sdk iphoneos --show-sdk-version
 
@@ -136,11 +150,26 @@ jobs:
           # build tools of the Mac that may run during the iOS build (else pip tries to build them for iOS)
           CIBW_XBUILD_TOOLS_IOS: "ninja pkg-config"
           PIP_EXTRA_INDEX_URL: https://pypi.anaconda.org/beeware/simple
+          GH_TOKEN: ${{ github.token }}
+          IOS_NATIVE_DIST: ${{ github.workspace }}/native-dist
         run: |
-          mkdir -p wheelhouse src
+          mkdir -p wheelhouse src native-dist
           : > summary.txt
-          for spec in $PACKAGES; do
+          native=tools/fork/ios-wheels/native.sh
+          # C/C++ libraries on their own: the "native" input, or "native:<lib>" among the packages
+          items=""
+          for lib in $NATIVE; do items="$items native:$lib"; done
+          for spec in $items $PACKAGES; do
             echo "::group::$spec"
+            if [ "${spec#native:}" != "$spec" ]; then
+              lib="${spec#native:}"
+              if bash "$native" ensure "$lib"; then
+                echo "$lib: C/C++ library for iOS ready (ios-native release)" | tee -a summary.txt
+              else
+                echo "$lib: C/C++ library FAILED to build for iOS (see its log group)" | tee -a summary.txt
+              fi
+              echo "::endgroup::"; continue
+            fi
             name="${spec%%[<>=!~ ]*}"
             # already there? (PyPI, BeeWare's index, this release)
             # already built somewhere? (PyPI, BeeWare, Flet's mobile index, this release):
@@ -166,6 +195,17 @@ jobs:
             # settings per package
             unset CIBW_CONFIG_SETTINGS_IOS
             export CIBW_ENVIRONMENT_IOS="PIP_EXTRA_INDEX_URL='https://pypi.anaconda.org/beeware/simple https://pypi.flet.dev' PIP_PREFER_BINARY=1 PIP_FIND_LINKS=$FIND_LINKS"
+            # C/C++ libraries it links (tesserocr: Leptonica + Tesseract), built for iOS first
+            deps=$(bash "$native" deps "$name")
+            if [ -n "$deps" ]; then
+              if bash "$native" ensure $deps; then
+                export CIBW_ENVIRONMENT_IOS="$CIBW_ENVIRONMENT_IOS $(bash "$native" env)"
+                echo "$spec: uses C/C++ libraries for iOS: $deps"
+              else
+                echo "$spec: FAILED, its C/C++ libraries ($deps) did not build for iOS" | tee -a summary.txt
+                echo "::endgroup::"; continue
+              fi
+            fi
             case "$name" in
               # scipy also needs a Fortran compiler for iOS, which the runners do not have
               scipy) export CIBW_CONFIG_SETTINGS_IOS="setup-args=-Dblas=accelerate setup-args=-Dlapack=accelerate" ;;
@@ -200,6 +240,12 @@ jobs:
           echo "---- summary"; cat summary.txt
           cat summary.txt >> "$GITHUB_STEP_SUMMARY"
           ls -la wheelhouse
+
+      - uses: actions/upload-artifact@v4
+        if: hashFiles('native-dist/*.tar.gz') != ''
+        with:
+          name: ios-native
+          path: native-dist/*.tar.gz
 
       - uses: actions/upload-artifact@v4
         if: hashFiles('wheelhouse/*.whl') != ''
