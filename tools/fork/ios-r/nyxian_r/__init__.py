@@ -1,5 +1,7 @@
-# Fork doctoralvarez/Nyxian — version 0.1.2
+# Fork doctoralvarez/Nyxian — version 0.1.3
 # Changelog:
+#  - 0.1.3 (2026-11-19): R's start-script environment given directly (rpy2
+#    ran Rscript, a process, to read it).
 #  - 0.1.2 (2026-11-19): rpy2 3.6 starts R with initr() (initr_simple is
 #    gone); no LD_LIBRARY_PATH lookup through Rscript (a process).
 #  - 0.1.1 (2026-11-19): tells rpy2 where libR is on iOS itself (whichever
@@ -148,6 +150,14 @@ def start():
     # rpy2 asks Rscript (a process) for LD_LIBRARY_PATH: nothing to ask on iOS
     situation.r_ld_library_path_from_subprocess = lambda r_home: ""
     import rpy2.rinterface as ri
+    # rpy2 also runs Rscript to copy the environment R's start script sets: on iOS those are
+    # these (etc/Renviron is read by R itself when it starts)
+    ri._getrenvvars = lambda *args, **kwargs: (
+        ("R_SHARE_DIR", os.path.join(HOME, "share")),
+        ("R_INCLUDE_DIR", os.path.join(HOME, "include")),
+        ("R_DOC_DIR", os.path.join(HOME, "doc")),
+        ("R_ARCH", ""),
+    )
     ri.initr(interactive=False)
     _set_c_shell()
 
