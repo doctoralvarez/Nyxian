@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.43.0
+ Fork doctoralvarez/Nyxian — version 1.43.1
  Changelog:
+  - 1.43.1 (2026-11-18): Nyxian Shell: several lines pasted at the prompt are
+    several commands, run one after another (they were joined into one
+    line: "pip uninstall -y lxml" + "pip install lxml" uninstalled pip
+    too). nyxian_pip never uninstalls pip, setuptools or wheel.
   - 1.43.0 (2026-11-18): when pip falls back to building a package from source
     (no iOS wheel for the version it chose), nyxian_pip looks in PyPI, BeeWare,
     Flet and the fork's release for the newest version that has an iOS wheel
@@ -3998,6 +4002,14 @@ def _read_line(prompt="", indent="", code=False):
                     if source.strip():
                         _history.append(source)
                     return Pasted(source)
+                if not code and "\n" in text.strip("\n"):
+                    # several lines pasted at a prompt (Nyxian Shell): each one is
+                    # its own command, run in order (they were joined into one)
+                    move(len(buffer))
+                    lines = [line for line in text.strip("\n").split("\n")]
+                    lines[0] = "".join(buffer) + lines[0]
+                    _write(lines[0] + "\n")
+                    return Pasted("\n".join(lines))
                 insert(text.replace("\n", " ") if text else "")
             continue
         if c < 32:
@@ -4551,6 +4563,14 @@ def _ask(question):
 def main():
     args = sys.argv[1:] or ["--help"]
     _write("pip %s\n" % " ".join(args))
+    # pip itself (and what it needs to install wheels) stays: without it there is no pip
+    if args and args[0] == "uninstall":
+        kept = [a for a in args[1:] if not a.startswith("-") and re.sub(r"[-_.]+", "-", a).lower() in ("pip", "setuptools", "wheel")]
+        if kept:
+            _write("Not uninstalled: %s (Nyxian's Python needs it to install packages).\n" % ", ".join(kept))
+            args = [a for a in args if a not in kept]
+            if not [a for a in args[1:] if not a.startswith("-")]:
+                sys.exit(0)
     _write("Starting pip… (the first time after an update it takes a little longer)\n")
     state = {"start": time.monotonic(), "last": time.monotonic(), "done": False, "tail": ""}
     sys.stdout = _Tracking(sys.stdout, state)
@@ -6332,10 +6352,17 @@ def main():
         text = str(line)
         if text == "\x04":
             break
-        if text.strip():
-            _history.append(text.strip())
+        # several pasted lines: one command each, shown as it starts
+        commands = text.split("\n") if "\n" in text else [text]
         try:
-            run_line(text)
+            for index, command in enumerate(commands):
+                if index > 0:
+                    if not command.strip():
+                        continue
+                    _out(_prompt() + command + "\n")
+                if command.strip():
+                    _history.append(command.strip())
+                run_line(command)
         except Exit as code:
             return code.args[0]
         except KeyboardInterrupt:

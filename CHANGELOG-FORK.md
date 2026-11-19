@@ -4,6 +4,16 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.80.1 — 2026-11-18
+
+- **Nyxian Shell: pasting several lines runs them one by one.** They were
+  joined into a single line, so pasting `pip uninstall -y lxml` and
+  `pip install lxml` became `pip uninstall -y lxml pip install lxml`, which
+  uninstalled pip itself.
+- pip in Nyxian never uninstalls pip, setuptools or wheel (it says so and
+  goes on with the rest). If pip is gone: Python panel › Reinstall Python
+  Runtime puts it back (your packages stay).
+
 ## 1.80.0 — 2026-11-18
 
 - **pip finds an older version that works on iOS:** when the version pip
