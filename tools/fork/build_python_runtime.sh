@@ -1,6 +1,9 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.5.0
+# Fork doctoralvarez/Nyxian — version 1.6.0
 # Changelog:
+#  - 1.6.0 (2026-11-19): R for iOS comes bundled (nyxian-r, ~55 MB, with
+#    rpy2 and cffi), and the iOS builds made for the fork: slycot + control
+#    (Fortran), tesserocr (Tesseract OCR).
 #  - 1.5.0 (2026-11-10): Flask and Django come bundled (with Werkzeug,
 #    Jinja2, MarkupSafe — it has iOS wheels —, asgiref, sqlparse…).
 #  - 1.4.0 (2026-11-09): pyflakes (the editor's Python linter) and pytest
@@ -116,7 +119,8 @@ python3 -m pip download --quiet --only-binary :all: -d "$WORK/wheels" \
   --find-links https://github.com/doctoralvarez/Nyxian/releases/expanded_assets/ios-wheels \
   --extra-index-url https://pypi.anaconda.org/beeware/simple \
   --extra-index-url https://pypi.flet.dev \
-  numpy scipy pandas matplotlib scikit-learn pyflakes pytest flask django
+  numpy scipy pandas matplotlib scikit-learn pyflakes pytest flask django \
+  nyxian-r rpy2 rpy2-rinterface rpy2-robjects cffi slycot control tesserocr
 for wheel in "$WORK"/wheels/*.whl; do
   echo "  $(basename "$wheel")"
   unzip -q -o "$wheel" -d "$SITE"

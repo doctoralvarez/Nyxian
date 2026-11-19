@@ -20,6 +20,14 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-19): the corner is easy to see in light and dark mode
+    (it was white at 20 %, invisible on light windows): a tinted corner with
+    a resize arrow.
+*/
+
 #import <LindChain/WindowServer/Window/NXResizeHandle.h>
 
 @implementation NXResizeHandle {
@@ -41,7 +49,12 @@
             return nil;
         }
         
-        _backgroundView.backgroundColor = [UIColor colorWithWhite:1 alpha:0.2]; // Normal state
+        /* fork: visible on light and dark windows */
+        _backgroundView.backgroundColor = [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
+            return traits.userInterfaceStyle == UIUserInterfaceStyleDark
+                ? [UIColor colorWithWhite:1 alpha:0.28]
+                : [UIColor colorWithWhite:0 alpha:0.18];
+        }];
         _backgroundView.center = CGPointMake(frame.size.width, frame.size.height);
         _backgroundView.transform = CGAffineTransformMakeRotation(M_PI_4);
         _backgroundView.layer.cornerRadius = 8;
@@ -51,6 +64,15 @@
         [self addGestureRecognizer:doubleTap];
         
         [self addSubview:_backgroundView];
+        
+        /* fork: an arrow pointing to the corner, so it reads as "drag to resize" */
+        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:11 weight:UIImageSymbolWeightBold];
+        UIImageView *arrow = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"arrow.down.right" withConfiguration:config]];
+        arrow.tintColor = UIColor.secondaryLabelColor;
+        arrow.contentMode = UIViewContentModeCenter;
+        arrow.frame = CGRectMake(frame.size.width - 22, frame.size.height - 22, 18, 18);
+        arrow.userInteractionEnabled = NO;
+        [self addSubview:arrow];
     }
     return self;
 }

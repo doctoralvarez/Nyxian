@@ -4,6 +4,18 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.88.0 — 2026-11-19
+
+- R for iOS comes inside Nyxian: the Python runtime includes nyxian-r (R
+  4.6.2), rpy2 and cffi, so `R` and `Rscript` work without downloading
+  anything; also slycot + control and tesserocr. The IPA grows by ~40 MB.
+- R in Nyxian: starts without running other processes (rpy2's Rscript
+  lookups replaced), the shell hook is in place before R starts, default
+  packages are attached, R's messages print as in R, and Rprofile.site's
+  replacements can no longer stop a package from loading.
+- Windows (iPad layout): the resize corner is visible in light and dark mode
+  (a tinted corner with an arrow) and stays above the focus overlay.
+
 ## 1.87.0 — 2026-11-19
 
 - R for iOS: R 4.6.2 compiled for iOS (libR, BLAS/LAPACK, modules, base

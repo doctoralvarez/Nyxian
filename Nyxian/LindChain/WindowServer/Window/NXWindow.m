@@ -21,8 +21,9 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.2.1
  Changelog:
+  - 1.2.1 (2026-11-19): the resize corner stays above the focus overlay.
   - 1.2.0 (2026-11-18): iPad-only layout checks now ask NXForkIsPadLayout(),
       so iPhone Duo's large inner screen gets the iPad layout too.
   - 1.1.0 (2026-11-17): iPhone: the bar's minimize button sends the app to
@@ -248,6 +249,8 @@
         _focusHitView.alpha = 0.0;
         _focusHitView.translatesAutoresizingMaskIntoConstraints = NO;
         [_contentStack insertSubview:_focusHitView aboveSubview:self.session.view];
+        /* fork: the resize corner stays on top */
+        if(_resizeHandle) [_contentStack bringSubviewToFront:_resizeHandle];
         [NSLayoutConstraint activateConstraints:@[
             [_focusHitView.topAnchor constraintEqualToAnchor:_windowBar.bottomAnchor],
             [_focusHitView.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
