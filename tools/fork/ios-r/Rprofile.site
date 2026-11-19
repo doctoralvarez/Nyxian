@@ -1,0 +1,167 @@
+# Fork doctoralvarez/Nyxian — version 0.1.0
+# Changelog:
+#  - 0.1.0 (2026-11-19): R inside Nyxian (iOS): an app cannot start other
+#    programs, so what R would run as a separate process goes elsewhere:
+#      system(), system2(), shell commands  -> Nyxian Shell, in this process
+#      parallel: mclapply/mcmapply/pvec, makeCluster + parLapply/parSapply…
+#                -> run one after another in this R
+#      install.packages()  -> R packages already built for iOS (your Mac or
+#                GitHub's builds them; Nyxian offers it when one is missing)
+#      browseURL(), help (html) -> Nyxian's browser
+#      plots  -> PDF files shown in Nyxian's preview
+#      the pager (help text, file.show) -> printed here
+#      q()/quit()  -> ends this R session, not Nyxian
+#    The bridge functions (.nyxian_*) are given by nyxian_r (Python, rpy2).
+#
+# Loaded as R_HOME/etc/Rprofile.site by every R session in Nyxian.
+
+local({
+  # ---- the bridge (set by nyxian_r before this file runs) ----
+  bridge <- function(name) {
+    f <- get0(name, envir = globalenv(), inherits = TRUE)
+    if (is.null(f)) stop(sprintf("%s is not available outside Nyxian", name), call. = FALSE)
+    f
+  }
+
+  replace_in <- function(ns_name, name, value) {
+    env <- asNamespace(ns_name)
+    if (exists(name, envir = env, inherits = FALSE)) {
+      unlockBinding(name, env)
+      assign(name, value, envir = env)
+      lockBinding(name, env)
+    }
+    # attached package environment too (what the user calls)
+    pkg <- paste0("package:", ns_name)
+    if (pkg %in% search()) {
+      penv <- as.environment(pkg)
+      if (exists(name, envir = penv, inherits = FALSE)) {
+        unlockBinding(name, penv)
+        assign(name, value, envir = penv)
+        lockBinding(name, penv)
+      }
+    }
+  }
+
+  # ---- system(), system2(): Nyxian Shell runs the command here ----
+  nyx_system <- function(command, intern = FALSE, ignore.stdout = FALSE, ignore.stderr = FALSE,
+                         wait = TRUE, input = NULL, show.output.on.console = TRUE,
+                         minimized = FALSE, invisible = TRUE, timeout = 0, receive.console.signals = wait) {
+    if (!is.null(input)) input <- paste(input, collapse = "\n")
+    res <- bridge(".nyxian_shell")(command, if (is.null(input)) "" else input)
+    out <- res[["out"]]; err <- res[["err"]]; status <- as.integer(res[["status"]])
+    if (intern) {
+      lines <- if (nzchar(out)) strsplit(sub("\n$", "", out), "\n", fixed = TRUE)[[1]] else character()
+      if (status != 0L) attr(lines, "status") <- status
+      return(lines)
+    }
+    if (!ignore.stdout && nzchar(out)) cat(out)
+    if (!ignore.stderr && nzchar(err)) cat(err, file = stderr())
+    invisible(status)
+  }
+  nyx_system2 <- function(command, args = character(), stdout = "", stderr = "", stdin = "",
+                          input = NULL, env = character(), wait = TRUE, minimized = FALSE,
+                          invisible = TRUE, timeout = 0, receive.console.signals = wait) {
+    cmd <- paste(c(env, shQuote(command), args), collapse = " ")
+    if (is.character(stdin) && nzchar(stdin)) cmd <- paste(cmd, "<", shQuote(stdin))
+    capture <- isTRUE(stdout) || isTRUE(stderr)
+    if (is.character(stdout) && nzchar(stdout)) cmd <- paste(cmd, ">", shQuote(stdout))
+    if (is.character(stderr) && nzchar(stderr)) cmd <- paste(cmd, "2>", shQuote(stderr))
+    if (isTRUE(stderr) && isTRUE(stdout)) cmd <- paste(cmd, "2>&1")
+    nyx_system(cmd, intern = capture, ignore.stdout = isFALSE(stdout), ignore.stderr = isFALSE(stderr),
+               input = input)
+  }
+  replace_in("base", "system", nyx_system)
+  replace_in("base", "system2", nyx_system2)
+  replace_in("base", "Sys.which", function(names) {
+    res <- vapply(names, function(n) bridge(".nyxian_which")(n), "")
+    names(res) <- names
+    res
+  })
+
+  # ---- parallel: no forks or worker processes; the same work, in order ----
+  setHook(packageEvent("parallel", "onLoad"), function(...) {
+    seq_cluster <- function(spec = 1L, type = "SEQUENTIAL", ...) {
+      structure(list(list(nyxian = TRUE)), class = c("nyxian_sequential", "cluster"))
+    }
+    is_seq <- function(cl) is.null(cl) || inherits(cl, "nyxian_sequential")
+    replace_in("parallel", "detectCores", function(all.tests = FALSE, logical = TRUE) 1L)
+    replace_in("parallel", "mclapply", function(X, FUN, ..., mc.preschedule = TRUE, mc.set.seed = TRUE,
+                                                 mc.silent = FALSE, mc.cores = 1L, mc.cleanup = TRUE,
+                                                 mc.allow.recursive = TRUE, affinity.list = NULL)
+      lapply(X, FUN, ...))
+    replace_in("parallel", "mcmapply", function(FUN, ..., MoreArgs = NULL, SIMPLIFY = TRUE, USE.NAMES = TRUE,
+                                                 mc.preschedule = TRUE, mc.set.seed = TRUE, mc.silent = FALSE,
+                                                 mc.cores = 1L, mc.cleanup = TRUE, affinity.list = NULL)
+      mapply(FUN, ..., MoreArgs = MoreArgs, SIMPLIFY = SIMPLIFY, USE.NAMES = USE.NAMES))
+    replace_in("parallel", "mcMap", function(f, ...) Map(f, ...))
+    replace_in("parallel", "pvec", function(v, FUN, ..., mc.set.seed = TRUE, mc.silent = FALSE,
+                                             mc.cores = 1L, mc.cleanup = TRUE) FUN(v, ...))
+    replace_in("parallel", "makeCluster", seq_cluster)
+    replace_in("parallel", "makePSOCKcluster", seq_cluster)
+    replace_in("parallel", "makeForkCluster", seq_cluster)
+    replace_in("parallel", "stopCluster", function(cl = NULL) invisible(NULL))
+    replace_in("parallel", "clusterExport", function(cl = NULL, varlist, envir = .GlobalEnv) invisible(NULL))
+    replace_in("parallel", "clusterEvalQ", function(cl = NULL, expr) list(eval(substitute(expr), envir = .GlobalEnv)))
+    replace_in("parallel", "clusterCall", function(cl = NULL, fun, ...) list(fun(...)))
+    replace_in("parallel", "clusterSetRNGStream", function(cl = NULL, iseed = NULL) {
+      if (!is.null(iseed)) set.seed(iseed); invisible(NULL) })
+    replace_in("parallel", "clusterApply", function(cl = NULL, x, fun, ...) lapply(x, fun, ...))
+    replace_in("parallel", "clusterApplyLB", function(cl = NULL, x, fun, ...) lapply(x, fun, ...))
+    replace_in("parallel", "clusterMap", function(cl = NULL, fun, ..., MoreArgs = NULL, RECYCLE = TRUE,
+                                                   SIMPLIFY = FALSE, USE.NAMES = TRUE, .scheduling = c("static", "dynamic"))
+      mapply(fun, ..., MoreArgs = MoreArgs, SIMPLIFY = SIMPLIFY, USE.NAMES = USE.NAMES))
+    replace_in("parallel", "parLapply", function(cl = NULL, X, fun, ..., chunk.size = NULL) lapply(X, fun, ...))
+    replace_in("parallel", "parLapplyLB", function(cl = NULL, X, fun, ..., chunk.size = NULL) lapply(X, fun, ...))
+    replace_in("parallel", "parSapply", function(cl = NULL, X, FUN, ..., simplify = TRUE, USE.NAMES = TRUE, chunk.size = NULL)
+      sapply(X, FUN, ..., simplify = simplify, USE.NAMES = USE.NAMES))
+    replace_in("parallel", "parSapplyLB", function(cl = NULL, X, FUN, ..., simplify = TRUE, USE.NAMES = TRUE, chunk.size = NULL)
+      sapply(X, FUN, ..., simplify = simplify, USE.NAMES = USE.NAMES))
+    replace_in("parallel", "parApply", function(cl = NULL, X, MARGIN, FUN, ..., chunk.size = NULL) apply(X, MARGIN, FUN, ...))
+    replace_in("parallel", "parRapply", function(cl = NULL, x, FUN, ..., chunk.size = NULL) unlist(apply(x, 1L, FUN, ...), use.names = FALSE))
+    replace_in("parallel", "parCapply", function(cl = NULL, x, FUN, ..., chunk.size = NULL) unlist(apply(x, 2L, FUN, ...), use.names = FALSE))
+  })
+
+  # ---- install.packages(): R packages built for iOS beforehand ----
+  nyx_install <- function(pkgs, lib, repos = getOption("repos"), ...,
+                          dependencies = NA, type = getOption("pkgType")) {
+    if (missing(lib) || is.null(lib)) lib <- .libPaths()[1L]
+    invisible(bridge(".nyxian_install")(as.character(pkgs), lib))
+  }
+  # utils is loaded after this file runs (default packages): replaced when it loads
+  if (isNamespaceLoaded("utils")) replace_in("utils", "install.packages", nyx_install)
+  setHook(packageEvent("utils", "onLoad"), function(...) replace_in("utils", "install.packages", nyx_install))
+
+  # ---- the browser, help pages and the pager ----
+  options(browser = function(url, ...) bridge(".nyxian_open")(url))
+  options(pager = function(files, header, title, delete.file) {
+    for (f in files) cat(readLines(f, warn = FALSE), sep = "\n")
+    if (isTRUE(delete.file)) unlink(files)
+  })
+  options(editor = function(...) stop("there is no text editor for R here: edit the file in Nyxian", call. = FALSE))
+
+  # ---- plots: a PDF per plot, shown by Nyxian ----
+  options(device = function(...) {
+    f <- tempfile("Rplot-", fileext = ".pdf")
+    grDevices::pdf(f, width = 7, height = 7)
+    assign(".nyxian_plot_file", f, envir = globalenv())
+  })
+  addTaskCallback(function(expr, value, ok, visible) {
+    f <- get0(".nyxian_plot_file", envir = globalenv())
+    if (!is.null(f) && grDevices::dev.cur() > 1L) {
+      grDevices::dev.off()
+      rm(".nyxian_plot_file", envir = globalenv())
+      if (file.exists(f)) try(bridge(".nyxian_preview")(f), silent = TRUE)
+    }
+    TRUE
+  }, name = "nyxian-plots")
+
+  # ---- downloads: libcurl with Python's certificate bundle ----
+  ca <- Sys.getenv("NYXIAN_CA_BUNDLE")
+  if (nzchar(ca) && !nzchar(Sys.getenv("CURL_CA_BUNDLE"))) Sys.setenv(CURL_CA_BUNDLE = ca)
+  options(download.file.method = "libcurl", repos = c(CRAN = "https://cloud.r-project.org"))
+
+  # ---- leaving R ends this session only ----
+  quit_here <- function(save = "default", status = 0, runLast = TRUE) bridge(".nyxian_quit")(as.integer(status))
+  replace_in("base", "q", quit_here)
+  replace_in("base", "quit", quit_here)
+})

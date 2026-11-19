@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.86.1 — 2026-11-19
+
+- iOS Wheels workflow: Fortran packages skip their own before-build (slycot's
+  fetches OpenBLAS for Mac/Linux) and the pure-Python trial on the Mac.
+- R for iOS: `tools/fork/ios-r/Rprofile.site`, first draft of the
+  substitutes for what R runs as other processes (system/system2 through
+  Nyxian Shell, parallel in sequence, install.packages from iOS builds,
+  browser/help/pager/plots through Nyxian, q() ends only the R session).
+
 ## 1.86.0 — 2026-11-19
 
 - R for iOS, stage 1 (workflow "R for iOS", `tools/fork/ios-r/build_r.sh`):

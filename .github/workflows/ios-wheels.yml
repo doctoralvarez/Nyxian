@@ -1,5 +1,8 @@
-# Fork doctoralvarez/Nyxian — version 1.8.0
+# Fork doctoralvarez/Nyxian — version 1.8.1
 # Changelog:
+#  - 1.8.1 (2026-11-19): Fortran packages: the package's own before-build
+#    (OpenBLAS for Mac/Linux in slycot) is skipped for iOS, and no pure-Python
+#    trial build on the Mac for packages that link iOS libraries.
 #  - 1.8.0 (2026-11-19): Python packages with Fortran code (slycot): flang
 #    for iOS, Flang's runtime and LAPACK go into the wheel build; f2py runs
 #    on a Mac Python (patch_f2py.py); the Mac's cmake is usable in the build.
@@ -220,7 +223,7 @@ jobs:
             # meson builds that import numpy for its headers (pandas…): found without importing it
             python tools/fork/ios-wheels/patch_numpy_include.py "$project"
             # settings per package
-            unset CIBW_CONFIG_SETTINGS_IOS
+            unset CIBW_CONFIG_SETTINGS_IOS CIBW_BEFORE_BUILD_IOS
             export CIBW_ENVIRONMENT_IOS="PIP_EXTRA_INDEX_URL='https://pypi.anaconda.org/beeware/simple https://pypi.flet.dev' PIP_PREFER_BINARY=1 PIP_FIND_LINKS=$FIND_LINKS"
             # C/C++ libraries it links (tesserocr: Leptonica + Tesseract), built for iOS first
             deps=$(bash "$native" deps "$name")
@@ -234,6 +237,8 @@ jobs:
                 export CIBW_ENVIRONMENT_IOS="$CIBW_ENVIRONMENT_IOS $(IOS_NATIVE_FORTRAN=$fortran bash "$native" env)"
                 echo "$spec: uses libraries for iOS: $deps$([ "$fortran" = 1 ] && echo ' + Fortran (flang, flang-rt)')"
                 echo "CIBW_ENVIRONMENT_IOS=$CIBW_ENVIRONMENT_IOS"
+                # the package's own before-build fetches Mac/Linux libraries (OpenBLAS…): not for iOS
+                [ "$fortran" = 1 ] && export CIBW_BEFORE_BUILD_IOS=""
               else
                 echo "$spec: FAILED, its C/C++ libraries ($deps) did not build for iOS" | tee -a summary.txt
                 echo "::endgroup::"; continue
@@ -246,8 +251,9 @@ jobs:
             # pure Python with only a source package (pip cannot build it on iOS: no processes):
             # the universal wheel is what Nyxian needs
             rm -rf purecheck && mkdir -p purecheck
-            if python -m pip wheel --quiet --no-deps --no-build-isolation -w purecheck "$project" 2>/dev/null \
-               || python -m pip wheel --quiet --no-deps -w purecheck "$project"; then
+            # (not for packages that link libraries for iOS: they are not pure Python)
+            if [ -z "$deps" ] && [ "$fortran" != 1 ] && { python -m pip wheel --quiet --no-deps --no-build-isolation -w purecheck "$project" 2>/dev/null \
+               || python -m pip wheel --quiet --no-deps -w purecheck "$project"; }; then
               pure=$(ls purecheck/*-none-any.whl 2>/dev/null | head -1)
               if [ -n "$pure" ]; then
                 # an old Python 2-only package (print '...') builds a wheel but cannot run
