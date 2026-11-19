@@ -192,7 +192,7 @@ cp -R "$HOST/lib/R/." "$RH/"
 # compiled parts: from the iOS build
 rm -rf "$RH/bin/exec"
 # programs of the Mac (Rscript…): Nyxian's R and Rscript commands take their place on iOS
-find "$RH/bin" -type f | while read -r f; do file "$f" | grep -q "Mach-O" && rm -f "$f"; done
+find "$RH/bin" -type f | while read -r f; do if file "$f" | grep -q "Mach-O"; then rm -f "$f"; fi; done
 cp -f "$SRC_IOS"/lib/*.dylib "$RH/lib/"
 mkdir -p "$RH/modules"; cp -f "$SRC_IOS"/modules/*.so "$RH/modules/" 2>/dev/null || true
 for libs in "$SRC_IOS"/library/*/libs; do
