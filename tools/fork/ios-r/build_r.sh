@@ -134,7 +134,7 @@ RT_LIBS=$(cd "$ROOT/flang-rt/lib" && ls libflang_rt*.a | sed -E 's/^lib(.*)\.a$/
     --without-readline --without-tcltk --without-cairo --without-libtiff --without-jpeglib \
     --without-libpng --disable-nls --with-internal-tzcode --disable-openmp --without-ICU \
     --with-internal-xdr \
-    CC="$CC_BIN $IOS $IOS_INC" CXX="$CXX_BIN $IOS $IOS_INC" OBJC="$CC_BIN $IOS $IOS_INC" FC="$FC_WRAP" \
+    CC="$CC_BIN $IOS" CXX="$CXX_BIN $IOS" OBJC="$CC_BIN $IOS" FC="$FC_WRAP" \
     CPPFLAGS="$DEPS_INC" LDFLAGS="$DEPS_LIB" \
     FLIBS="-L$ROOT/flang-rt/lib $RT_LIBS -lc++" \
     LIBS="-lssl -lcrypto -lz" \
@@ -148,6 +148,12 @@ RT_LIBS=$(cd "$ROOT/flang-rt/lib" && ls libflang_rt*.a | sed -E 's/^lib(.*)\.a$/
       grep -n -A25 "checking for inflateInit2_" config.log | head -60
       exit 1; }
   tail -40 "$T/ios-configure.log"
+  # only for the build (configure's own checks must not see it): C, C++ and Objective-C flags
+  for mk in Makeconf etc/Makeconf; do
+    [ -f "$mk" ] || continue
+    /usr/bin/sed -i '' -E "s|^(CFLAGS = .*)$|\1 $IOS_INC|; s|^(CXXFLAGS = .*)$|\1 $IOS_INC|; s|^(CXX1[147]FLAGS = .*)$|\1 $IOS_INC|; s|^(CXX2[03]FLAGS = .*)$|\1 $IOS_INC|; s|^(OBJCFLAGS = .*)$|\1 $IOS_INC|" "$mk"
+  done
+  grep -E "^(CFLAGS|CXXFLAGS) =" Makeconf
 )
 log "configured for iOS"
 
