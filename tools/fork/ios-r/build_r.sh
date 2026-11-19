@@ -1,6 +1,8 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 0.1.1
+# Fork doctoralvarez/Nyxian — version 0.1.2
 # Changelog:
+#  - 0.1.2 (2026-11-19): BLAS/LAPACK for iOS (the Reference-LAPACK built
+#    here) is on the link line: configure's link checks ask for -lblas.
 #  - 0.1.1 (2026-11-19): zlib's version check preset for iOS (zlib comes
 #    with the SDK); iconv's run-time results come from the Mac too.
 #  - 0.1.0 (2026-11-19): first stage of R for iOS. Builds R for the Mac (the
@@ -76,7 +78,7 @@ cp "$HOST/host-config.cache" "$T/host-config.cache"
 
 # ---------- 2. R's libraries for iOS ----------
 IOS_NATIVE_FORTRAN=1 bash "$NATIVE" ensure xz pcre2 curl
-IOS_NATIVE_FORTRAN=1 bash "$NATIVE" ensure flang-rt
+IOS_NATIVE_FORTRAN=1 bash "$NATIVE" ensure flang-rt lapack
 FC_WRAP=$(bash "$NATIVE" fc)
 [ -x "$FC_WRAP" ] || { log "no Fortran wrapper"; exit 1; }
 
@@ -111,7 +113,7 @@ log "configure cache for iOS: $(wc -l < "$T/ios-config.cache") results from the 
 
 unpack "$SRC_IOS"
 DEPS_INC="" DEPS_LIB=""
-for d in xz pcre2 curl openssl flang-rt; do
+for d in xz pcre2 curl openssl flang-rt lapack; do
   [ -d "$ROOT/$d/include" ] && DEPS_INC="$DEPS_INC -I$ROOT/$d/include"
   [ -d "$ROOT/$d/lib" ] && DEPS_LIB="$DEPS_LIB -L$ROOT/$d/lib"
 done
