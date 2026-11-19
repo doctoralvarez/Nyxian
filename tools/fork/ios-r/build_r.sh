@@ -260,8 +260,8 @@ WH="$OUT/wheels"; rm -rf "$WH"; mkdir -p "$WH"
 python3 "$HERE/make_wheel.py" "$RH" "$HERE/nyxian_r" "$RVER" "$WH"
 ( cd "$T"
   python3 -m venv rpy2env
-  # rpy2's build asks R for its settings: R for the Mac (same version) answers
-  PATH="$HOST/bin:$PATH" RPY2_CFFI_MODE=ABI rpy2env/bin/pip wheel --quiet --no-deps --no-binary rpy2-rinterface \
+  # ABI mode needs no R at build time; with no R found its build skips asking R for flags
+  env -u R_HOME RPY2_CFFI_MODE=ABI rpy2env/bin/pip wheel --quiet --no-deps --no-binary rpy2-rinterface \
     -w "$WH/rpy2" rpy2-rinterface rpy2-robjects rpy2 )
 # rpy2 knows Linux/Darwin/Windows: iOS loads lib/libR.dylib like Darwin
 for w in "$WH"/rpy2/rpy2_rinterface-*.whl; do
