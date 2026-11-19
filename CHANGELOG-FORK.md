@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.86.0 — 2026-11-19
+
+- R for iOS, stage 1 (workflow "R for iOS", `tools/fork/ios-r/build_r.sh`):
+  R for the Mac, R's libraries for iOS and R configured for iOS with the Mac
+  build's run-time test results.
+- native.sh recipes for R's libraries: xz, pcre2 (without JIT), OpenSSL,
+  curl.
+
 ## 1.85.0 — 2026-11-19
 
 - iOS Wheels workflow: Python packages with Fortran code (first: slycot, the

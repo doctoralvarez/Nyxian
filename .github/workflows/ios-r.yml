@@ -1,0 +1,109 @@
+# Fork doctoralvarez/Nyxian — version 0.1.0
+# Changelog:
+#  - 0.1.0 (2026-11-19): R for iOS, stage 1: R for the Mac, R's libraries for
+#    iOS and R configured and compiled for iOS (tools/fork/ios-r/build_r.sh).
+#    Your Mac if it is on, else GitHub's Xcode 27 Mac.
+name: R for iOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      r_version:
+        description: "R version (CRAN)"
+        default: "4.6.2"
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: ios-r
+  cancel-in-progress: false
+
+jobs:
+  # your Mac if it is online, else GitHub's (same rule as the app build)
+  pick-runner:
+    name: Pick the Mac
+    runs-on: ubuntu-latest
+    outputs:
+      runs_on: ${{ steps.pick.outputs.runs_on }}
+    steps:
+      - id: pick
+        env:
+          WANT: ${{ vars.NYXIAN_RUNNER }}
+          STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          # the same GitHub Mac as the app build (macos-15 often had no free runner)
+          choice='"xcode-27"'
+          if [ "$WANT" = "self-hosted" ]; then
+            if [ -z "$STATUS_TOKEN" ]; then
+              choice='["self-hosted","macOS","ARM64"]'
+            else
+              # a runner that just took or finished a job can look offline for a moment: ask up to 3 times
+              for attempt in 1 2 3; do
+                online=$(curl -fsS -H "Authorization: Bearer $STATUS_TOKEN" -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/repos/$REPO/actions/runners?per_page=100" \
+                  | jq '[.runners[] | select(.status == "online" or .busy == true) | select([.labels[].name] | index("self-hosted"))] | length' || echo "error")
+                if [ "$online" = "error" ] || [ "$online" -gt 0 ]; then break; fi
+                sleep 10
+              done
+              # busy with another build (the runners list can show it as offline then): still yours
+              if [ "$online" != "error" ] && [ "$online" -eq 0 ]; then
+                busy=0
+                for id in $(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/$REPO/actions/runs?status=in_progress&per_page=20" | jq -r '.workflow_runs[].id' 2>/dev/null); do
+                  n=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/$REPO/actions/runs/$id/jobs" | jq '[.jobs[] | select(.status == "in_progress") | select(.labels | index("self-hosted"))] | length' 2>/dev/null || echo 0)
+                  busy=$((busy + n))
+                done
+                if [ "$busy" -gt 0 ]; then echo "Your Mac is busy with another build: this one waits for it"; online=1; fi
+              fi
+              if [ "$online" = "error" ] || [ "$online" -gt 0 ]; then
+                choice='["self-hosted","macOS","ARM64"]'
+              else
+                echo "::notice::Your Mac is off or asleep: GitHub's Mac builds the wheels"
+              fi
+            fi
+          fi
+          echo "runs_on=$choice" >> "$GITHUB_OUTPUT"
+          echo "Builds on: $choice"
+
+  build:
+    needs: pick-runner
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.runs_on) }}
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        id: setup-python
+        continue-on-error: true
+        with:
+          python-version: '3.14'
+
+      - name: Python 3.14 from Homebrew
+        if: steps.setup-python.outcome != 'success'
+        run: |
+          brew install python@3.14
+          "$(brew --prefix python@3.14)/bin/python3.14" -m venv "$RUNNER_TEMP/python314"
+          echo "$RUNNER_TEMP/python314/bin" >> "$GITHUB_PATH"
+
+      - name: Tools
+        run: |
+          for t in ninja cmake pkg-config autoconf automake libtool; do command -v $t >/dev/null || brew install $t; done
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: R for iOS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IOS_NATIVE_DIST: ${{ github.workspace }}/native-dist
+        run: bash tools/fork/ios-r/build_r.sh "${{ github.event.inputs.r_version || '4.6.2' }}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r-ios-logs
+          path: |
+            ${{ runner.temp }}/r-ios/*.log
+            ${{ runner.temp }}/r-ios/src-ios/config.log
+          if-no-files-found: ignore

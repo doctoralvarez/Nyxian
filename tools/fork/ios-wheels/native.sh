@@ -1,6 +1,9 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.2.0
+# Fork doctoralvarez/Nyxian — version 1.3.0
 # Changelog:
+#  - 1.3.0 (2026-11-19): recipes for R's libraries: xz (liblzma), pcre2
+#    (without JIT: iOS allows no code written at run time), openssl (its own
+#    Configure, target ios64-xcrun) and curl (https through OpenSSL).
 #  - 1.2.0 (2026-11-19): Python packages with Fortran (slycot: SLICOT +
 #    LAPACK): "fortran <pkg>" says whether one needs it; "env" then also gives
 #    the Fortran compiler (FC), Flang's runtime, LAPACK/BLAS for CMake and
@@ -63,6 +66,10 @@ recipe_version() {
     tesseract) echo 5.5.4 ;;
     lapack) echo 3.12.1 ;;
     flang-rt) flang_version ;;
+    xz) echo 5.8.4 ;;
+    pcre2) echo 10.49 ;;
+    openssl) echo 3.6.5 ;;
+    curl) echo 8.23.0 ;;
     *) echo "" ;;
   esac
 }
@@ -72,11 +79,16 @@ recipe_url() {  # name version
     tesseract) echo "https://github.com/tesseract-ocr/tesseract/archive/refs/tags/$2.tar.gz" ;;
     lapack) echo "https://github.com/Reference-LAPACK/lapack/archive/refs/tags/v$2.tar.gz" ;;
     flang-rt) echo "llvm-project:llvmorg-$2" ;;
+    xz) echo "https://github.com/tukaani-project/xz/releases/download/v$2/xz-$2.tar.gz" ;;
+    pcre2) echo "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-$2/pcre2-$2.tar.gz" ;;
+    openssl) echo "https://github.com/openssl/openssl/releases/download/openssl-$2/openssl-$2.tar.gz" ;;
+    curl) echo "https://github.com/curl/curl/releases/download/curl-${2//./_}/curl-$2.tar.gz" ;;
   esac
 }
 recipe_deps() {
   case "$1" in
     tesseract) echo leptonica ;;
+    curl) echo openssl ;;
     *) echo "" ;;
   esac
 }
@@ -85,6 +97,9 @@ recipe_deps() {
 recipe_cmake_args() {
   case "$1" in
     leptonica) echo "-DENABLE_ZLIB=ON -DENABLE_PNG=OFF -DENABLE_GIF=OFF -DENABLE_JPEG=OFF -DENABLE_TIFF=OFF -DENABLE_WEBP=OFF -DENABLE_OPENJPEG=OFF -DBUILD_PROG=OFF -DSW_BUILD=OFF" ;;
+    xz) echo "-DBUILD_TESTING=OFF -DXZ_TOOL_XZ=OFF -DXZ_TOOL_XZDEC=OFF -DXZ_TOOL_LZMADEC=OFF -DXZ_TOOL_LZMAINFO=OFF -DXZ_TOOL_SCRIPTS=OFF -DXZ_TOOL_SYMLINKS=OFF -DXZ_TOOL_SYMLINKS_LZMA=OFF -DXZ_DOC=OFF -DXZ_NLS=OFF" ;;
+    pcre2) echo "-DPCRE2_SUPPORT_JIT=OFF -DPCRE2_BUILD_PCRE2GREP=OFF -DPCRE2_BUILD_TESTS=OFF -DPCRE2_BUILD_PCRE2_8=ON -DPCRE2_SUPPORT_UNICODE=ON" ;;
+    curl) echo "-DCURL_USE_OPENSSL=ON -DOPENSSL_ROOT_DIR=$ROOT/openssl -DOPENSSL_USE_STATIC_LIBS=ON -DBUILD_CURL_EXE=OFF -DBUILD_TESTING=OFF -DCURL_USE_LIBPSL=OFF -DUSE_LIBIDN2=OFF -DCURL_ZSTD=OFF -DCURL_BROTLI=OFF -DUSE_NGHTTP2=OFF -DCURL_USE_LIBSSH2=OFF -DCURL_DISABLE_LDAP=ON -DBUILD_LIBCURL_DOCS=OFF -DBUILD_MISC_DOCS=OFF -DENABLE_CURL_MANUAL=OFF -DCURL_CA_FALLBACK=OFF" ;;
     lapack) echo "-DCBLAS=ON -DLAPACKE=ON -DBUILD_TESTING=OFF -DBUILD_INDEX64=OFF -DUSE_OPTIMIZED_BLAS=OFF" ;;
     tesseract) echo "-DBUILD_TRAINING_TOOLS=OFF -DBUILD_TESTS=OFF -DGRAPHICS_DISABLED=ON -DOPENMP_BUILD=OFF -DENABLE_LTO=OFF -DENABLE_NATIVE=OFF -DDISABLE_TIFF=ON -DDISABLE_ARCHIVE=ON -DDISABLE_CURL=ON -DENABLE_CCACHE=OFF -DENABLE_PRECOMPILED_HEADERS=OFF -DINSTALL_CONFIGS=ON -DLEPT_TIFF_RESULT=1 -DLEPT_TIFF_RESULT__TRYRUN_OUTPUT= -DLeptonica_DIR=$ROOT/leptonica/lib/cmake/leptonica" ;;
     *) echo "" ;;
@@ -394,6 +409,16 @@ build_cmake() {  # src prefix extra-args
   cmake --install "$bdir"
 }
 
+# OpenSSL has its own Configure (perl): its ios64-xcrun target, static, no programs
+build_openssl() {  # src prefix
+  local src="$1" prefix="$2"
+  ( cd "$src"
+    ./Configure ios64-xcrun no-shared no-tests no-apps no-docs no-dso no-engine no-async \
+      --prefix="$prefix" --libdir=lib -mios-version-min=$MIN_IOS -fPIC
+    make -j "$JOBS" build_libs
+    make install_dev )
+}
+
 build_autotools() {  # src prefix
   local src="$1" prefix="$2"
   ( cd "$src"
@@ -497,6 +522,8 @@ ensure_one() {
       build_flang_rt "${url#llvm-project:}" "$prefix"
     elif ! src=$(fetch_source "$url" "$WORK/src-$name"); then
       log "$name: could not download $url"; return 1
+    elif [ "$name" = openssl ]; then
+      build_openssl "$src" "$prefix"
     elif [ -f "$src/CMakeLists.txt" ]; then
       build_cmake "$src" "$prefix" "$(recipe_cmake_args "$name")"
     elif [ -f "$src/meson.build" ]; then
