@@ -17,7 +17,7 @@ RVER="${1:-4.6.2}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 NATIVE="$HERE/../ios-wheels/native.sh"
 T="${RUNNER_TEMP:-/tmp}/r-ios"
-HOST="$T/host-R"            # R for the Mac
+HOST=/tmp/nyxian-host-R      # R for the Mac (fixed path: its scripts keep it; reused from the release)
 SRC_HOST="$T/src-host"
 SRC_IOS="$T/src-ios"
 OUT="$T/out"
@@ -43,6 +43,12 @@ unpack() { rm -rf "$1"; mkdir -p "$1"; tar -xzf "$T/R-$RVER.tar.gz" -C "$1" --st
 BREW=$(brew --prefix)
 for f in gcc xz pcre2; do brew list "$f" >/dev/null 2>&1 || brew install "$f"; done
 GFORTRAN=$(ls "$BREW"/bin/gfortran-* 2>/dev/null | sort -V | tail -1)
+HOST_ASSET="host-R-$RVER-macos-arm64.tar.gz"
+if [ ! -x "$HOST/bin/R" ] && gh release view ios-r -R "${GITHUB_REPOSITORY:-doctoralvarez/Nyxian}" --json assets -q '.assets[].name' 2>/dev/null | grep -qx "$HOST_ASSET"; then
+  gh release download ios-r -R "${GITHUB_REPOSITORY:-doctoralvarez/Nyxian}" -p "$HOST_ASSET" -D "$T" --clobber
+  rm -rf "$HOST"; tar -xzf "$T/$HOST_ASSET" -C /tmp
+  log "R for the Mac: from the ios-r release"
+fi
 if [ ! -x "$HOST/bin/R" ]; then
   unpack "$SRC_HOST"
   ( cd "$SRC_HOST"
@@ -55,9 +61,18 @@ if [ ! -x "$HOST/bin/R" ]; then
       > "$T/host-configure.log" 2>&1 || { tail -80 "$T/host-configure.log"; tail -120 config.log; exit 1; }
     make -j "$JOBS" > "$T/host-make.log" 2>&1 || { tail -120 "$T/host-make.log"; exit 1; }
     make install > /dev/null )
+  cp "$SRC_HOST/config.cache" "$HOST/host-config.cache"
   log "R for the Mac: $("$HOST/bin/R" --version | head -1)"
+  # kept on the ios-r release: the next run skips this (10+ minutes)
+  if [ -n "${GH_TOKEN:-}" ]; then
+    R_REPO="${GITHUB_REPOSITORY:-doctoralvarez/Nyxian}"
+    gh release view ios-r -R "$R_REPO" >/dev/null 2>&1 || gh release create ios-r -R "$R_REPO" --prerelease \
+      --title "R for iOS (work in progress)" --notes "R built for iOS for Nyxian, and the tools used to build it." >/dev/null
+    tar -czf "$T/$HOST_ASSET" -C /tmp "$(basename "$HOST")"
+    gh release upload ios-r "$T/$HOST_ASSET" -R "$R_REPO" --clobber >/dev/null && log "R for the Mac kept on the ios-r release"
+  fi
 fi
-cp "$SRC_HOST/config.cache" "$T/host-config.cache"
+cp "$HOST/host-config.cache" "$T/host-config.cache"
 
 # ---------- 2. R's libraries for iOS ----------
 IOS_NATIVE_FORTRAN=1 bash "$NATIVE" ensure xz pcre2 curl
@@ -117,7 +132,14 @@ RT_LIBS=$(cd "$ROOT/flang-rt/lib" && ls libflang_rt*.a | sed -E 's/^lib(.*)\.a$/
     FLIBS="-L$ROOT/flang-rt/lib $RT_LIBS -lc++" \
     LIBS="-lssl -lcrypto -lz" \
     R_EXE="$HOST/bin/R" \
-    > "$T/ios-configure.log" 2>&1 || { tail -60 "$T/ios-configure.log"; echo "---- config.log"; tail -150 config.log; exit 1; }
+    > "$T/ios-configure.log" 2>&1 || {
+      tail -30 "$T/ios-configure.log"
+      # the failing checks with their compiler/linker output (confdefs at the end of config.log says nothing)
+      echo "---- config.log: the last checks"
+      awk '/^configure:[0-9]+: checking /{n++} {buf[n]=buf[n] $0 "\n"} END{for(i=n-3;i<=n;i++) if(i>0) printf "%s", buf[i]}' config.log | head -200
+      echo "---- config.log: inflateInit2_"
+      grep -n -A25 "checking for inflateInit2_" config.log | head -60
+      exit 1; }
   tail -40 "$T/ios-configure.log"
 )
 log "configured for iOS"
