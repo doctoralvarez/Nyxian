@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.12.0
+ Fork doctoralvarez/Nyxian — version 1.12.1
  Changelog:
+  - 1.12.1 (2026-11-18): the toggle is "iOS Paste Button (terminal)", off by
+    default: the classic paste key is used unless you turn it on.
   - 1.12.0 (2026-11-18): "Classic Paste Key" toggle (the terminal key bar's
     old paste key instead of iOS's paste button); the iPhone Duo Layout row
     moves one down.
@@ -215,9 +217,9 @@ int main(void)
                 }
                 cell = picker
             } else if indexPath.row == 17 {
-                /* fork: the terminal's paste key: iOS's paste button, or the classic key */
+                /* fork: the terminal's paste key: the classic key, or iOS's paste button (off by default) */
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
-                (cell as! ToggleTableCell).configure(title: "Classic Paste Key (terminal)", key: "fork.classicPasteKey", defaultValue: false)
+                (cell as! ToggleTableCell).configure(title: "iOS Paste Button (terminal)", key: "fork.iosPasteButton", defaultValue: false)
             } else if indexPath.row == 16 {
                 /* fork: which device Nyxian is running on */
                 let info = UITableViewCell(style: .subtitle, reuseIdentifier: nil)

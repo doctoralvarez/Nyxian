@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.9.1
+ Fork doctoralvarez/Nyxian — version 1.9.2
  Changelog:
+  - 1.9.2 (2026-11-18): the classic paste key is the default again (iOS's
+    paste button did not work in the key bar, which lives in the keyboard's
+    window); iOS's button is an option (Customization › iOS Paste Button).
   - 1.9.1 (2026-11-18): the paste button showed blank and did nothing: iOS
     disables a paste button whose colors are see-through (the key bar used
     a translucent fill). It now has opaque colors and the keys' height.
@@ -571,8 +574,8 @@ final class ForkTerminalKeyBar: UIInputView {
     /// iOS's paste button, sized like the other keys (nil before iOS 16: the old key is used)
     private func makePasteControl(for terminal: TerminalViewObjC) -> UIView? {
         guard #available(iOS 16.0, *) else { return nil }
-        /* Settings › Customization › Classic Paste Key */
-        if UserDefaults.standard.bool(forKey: "fork.classicPasteKey") { return nil }
+        /* Settings › Customization › iOS Paste Button (off: the classic key) */
+        if !UserDefaults.standard.bool(forKey: "fork.iosPasteButton") { return nil }
         let configuration = UIPasteControl.Configuration()
         configuration.displayMode = .iconOnly
         configuration.cornerStyle = .medium
