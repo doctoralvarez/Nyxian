@@ -1,5 +1,7 @@
-# Fork doctoralvarez/Nyxian — version 0.1.0
+# Fork doctoralvarez/Nyxian — version 0.1.1
 # Changelog:
+#  - 0.1.1 (2026-11-19): tells rpy2 where libR is on iOS itself (whichever
+#    rpy2-rinterface wheel pip picks).
 #  - 0.1.0 (2026-11-19): R for iOS inside Nyxian's Python (rpy2, ABI mode).
 #    start() opens R once per process (R_HOME is the R/ folder next to this
 #    file) and gives R the bridge its Rprofile.site uses for what R would run
@@ -138,6 +140,9 @@ def start():
         os.environ.setdefault("NYXIAN_CA_BUNDLE", certifi.where())
     except ImportError:
         pass
+    # rpy2 knows Linux/Darwin/Windows: on iOS R is lib/libR.dylib, as on the Mac
+    import rpy2.situation as situation
+    situation.get_rlib_path = lambda r_home, system: os.path.join(r_home, "lib", "libR.dylib")
     import rpy2.rinterface as ri
     ri.initr_simple()
     _set_c_shell()
