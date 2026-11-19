@@ -4,6 +4,12 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.83.1 — 2026-11-19
+
+- iOS Wheels workflow: the binaries of every wheel it builds get an ad-hoc code
+  signature (`tools/fork/ios-wheels/sign_wheel.sh`); Nyxian refused tesserocr's
+  unsigned `.so` ("missing code signature").
+
 ## 1.83.0 — 2026-11-19
 
 - iOS Wheels workflow: builds C and C++ libraries for iOS
