@@ -4340,9 +4340,12 @@ if __name__ == "__main__":
         "nyxian_pip.py": #"""
 # pip in Nyxian: says at once that it started, shows that it is still working
 # when pip prints nothing for a while, and after a long silence prints where
-# it is waiting (to report it). Run as: python3 -m nyxian_pip install NAME…
+# it is waiting (to report it). When a package has no wheel for iOS and needs
+# compiling (C, C++, Fortran, Rust), it says so and asks Nyxian to offer a
+# build on your Mac or GitHub's. Run as: python3 -m nyxian_pip install NAME…
 import faulthandler
 import os
+import re
 import sys
 import threading
 import time
@@ -4360,6 +4363,8 @@ class _Tracking:
 
     def write(self, text):
         self._state["last"] = time.monotonic()
+        # the end of what pip printed, to see what failed to build
+        self._state["tail"] = (self._state["tail"] + str(text))[-65536:]
         return self._stream.write(text)
 
     def __getattr__(self, name):
@@ -4381,11 +4386,39 @@ def _watch(state):
             _write("[You can wait, or close with ✕ and try again]\n\n", 2)
 
 
+_NAME = r"[A-Za-z0-9][A-Za-z0-9._\-]*"
+
+
+def _needs_build(text):
+    """Packages pip could not install because they have to be compiled here."""
+    names = []
+    patterns = (
+        r"Failed to build (" + _NAME + r")",
+        r"Failed building wheel for (" + _NAME + r")",
+        r"Building wheel for (" + _NAME + r") \([^)]*\) \.\.\. error",
+        r"pyproject\.toml based projects\s*\(([^)]+)\)",
+        r"Failed to build installable wheels[^\n]*\n[^\n]*\u2570\u2500>\s*([^\n]+)",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, text):
+            names.extend(part.strip() for part in match.group(1).split(","))
+    if not names and ("metadata-generation-failed" in text or "subprocess-exited-with-error" in text):
+        collecting = re.findall(r"Collecting (" + _NAME + r")", text)
+        if collecting:
+            names.append(collecting[-1])
+    found = []
+    for name in names:
+        name = re.split(r"[<>=!~\[ ;]", name)[0].strip()
+        if name and name.lower() not in ("installable", "some", "the") and name.lower() not in [f.lower() for f in found]:
+            found.append(name)
+    return found
+
+
 def main():
     args = sys.argv[1:] or ["--help"]
     _write("pip %s\n" % " ".join(args))
     _write("Starting pip… (the first time after an update it takes a little longer)\n")
-    state = {"start": time.monotonic(), "last": time.monotonic(), "done": False}
+    state = {"start": time.monotonic(), "last": time.monotonic(), "done": False, "tail": ""}
     sys.stdout = _Tracking(sys.stdout, state)
     sys.stderr = _Tracking(sys.stderr, state)
     threading.Thread(target=_watch, args=(state,), daemon=True).start()
@@ -4394,6 +4427,19 @@ def main():
         code = pip_main(args)
     finally:
         state["done"] = True
+    if code and args and args[0] == "install":
+        missing = _needs_build(state["tail"])
+        if missing:
+            _write("\nNo iOS wheel exists for: %s.\n" % ", ".join(missing))
+            _write("It has code that must be compiled (C, C++, Fortran or Rust), which cannot be done on this device.\n")
+            _write("Nyxian asks whether to build it on your Mac (or GitHub's Mac if yours is off).\n")
+            for stream in (sys.stdout, sys.stderr):
+                try:
+                    stream.flush()
+                except Exception:
+                    pass
+            # private sequence, taken out by Nyxian's terminal before it is drawn
+            os.write(1, ("\x1b]7770;nyxian-wheel;%s\x07" % " ".join(missing)).encode("utf-8"))
     _write("\n%s in %d s.\n" % ("Done" if not code else "pip ended with errors", time.monotonic() - state["start"]))
     if not code and args and args[0] == "install":
         _write("New binary modules are signed the next time Python opens.\n")

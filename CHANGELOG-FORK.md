@@ -4,6 +4,22 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.79.0 — 2026-11-18
+
+- **pip says when there is no iOS wheel:** when a package can't be installed
+  because it has to be compiled (C, C++, Fortran, Rust) and no iOS wheel
+  exists (PyPI, BeeWare, Flet, the fork's ios-wheels release), Nyxian's pip
+  says so in plain words instead of leaving only the long build error.
+- **…and offers to build it:** Nyxian asks; if you approve, it starts the
+  "iOS wheels" workflow of the fork with those packages and tells you when the
+  wheel is ready (then `pip install` again) or if the build failed. Needs a
+  GitHub token with "Actions: Read and write" on doctoralvarez/Nyxian,
+  saved in Settings › Toolchain › iOS Wheels (Keychain only; never given to
+  Python or to the packages you install).
+- **The iOS wheels workflow uses your Mac first** (online check with
+  RUNNER_STATUS_TOKEN, as for the app build), else GitHub's Mac; Homebrew's
+  Python 3.14 when setup-python can't install it on your Mac.
+
 ## 1.78.0 — 2026-11-18
 
 - **Settings › Customization › This Device** (under Live Issues): the model

@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.7.0
+ Fork doctoralvarez/Nyxian — version 1.8.0
  Changelog:
+  - 1.8.0 (2026-11-18): ESC ] 7770 ; nyxian-wheel ; names BEL (pip found no
+    iOS wheel for a package that needs compiling): Nyxian asks whether to
+    build it; on yes it starts the "iOS wheels" workflow of your fork (your
+    Mac if it is on, else GitHub's), and says when the wheel is ready or the
+    build failed (ForkWheelBuilder; token in Settings › Toolchain).
   - 1.7.0 (2026-11-18): iPad-only layout checks now ask NXForkIsPadLayout(),
       so iPhone Duo's large inner screen gets the iPad layout too.
   - 1.6.2 (2026-11-10): more local-server lines open the browser ("listening
@@ -62,6 +67,7 @@
 
 import SwiftTerm
 import UIKit
+import Security
 
 @objc protocol TerminalViewDelegateObjC: AnyObject {
     @objc optional func sizeChanged(source: TerminalView, newCols: Int, newRows: Int)
@@ -153,11 +159,17 @@ import UIKit
             /* fork: webbrowser.open(), and local servers saying where they listen */
             var pages = TerminalViewObjC.forkTakeRequests(TerminalViewObjC.openStart, from: &data)
             pages.append(contentsOf: self.forkLocalServers(in: data))
+            /* fork: pip found no iOS wheel for packages that need compiling */
+            let wheels = TerminalViewObjC.forkTakeRequests(TerminalViewObjC.wheelStart, from: &data)
             
             DispatchQueue.main.async {
                 if !data.isEmpty { self.feed(byteArray: ArraySlice<UInt8>(data)) }
                 if !previews.isEmpty { self.forkShowPreview(previews) }
                 if let page = pages.last { self.forkOpenPage(page) }
+                if let packages = wheels.last, let root = self.window?.rootViewController {
+                    _ = self.resignFirstResponder()
+                    ForkWheelBuilder.offer(packages: packages, from: root)
+                }
             }
         }
         
@@ -213,6 +225,7 @@ import UIKit
     }
     
     static let openStart = Array("\u{1b}]7770;nyxian-open;".utf8)
+    static let wheelStart = Array("\u{1b}]7770;nyxian-wheel;".utf8)
     
     /// Takes every ESC ] 7770 ; KIND ; text BEL of one kind out of the output; returns the texts.
     static func forkTakeRequests(_ prefix: [UInt8], from data: inout Data) -> [String] {
@@ -553,3 +566,160 @@ final class ForkTerminalKeyBar: UIInputView {
         return button
     }
 }
+
+// MARK: - fork: build an iOS wheel pip could not find
+
+/// pip (nyxian_pip) found no iOS wheel for a package that has to be compiled.
+/// After you approve, the "iOS wheels" workflow of your fork builds it (your
+/// Mac if it is online, else GitHub's) and puts it where Nyxian's pip looks;
+/// Nyxian says when it is ready. Needs a GitHub token (Settings › Toolchain ›
+/// iOS Wheels): a fine-grained token on doctoralvarez/Nyxian with
+/// "Actions: Read and write". It is kept in the Keychain, never given to Python.
+enum ForkWheelBuilder {
+    static let repository = "doctoralvarez/Nyxian"
+    static let branch = "mejoras-editor-ipad"
+    static let workflow = "ios-wheels.yml"
+    private static let service = "com.nyxian.fork.github"
+    private static let account = "ios-wheels"
+
+    // MARK: token (Keychain)
+
+    static var token: String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data, let text = String(data: data, encoding: .utf8), !text.isEmpty else { return nil }
+        return text
+    }
+
+    @discardableResult
+    static func saveToken(_ text: String?) -> Bool {
+        let base: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(base as CFDictionary)
+        guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return true }
+        var add = base
+        add[kSecValueData as String] = Data(text.utf8)
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+    }
+
+    // MARK: asking
+
+    private static func top(_ root: UIViewController) -> UIViewController {
+        var top = root
+        while let shown = top.presentedViewController, !shown.isBeingDismissed { top = shown }
+        return top
+    }
+
+    private static func tell(_ title: String, _ message: String, from root: UIViewController) {
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        top(root).present(alert, animated: true)
+    }
+
+    /// Asks whether to build `packages` (names separated by spaces)
+    static func offer(packages: String, from root: UIViewController) {
+        let names = packages.split(separator: " ").map(String.init).filter { !$0.isEmpty }
+        guard !names.isEmpty else { return }
+        let list = names.joined(separator: ", ")
+        guard token != nil else {
+            tell("No iOS wheel for \(list)",
+                 "It needs compiling, which this device cannot do. To have your Mac (or GitHub's) build it, add a GitHub token in Settings › Toolchain › iOS Wheels, then run pip install again.",
+                 from: root)
+            return
+        }
+        let alert = UIAlertController(
+            title: "Build an iOS wheel?",
+            message: "There is no iOS wheel for \(list), and it has to be compiled.\n\nBuild it on your Mac (or on GitHub's Mac if yours is off)? It usually takes 10–40 minutes. Nyxian tells you when it is ready; then run pip install \(names.joined(separator: " ")) again.",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Build", style: .default) { _ in
+            start(names: names, from: root)
+        })
+        top(root).present(alert, animated: true)
+    }
+
+    // MARK: GitHub
+
+    private static func makeRequest(_ path: String, method: String = "GET", body: [String: Any]? = nil) -> URLRequest? {
+        guard let token, let url = URL(string: "https://api.github.com/repos/\(repository)/actions/\(path)") else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+        if let body {
+            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        request.timeoutInterval = 30
+        return request
+    }
+
+    private static func start(names: [String], from root: UIViewController) {
+        let sent = Date()
+        let body: [String: Any] = ["ref": branch, "inputs": ["packages": names.joined(separator: " ")]]
+        guard let request = makeRequest("workflows/\(workflow)/dispatches", method: "POST", body: body) else { return }
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            DispatchQueue.main.async {
+                if status == 204 {
+                    NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Building the iOS wheel for \(names.joined(separator: ", "))…", withDelay: 0.0)
+                    follow(names: names, since: sent)
+                } else {
+                    var reason = error?.localizedDescription ?? "GitHub answered \(status)"
+                    if status == 401 { reason = "The token is not valid (or expired)." }
+                    if status == 403 || status == 404 { reason = "The token cannot start workflows: it needs \"Actions: Read and write\" on \(repository)." }
+                    if let data, let text = String(data: data, encoding: .utf8), status >= 400, text.count < 300 { reason += "\n\n" + text }
+                    tell("Could not start the build", reason, from: root)
+                }
+            }
+        }.resume()
+    }
+
+    /// Watches the run that started and says how it ended (up to 3 hours)
+    private static func follow(names: [String], since: Date) {
+        Task.detached {
+            let list = names.joined(separator: ", ")
+            var runID: Int?
+            let formatter = ISO8601DateFormatter()
+            for _ in 0..<180 {
+                try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+                if runID == nil {
+                    guard let request = makeRequest("workflows/\(workflow)/runs?event=workflow_dispatch&per_page=5"),
+                          let answer = try? await URLSession.shared.data(for: request),
+                          let json = try? JSONSerialization.jsonObject(with: answer.0) as? [String: Any],
+                          let runs = json["workflow_runs"] as? [[String: Any]] else { continue }
+                    runID = runs.first(where: {
+                        guard let created = $0["created_at"] as? String, let date = formatter.date(from: created) else { return false }
+                        return date >= since.addingTimeInterval(-30)
+                    })?["id"] as? Int
+                    continue
+                }
+                guard let runID, let request = makeRequest("runs/\(runID)"),
+                      let answer = try? await URLSession.shared.data(for: request),
+                      let run = try? JSONSerialization.jsonObject(with: answer.0) as? [String: Any],
+                      (run["status"] as? String) == "completed" else { continue }
+                let ok = (run["conclusion"] as? String) == "success"
+                await MainActor.run {
+                    let message = ok
+                        ? "iOS wheel ready: run pip install \(names.joined(separator: " ")) again"
+                        : "The iOS wheel build for \(list) did not finish (it may not build for iOS yet)"
+                    NXAlertDiagnosticPresenter.notifyUser(with: ok ? .note : .warning, withMessage: message, withDelay: 0.0)
+                }
+                return
+            }
+        }
+    }
+}
+

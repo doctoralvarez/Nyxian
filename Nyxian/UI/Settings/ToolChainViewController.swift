@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-18): "iOS Wheels" section: the GitHub token Nyxian uses
+    to start a build of an iOS wheel pip could not find (kept in the
+    Keychain; set, replace or remove it here).
   - 1.1.0 (2026-11-16): the footer explains that with Incremental Build on
     only the Swift files that changed are compiled, and that Automatic One
     Pass is then off.
@@ -50,11 +53,12 @@ class ToolChainViewController: NXUITableViewController {
     }
     
     override func numberOfSections(in tableView: UITableView) -> Int {
-        return 5
+        return 6
     }
     
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         if section == 4 { return 3 }
+        if section == 5 { return 1 }
         return (section == 3) ? 2 : 1
     }
     
@@ -70,6 +74,8 @@ class ToolChainViewController: NXUITableViewController {
             return "This clears caches that were created for performance."
         case 4:
             return ForkBuildSpeedFooter.text
+        case 5:
+            return "When pip finds no iOS wheel for a package that has to be compiled, Nyxian asks whether to build it with the \"iOS wheels\" workflow of doctoralvarez/Nyxian: on your Mac if it is on, else on GitHub's. It needs a fine-grained GitHub token for that repository with \"Actions: Read and write\" (you can add that permission to the token you already use for your Mac). It stays in this device's Keychain and is never given to Python or to the packages you install."
         default:
             return nil
         }
@@ -83,6 +89,8 @@ class ToolChainViewController: NXUITableViewController {
             return "Actions"
         case 4:
             return "Speed"
+        case 5:
+            return "iOS Wheels"
         default:
             return nil
         }
@@ -123,6 +131,12 @@ class ToolChainViewController: NXUITableViewController {
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
                 (cell as! ToggleTableCell).configure(title: "All Cores with More Memory", key: ForkBuildSpeed.allCoresKey, defaultValue: true)
             }
+        case 5:
+            let token = UITableViewCell(style: .value1, reuseIdentifier: nil)
+            token.textLabel?.text = "GitHub Token"
+            token.detailTextLabel?.text = ForkWheelBuilder.token == nil ? "Not set" : "Set ✓"
+            token.accessoryType = .disclosureIndicator
+            cell = token
         default:
             switch(indexPath.row) {
             case 0:
@@ -141,6 +155,12 @@ class ToolChainViewController: NXUITableViewController {
     }
     
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        /* fork: the token for iOS wheel builds */
+        if indexPath.section == 5 {
+            tableView.deselectRow(at: indexPath, animated: true)
+            forkEditWheelToken(tableView)
+            return
+        }
         if(indexPath.section == 3) {
             // TODO: use the indication popup for cache clearing
             switch(indexPath.row) {
@@ -167,6 +187,39 @@ enum ForkBuildSpeedFooter {
         let failed = UserDefaults.standard.bool(forKey: ForkBuildSpeed.onePassFailedKey)
             ? " One Pass failed here once, so Automatic leaves it off; choose an option to try it again." : ""
         return "Swift in One Pass compiles all Swift files of a project in a single run (whole module): SwiftUI and the other frameworks are loaded, and the code is checked, once instead of once per file. With Incremental Build on, only the Swift files that changed are compiled again when the change is inside bodies (a view's body, a function), which is faster for edit and run, so Automatic leaves One Pass off then; with Incremental Build off it turns One Pass on with Increased Memory Limit (or 4 GB or more) and two or more Swift files. Run with nothing changed opens the installed app at once. If a one-pass build fails without an error in the code, it is compiled file by file at once. All Cores uses the efficiency cores too when there is more memory. Changing these compiles the project again once. " + now + failed
+    }
+}
+
+// MARK: - fork: iOS wheels token
+
+extension ToolChainViewController {
+    func forkEditWheelToken(_ tableView: UITableView) {
+        let hasToken = ForkWheelBuilder.token != nil
+        let alert = UIAlertController(
+            title: "GitHub Token",
+            message: "Paste a fine-grained token for doctoralvarez/Nyxian with \"Actions: Read and write\". It is saved in the Keychain of this device.",
+            preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = hasToken ? "Paste to replace the saved token" : "github_pat_…"
+            field.isSecureTextEntry = true
+            field.autocorrectionType = .no
+            field.autocapitalizationType = .none
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        if hasToken {
+            alert.addAction(UIAlertAction(title: "Remove", style: .destructive) { _ in
+                ForkWheelBuilder.saveToken(nil)
+                tableView.reloadSections(IndexSet(integer: 5), with: .automatic)
+            })
+        }
+        alert.addAction(UIAlertAction(title: "Save", style: .default) { [weak alert] _ in
+            let text = alert?.textFields?.first?.text ?? ""
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            let saved = ForkWheelBuilder.saveToken(text)
+            NXAlertDiagnosticPresenter.notifyUser(with: saved ? .note : .warning, withMessage: saved ? "Token saved" : "Could not save the token", withDelay: 0.0)
+            tableView.reloadSections(IndexSet(integer: 5), with: .automatic)
+        })
+        present(alert, animated: true)
     }
 }
 
