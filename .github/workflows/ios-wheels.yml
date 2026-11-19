@@ -1,5 +1,8 @@
-# Fork doctoralvarez/Nyxian — version 1.7.2
+# Fork doctoralvarez/Nyxian — version 1.8.0
 # Changelog:
+#  - 1.8.0 (2026-11-19): Python packages with Fortran code (slycot): flang
+#    for iOS, Flang's runtime and LAPACK go into the wheel build; f2py runs
+#    on a Mac Python (patch_f2py.py); the Mac's cmake is usable in the build.
 #  - 1.7.2 (2026-11-19): iOS wheels copied from PyPI, BeeWare, Flet or this
 #    release are signed ad-hoc too before they are published here.
 #  - 1.7.1 (2026-11-19): when your Mac is off, GitHub's Xcode 27 Mac (as the
@@ -167,7 +170,7 @@ jobs:
           CIBW_TEST_SKIP: "*"
           CIBW_BUILD_VERBOSITY: 1
           # build tools of the Mac that may run during the iOS build (else pip tries to build them for iOS)
-          CIBW_XBUILD_TOOLS_IOS: "ninja pkg-config"
+          CIBW_XBUILD_TOOLS_IOS: "ninja pkg-config cmake"
           PIP_EXTRA_INDEX_URL: https://pypi.anaconda.org/beeware/simple
           GH_TOKEN: ${{ github.token }}
           IOS_NATIVE_DIST: ${{ github.workspace }}/native-dist
@@ -221,10 +224,16 @@ jobs:
             export CIBW_ENVIRONMENT_IOS="PIP_EXTRA_INDEX_URL='https://pypi.anaconda.org/beeware/simple https://pypi.flet.dev' PIP_PREFER_BINARY=1 PIP_FIND_LINKS=$FIND_LINKS"
             # C/C++ libraries it links (tesserocr: Leptonica + Tesseract), built for iOS first
             deps=$(bash "$native" deps "$name")
-            if [ -n "$deps" ]; then
-              if bash "$native" ensure $deps; then
-                export CIBW_ENVIRONMENT_IOS="$CIBW_ENVIRONMENT_IOS $(bash "$native" env)"
-                echo "$spec: uses C/C++ libraries for iOS: $deps"
+            fortran=0; bash "$native" fortran "$name" && fortran=1
+            if [ "$fortran" = 1 ]; then
+              # f2py runs on a Mac Python with numpy (the iOS numpy cannot be imported here)
+              python tools/fork/ios-wheels/patch_f2py.py "$project" "$(IOS_NATIVE_FORTRAN=1 bash "$native" hostpy)"
+            fi
+            if [ -n "$deps" ] || [ "$fortran" = 1 ]; then
+              if IOS_NATIVE_FORTRAN=$fortran bash "$native" ensure $deps; then
+                export CIBW_ENVIRONMENT_IOS="$CIBW_ENVIRONMENT_IOS $(IOS_NATIVE_FORTRAN=$fortran bash "$native" env)"
+                echo "$spec: uses libraries for iOS: $deps$([ "$fortran" = 1 ] && echo ' + Fortran (flang, flang-rt)')"
+                echo "CIBW_ENVIRONMENT_IOS=$CIBW_ENVIRONMENT_IOS"
               else
                 echo "$spec: FAILED, its C/C++ libraries ($deps) did not build for iOS" | tee -a summary.txt
                 echo "::endgroup::"; continue

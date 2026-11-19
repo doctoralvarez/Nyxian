@@ -4,6 +4,13 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.85.0 — 2026-11-19
+
+- iOS Wheels workflow: Python packages with Fortran code (first: slycot, the
+  SLICOT library behind python-control). flang for iOS, Flang's runtime and
+  the LAPACK built for iOS go into the wheel build; numpy.f2py runs on a Mac
+  Python with the same numpy (`tools/fork/ios-wheels/patch_f2py.py`).
+
 ## 1.84.7 — 2026-11-19
 
 - iOS Wheels workflow: wheels copied from other indexes (scipy from Flet…) get

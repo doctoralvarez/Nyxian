@@ -1,6 +1,10 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.1.5
+# Fork doctoralvarez/Nyxian — version 1.2.0
 # Changelog:
+#  - 1.2.0 (2026-11-19): Python packages with Fortran (slycot: SLICOT +
+#    LAPACK): "fortran <pkg>" says whether one needs it; "env" then also gives
+#    the Fortran compiler (FC), Flang's runtime, LAPACK/BLAS for CMake and
+#    numpy's headers from a Mac Python with the same numpy ("hostpy" makes it).
 #  - 1.1.5 (2026-11-19): flang-rt built: its library (installed under
 #    lib/clang/<n>/lib/ios) is copied to lib/ (the find pattern skipped it),
 #    and its Fortran modules for iOS go to finclude/, which the wrapper uses.
@@ -90,8 +94,25 @@ recipe_cmake_args() {
 python_deps() {
   case "$(echo "$1" | tr 'A-Z_' 'a-z-')" in
     tesserocr) echo "leptonica tesseract" ;;
+    slycot) echo "lapack" ;;
     *) echo "" ;;
   esac
+}
+# Python packages whose own code has Fortran (compiled with flang, linked with flang-rt)
+python_fortran() {
+  case "$(echo "$1" | tr 'A-Z_' 'a-z-')" in
+    slycot) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+# a Mac Python with numpy (the same version iOS gets), for f2py and numpy's headers
+host_python() {
+  local venv="$WORK/hostpy"
+  if [ ! -x "$venv/bin/python" ]; then
+    python -m venv "$venv" >&2
+    "$venv/bin/python" -m pip install --quiet --upgrade pip numpy >&2
+  fi
+  echo "$venv/bin/python"
 }
 
 # ---------- spec parsing ----------
@@ -507,6 +528,25 @@ case "$cmd" in
       [ -d "$d/include" ] && inc="$inc -I${d}include"
       [ -d "$d/lib" ] && lib="$lib -L${d}lib"
     done
-    echo "PKG_CONFIG_LIBDIR=$(pc_paths) CPPFLAGS='${inc# }' CFLAGS='${inc# }' CXXFLAGS='${inc# }' LDFLAGS='${lib# } -lz -lc++'" ;;
+    extra="" fortran=""
+    if [ "${IOS_NATIVE_FORTRAN:-0}" = "1" ] && fortran_wrapper; then
+      # Fortran: flang for iOS, Flang's runtime and LAPACK/BLAS (for CMake's FindLAPACK too)
+      rt=""
+      for a in "$ROOT"/flang-rt/lib/libflang_rt*.a; do [ -f "$a" ] && rt="$rt $a"; done
+      lapack=""
+      for a in liblapack.a libblas.a; do [ -f "$ROOT/lapack/lib/$a" ] && lapack="$lapack;$ROOT/lapack/lib/$a"; done
+      lapack="${lapack#;}"
+      rtlist=$(echo $rt | tr ' ' ';')
+      hp=$(host_python)
+      npinc=$("$hp" -c 'import numpy; print(numpy.get_include())')
+      fortran=" FC=$FC_WRAP F77=$FC_WRAP F90=$FC_WRAP"
+      extra=" $rt -lc++"
+      cm="-DPython_NumPy_INCLUDE_DIR=$npinc -DCMAKE_Fortran_COMPILER=$FC_WRAP"
+      [ -n "$lapack" ] && cm="$cm -DLAPACK_LIBRARIES=$lapack;$rtlist -DBLAS_LIBRARIES=$ROOT/lapack/lib/libblas.a;$rtlist"
+      fortran="$fortran CMAKE_ARGS='$cm'"
+    fi
+    echo "PKG_CONFIG_LIBDIR=$(pc_paths) CPPFLAGS='${inc# }' CFLAGS='${inc# }' CXXFLAGS='${inc# }' LDFLAGS='${lib# } -lz -lc++$extra'$fortran" ;;
+  fortran) python_fortran "$1" ;;
+  hostpy) host_python ;;
   *) echo "usage: native.sh deps <pkg> | ensure <spec>... | env" >&2; exit 2 ;;
 esac
