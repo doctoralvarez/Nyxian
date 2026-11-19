@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.42.0
+ Fork doctoralvarez/Nyxian — version 1.42.1
  Changelog:
+  - 1.42.1 (2026-11-18): pip in Nyxian also recognizes "[Errno 45] ios does
+    not support processes … installing build dependencies for X" (pip trying
+    to build X from source) as a missing iOS wheel and offers the build.
   - 1.42.0 (2026-11-18): iPad-only layout checks now ask
       NXForkIsPadLayout(), so iPhone Duo's large inner screen gets the iPad
       layout too.
@@ -4398,11 +4401,16 @@ def _needs_build(text):
         r"Building wheel for (" + _NAME + r") \([^)]*\) \.\.\. error",
         r"pyproject\.toml based projects\s*\(([^)]+)\)",
         r"Failed to build installable wheels[^\n]*\n[^\n]*\u2570\u2500>\s*([^\n]+)",
+        # pip needs a helper process to build from source, which iOS does not allow
+        r"installing build dependencies for (" + _NAME + r")",
+        r"getting requirements to build wheel for (" + _NAME + r")",
+        r"preparing metadata[^\n]* for (" + _NAME + r")",
     )
     for pattern in patterns:
         for match in re.finditer(pattern, text):
             names.extend(part.strip() for part in match.group(1).split(","))
-    if not names and ("metadata-generation-failed" in text or "subprocess-exited-with-error" in text):
+    if not names and ("metadata-generation-failed" in text or "subprocess-exited-with-error" in text
+                      or "does not support processes" in text):
         collecting = re.findall(r"Collecting (" + _NAME + r")", text)
         if collecting:
             names.append(collecting[-1])

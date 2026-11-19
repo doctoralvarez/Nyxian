@@ -4,6 +4,13 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.79.1 — 2026-11-18
+
+- pip: "[Errno 45] ios does not support processes … installing build
+  dependencies for X" (pip trying to build X from source, e.g. lxml 6.1.3)
+  is recognized as a missing iOS wheel too, so the message and the offer to
+  build it appear.
+
 ## 1.79.0 — 2026-11-18
 
 - **pip says when there is no iOS wheel:** when a package can't be installed
