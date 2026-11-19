@@ -1,5 +1,11 @@
-# Fork doctoralvarez/Nyxian — version 0.2.0
+# Fork doctoralvarez/Nyxian — version 0.2.1
 # Changelog:
+#  - 0.2.1 (2026-11-19): downloads verify HTTPS with certifi's certificates
+#    (pip's own copy if certifi is not installed): Python on iOS has no
+#    system certificate store, so every download failed and install.packages
+#    offered to build packages that were already built. Only a real "not
+#    found" (404) offers a build; other errors are shown. R's libcurl gets
+#    the same certificates.
 #  - 0.2.0 (2026-11-19): install.packages(): the package and the
 #    dependencies it lacks (Depends/Imports from each DESCRIPTION), built for
 #    iOS, from the ios-r-packages release; R's user library is
@@ -113,6 +119,25 @@ def _description_deps(folder):
     return names
 
 
+def _ca_file():
+    """certifi's certificate file (or pip's copy of it): iOS Python has no system store."""
+    for module in ("certifi", "pip._vendor.certifi"):
+        try:
+            found = __import__(module, fromlist=["where"]).where()
+            if os.path.isfile(found):
+                return found
+        except Exception:
+            pass
+    return None
+
+
+def _download(url, timeout=120):
+    import ssl
+    import urllib.request
+    context = ssl.create_default_context(cafile=_ca_file())
+    return urllib.request.urlopen(url, timeout=timeout, context=context).read()
+
+
 def _have(name, libraries):
     return any(os.path.isfile(os.path.join(lib, name, "DESCRIPTION")) for lib in libraries)
 
@@ -124,7 +149,8 @@ def _install(packages, lib):
     import urllib.request
     os.makedirs(lib, exist_ok=True)
     libraries = [lib, LIBRARY, os.path.join(HOME, "library")]
-    todo, done, missing = list(packages), [], []
+    import urllib.error
+    todo, done, missing, failed = list(packages), [], [], []
     while todo:
         name = todo.pop(0)
         if name in done or name in missing:
@@ -133,15 +159,23 @@ def _install(packages, lib):
             continue
         url = "%s/%s-ios-arm64.tar.gz" % (RELEASE, name)
         try:
-            data = urllib.request.urlopen(url, timeout=120).read()
-        except Exception:
-            missing.append(name)
+            data = _download(url)
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                missing.append(name)
+            else:
+                failed.append("%s (%s)" % (name, error))
+            continue
+        except Exception as error:
+            failed.append("%s (%s)" % (name, error))
             continue
         with tarfile.open(fileobj=io.BytesIO(data)) as archive:
             archive.extractall(lib, filter="data")
         done.append(name)
         print("installed %s (built for iOS)" % name)
         todo.extend(d for d in _description_deps(os.path.join(lib, name)) if not _have(d, libraries))
+    if failed:
+        print("could not download: %s" % "; ".join(failed))
     if missing:
         print("not built for iOS yet: %s" % ", ".join(missing))
         # Nyxian offers to build them (like pip does for wheels)
@@ -150,7 +184,7 @@ def _install(packages, lib):
         # their binaries get Nyxian's signature in a fresh window (as after pip install)
         print("Open a new window (Nyxian offers it) to use them: library(%s)" % packages[0])
         _escape("nyxian-installed", " ".join(done))
-    return len(missing) == 0
+    return not missing and not failed
 
 
 def _set_c_shell():
@@ -188,11 +222,10 @@ def start():
     os.environ.setdefault("RPY2_CFFI_MODE", "ABI")
     os.environ.setdefault("R_LIBS_USER", LIBRARY)
     os.makedirs(os.environ["R_LIBS_USER"], exist_ok=True)
-    try:
-        import certifi
-        os.environ.setdefault("NYXIAN_CA_BUNDLE", certifi.where())
-    except ImportError:
-        pass
+    ca = _ca_file()
+    if ca:
+        os.environ.setdefault("NYXIAN_CA_BUNDLE", ca)
+        os.environ.setdefault("CURL_CA_BUNDLE", ca)
     # rpy2 knows Linux/Darwin/Windows: on iOS R is lib/libR.dylib, as on the Mac
     import rpy2.situation as situation
     situation.get_rlib_path = lambda r_home, system: os.path.join(r_home, "lib", "libR.dylib")

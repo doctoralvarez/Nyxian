@@ -4,6 +4,12 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.89.2 — 2026-11-19
+
+- R: install.packages() downloads verify HTTPS with certifi's certificates
+  (Python on iOS has no system store: every download failed and it offered
+  to build packages already built); R's libcurl uses them too.
+
 ## 1.89.1 — 2026-11-19
 
 - Python start: a Java .class file is no longer taken for a binary to sign
