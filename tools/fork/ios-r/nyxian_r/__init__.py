@@ -1,5 +1,7 @@
-# Fork doctoralvarez/Nyxian — version 0.1.4
+# Fork doctoralvarez/Nyxian — version 0.1.5
 # Changelog:
+#  - 0.1.5 (2026-11-19): the C shell hook is set before R starts; default
+#    packages startup missed (utils, stats) are attached after it.
 #  - 0.1.4 (2026-11-19): R's errors and warnings printed as R prints them.
 #  - 0.1.3 (2026-11-19): R's start-script environment given directly (rpy2
 #    ran Rscript, a process, to read it).
@@ -163,8 +165,9 @@ def start():
     from rpy2.rinterface_lib import callbacks
     callbacks.consolewrite_warnerror = lambda text: (sys.stderr.write(text), sys.stderr.flush())
     callbacks.showmessage = lambda text: print(text)
-    ri.initr(interactive=False)
+    # libR is open once rpy2.rinterface is imported: system()/popen() work from R's very start
     _set_c_shell()
+    ri.initr(interactive=False)
 
     def r_shell(cmd, stdin_text):
         status, text = shell(str(cmd[0]), str(stdin_text[0]) if len(stdin_text) else "")
@@ -197,6 +200,11 @@ def start():
     # .nyxian_shell returns list(out, err, status) with names
     ri.evalr('local({ f <- .nyxian_shell; assign(".nyxian_shell", function(cmd, input = "") '
              '{ r <- f(cmd, input); names(r) <- c("out", "err", "status"); r }, envir = globalenv()) })')
+    # the default packages R attaches at start (utils, stats…): whatever startup missed, now,
+    # with the real error shown if one still does not load
+    ri.evalr('for (p in getOption("defaultPackages")) if (!(paste0("package:", p) %in% search())) '
+             'tryCatch(suppressPackageStartupMessages(library(p, character.only = TRUE)), '
+             'error = function(e) message("could not load ", p, ": ", conditionMessage(e)))')
     _started = True
 
 
