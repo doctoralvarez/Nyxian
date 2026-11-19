@@ -1,5 +1,11 @@
-# Fork doctoralvarez/Nyxian — version 1.6.1
+# Fork doctoralvarez/Nyxian — version 1.7.0
 # Changelog:
+#  - 1.7.0 (2026-11-19): "fortran" input: Fortran libraries for iOS
+#    (experimental: LLVM Flang from Homebrew targeting arm64-apple-ios, and
+#    its runtime flang-rt built for iOS); Nyxian sends builds of the three
+#    kinds (packages, native, fortran). A dispatch builds only what it names
+#    (an empty package list stays empty); the run fails when something did
+#    not build, so Nyxian can say so. No longer runs on every push.
 #  - 1.6.1 (2026-11-19): input "rebuild" builds again even if an iOS wheel
 #    exists; every wheel built here gets its binaries signed ad-hoc
 #    (sign_wheel.sh): Nyxian refused an unsigned .so ("missing code signature").
@@ -45,15 +51,14 @@ on:
         description: "C/C++ libraries for iOS alone (recipe names like leptonica tesseract, or source URLs)"
         default: ""
         required: false
+      fortran:
+        description: "Fortran libraries for iOS (experimental, LLVM Flang: lapack, flang-rt, or source URLs)"
+        default: ""
+        required: false
       rebuild:
         description: "Build again even if an iOS wheel already exists (replaces the one on this release)"
         type: boolean
         default: false
-  push:
-    branches: [mejoras-editor-ipad]
-    paths:
-      - .github/workflows/ios-wheels.yml
-      - tools/fork/ios-wheels/**
 
 permissions:
   contents: write
@@ -115,8 +120,9 @@ jobs:
     runs-on: ${{ fromJSON(needs.pick-runner.outputs.runs_on) }}
     timeout-minutes: 240
     env:
-      PACKAGES: ${{ github.event.inputs.packages || 'scipy scikit-learn pandas joblib threadpoolctl' }}
+      PACKAGES: ${{ github.event.inputs.packages }}
       NATIVE: ${{ github.event.inputs.native || '' }}
+      FORTRAN: ${{ github.event.inputs.fortran || '' }}
       REBUILD: ${{ github.event.inputs.rebuild || 'false' }}
       FIND_LINKS: https://github.com/${{ github.repository }}/releases/expanded_assets/ios-wheels
     steps:
@@ -167,14 +173,17 @@ jobs:
           # C/C++ libraries on their own: the "native" input, or "native:<lib>" among the packages
           items=""
           for lib in $NATIVE; do items="$items native:$lib"; done
+          for lib in $FORTRAN; do items="$items fortran:$lib"; done
           for spec in $items $PACKAGES; do
             echo "::group::$spec"
-            if [ "${spec#native:}" != "$spec" ]; then
-              lib="${spec#native:}"
-              if bash "$native" ensure "$lib"; then
-                echo "$lib: C/C++ library for iOS ready (ios-native release)" | tee -a summary.txt
+            if [ "${spec#native:}" != "$spec" ] || [ "${spec#fortran:}" != "$spec" ]; then
+              lib="${spec#*:}"
+              kind="C/C++"; [ "${spec#fortran:}" != "$spec" ] && kind="Fortran"
+              again=0; [ "$REBUILD" = "true" ] && again=1
+              if IOS_NATIVE_REBUILD=$again IOS_NATIVE_FORTRAN=$([ "$kind" = Fortran ] && echo 1 || echo 0) bash "$native" ensure "$lib"; then
+                echo "$lib: $kind library for iOS ready (ios-native release)" | tee -a summary.txt
               else
-                echo "$lib: C/C++ library FAILED to build for iOS (see its log group)" | tee -a summary.txt
+                echo "$lib: $kind library FAILED to build for iOS (see its log group)" | tee -a summary.txt
               fi
               echo "::endgroup::"; continue
             fi
@@ -273,3 +282,10 @@ jobs:
             gh release create ios-wheels -R "$GITHUB_REPOSITORY" --title "iOS wheels for Nyxian's Python" \
               --notes "Wheels for CPython 3.14 on iOS (arm64 device) that PyPI and BeeWare's index lack. Nyxian's pip finds them here." --prerelease
           gh release upload ios-wheels wheelhouse/*.whl -R "$GITHUB_REPOSITORY" --clobber
+
+      - name: Did everything build?
+        if: always()
+        run: |
+          if [ -f summary.txt ] && grep -q "FAILED" summary.txt; then
+            echo "::error::Something did not build for iOS:"; grep "FAILED" summary.txt; exit 1
+          fi

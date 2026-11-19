@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.44.0
+ Fork doctoralvarez/Nyxian — version 1.45.0
  Changelog:
+  - 1.45.0 (2026-11-19): Nyxian Shell: iosbuild python|c|fortran NAME…
+    [--rebuild] asks Nyxian to build a Python wheel, a C/C++ library or a
+    Fortran library for iOS on your Mac (or GitHub's).
   - 1.44.0 (2026-11-18): nyxian_pip tells the terminal what it installed, so
     Nyxian can offer a new window where it imports at once.
   - 1.43.2 (2026-11-18): pip uninstalled or half there ("No module named
@@ -5858,6 +5861,7 @@ def b_help(args, inp, out, err):
         "  shell    echo · env · export A=b · unset · which · history · clear · sleep · true · false · exit\n"
         "  jobs     jobs · fg [%%n] · bg [%%n] · kill [-9|-STOP|-CONT] PID|%%n · ^Z stops the program in front\n"
         "  programs python3 FILE.py · pip install NAME · your command line tools (by path or PATH)\n"
+        "  ios      iosbuild python|c|fortran NAME… [--rebuild]: builds a wheel or library for iOS on your Mac\n"
         "  node     node [FILE.js] · npm install/run/ls … · npx NAME · commands in node_modules/.bin\n"
         "  java     java FILE.java / java -jar APP.jar / java -cp DIR CLASS · javac -d DIR FILES · jar cf/tf/xf/uf (miniJVM: Java 8 subset)\n"
         "  scripts  sh FILE.sh / source FILE: its lines run in Nyxian Shell · ./tool with #! runs with its interpreter\n"
@@ -5901,6 +5905,34 @@ def b_source(args, inp, out, err):
     return status
 
 
+def b_iosbuild(args, inp, out, err):
+    """Builds for iOS on your Mac (or GitHub's): Python wheels, C/C++ or Fortran libraries."""
+    kinds = {"python": "python", "py": "python", "wheel": "python", "wheels": "python", "pip": "python",
+             "c": "native", "c++": "native", "cpp": "native", "cxx": "native", "native": "native",
+             "fortran": "fortran", "f": "fortran", "f90": "fortran"}
+    rebuild = any(a in ("--rebuild", "-r", "--again") for a in args)
+    args = [a for a in args if a not in ("--rebuild", "-r", "--again")]
+    if len(args) < 2 or args[0].lower() not in kinds:
+        out.write(
+            "usage: iosbuild python|c|fortran NAME... [--rebuild]\n"
+            "  python   pip names: iosbuild python tesserocr pyyaml==6.0\n"
+            "  c        C/C++ libraries: a recipe (leptonica, tesseract), name@version or a source URL\n"
+            "           (.tar.gz, .zip, .git#tag) built with CMake, Meson or autotools\n"
+            "  fortran  Fortran libraries (experimental, LLVM Flang): lapack, flang-rt or a source URL\n"
+            "  --rebuild  build again even if one already exists\n"
+            "Builds on your Mac if it is on, else GitHub's; needs the token in Settings > Toolchain > iOS Builds.\n")
+        return 0 if args[:1] in (["-h"], ["--help"], ["help"]) else 2
+    kind = kinds[args[0].lower()]
+    names = [a for a in args[1:] if a and ";" not in a]
+    out.write("Asking Nyxian to build for iOS: %s\n" % " ".join(names))
+    try:
+        out.flush()
+    except Exception:
+        pass
+    os.write(1, ("\x1b]7770;nyxian-build;%s;%s;%s\x07" % (kind, "1" if rebuild else "0", " ".join(names))).encode("utf-8"))
+    return 0
+
+
 def b_pip(args, inp, out, err):
     python = sys.executable
     return None, [python, "-m", "nyxian_pip"] + args
@@ -5913,7 +5945,7 @@ BUILTINS = {
     "unset": b_unset, "which": b_which, "clear": b_clear, "history": b_history, "sleep": b_sleep,
     "true": b_true, "false": b_false, "exit": b_exit, "jobs": b_jobs, "fg": b_fg, "bg": b_bg,
     "kill": b_kill, "help": b_help, "source": b_source, ".": b_source, "sh": b_source, "bash": b_source,
-    "jar": b_jar,
+    "jar": b_jar, "iosbuild": b_iosbuild,
 }
 # changing the shell itself: never in a pipe's thread or the background
 _SHELL_STATE = {"cd", "export", "unset", "exit", "fg", "bg", "jobs", "kill", "history", "clear", "source", ".", "sh", "bash"}

@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-19): the section is "iOS Builds": besides the token,
+    Build Python Wheel, Build C/C++ Library and Build Fortran Library send a
+    build to your Mac (or GitHub's); "Build Again" replaces an existing one.
   - 1.2.0 (2026-11-18): "iOS Wheels" section: the GitHub token Nyxian uses
     to start a build of an iOS wheel pip could not find (kept in the
     Keychain; set, replace or remove it here).
@@ -58,7 +61,7 @@ class ToolChainViewController: NXUITableViewController {
     
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         if section == 4 { return 3 }
-        if section == 5 { return 1 }
+        if section == 5 { return 1 + ForkWheelBuilder.Kind.allCases.count }
         return (section == 3) ? 2 : 1
     }
     
@@ -75,7 +78,7 @@ class ToolChainViewController: NXUITableViewController {
         case 4:
             return ForkBuildSpeedFooter.text
         case 5:
-            return "When pip finds no iOS wheel for a package that has to be compiled, Nyxian asks whether to build it with the \"iOS wheels\" workflow of doctoralvarez/Nyxian: on your Mac if it is on, else on GitHub's. It needs a fine-grained GitHub token for that repository with \"Actions: Read and write\" (you can add that permission to the token you already use for your Mac). It stays in this device's Keychain and is never given to Python or to the packages you install."
+            return "Builds for iOS run in the \"iOS wheels\" workflow of doctoralvarez/Nyxian: on your Mac if it is on, else on GitHub's. Python wheels go where Nyxian's pip looks (pip also offers one when it finds no iOS wheel); C/C++ and Fortran libraries (static, arm64) go on the ios-native release; Fortran is experimental (LLVM Flang). From the shell: iosbuild python|c|fortran NAME… [--rebuild]. It needs a fine-grained GitHub token for that repository with \"Actions: Read and write\" (you can add that permission to the token you already use for your Mac). It stays in this device's Keychain and is never given to Python or to the packages you install."
         default:
             return nil
         }
@@ -90,7 +93,7 @@ class ToolChainViewController: NXUITableViewController {
         case 4:
             return "Speed"
         case 5:
-            return "iOS Wheels"
+            return "iOS Builds"
         default:
             return nil
         }
@@ -131,6 +134,11 @@ class ToolChainViewController: NXUITableViewController {
                 cell = tableView.dequeueReusableCell(withIdentifier: ToggleTableCell.reuseIdentifier, for: indexPath) as! ToggleTableCell
                 (cell as! ToggleTableCell).configure(title: "All Cores with More Memory", key: ForkBuildSpeed.allCoresKey, defaultValue: true)
             }
+        case 5 where indexPath.row > 0:
+            let build = UITableViewCell(style: .default, reuseIdentifier: nil)
+            build.textLabel?.text = "Build \(ForkWheelBuilder.Kind.allCases[indexPath.row - 1].title)…"
+            build.textLabel?.textColor = .tintColor
+            cell = build
         case 5:
             let token = UITableViewCell(style: .value1, reuseIdentifier: nil)
             token.textLabel?.text = "GitHub Token"
@@ -158,7 +166,11 @@ class ToolChainViewController: NXUITableViewController {
         /* fork: the token for iOS wheel builds */
         if indexPath.section == 5 {
             tableView.deselectRow(at: indexPath, animated: true)
-            forkEditWheelToken(tableView)
+            if indexPath.row > 0 {
+                ForkWheelBuilder.ask(kind: ForkWheelBuilder.Kind.allCases[indexPath.row - 1], from: self)
+            } else {
+                forkEditWheelToken(tableView)
+            }
             return
         }
         if(indexPath.section == 3) {

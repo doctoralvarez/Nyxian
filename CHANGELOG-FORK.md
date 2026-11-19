@@ -4,6 +4,21 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.84.0 — 2026-11-19
+
+- Builds for iOS can be sent from Nyxian for three kinds: Python wheels,
+  C/C++ libraries and Fortran libraries.
+  - Nyxian Shell: `iosbuild python|c|fortran NAME… [--rebuild]`.
+  - Settings › Toolchain › iOS Builds (was iOS Wheels): Build Python Wheel…,
+    Build C/C++ Library…, Build Fortran Library… ("Build Again" replaces an
+    existing one).
+- iOS Wheels workflow: `fortran` input (experimental): LLVM Flang from Homebrew
+  compiles for arm64-apple-ios; recipes `flang-rt` (Flang's runtime built for
+  iOS, needed to link Fortran code) and `lapack` (Reference-LAPACK with BLAS,
+  CBLAS, LAPACKE). A dispatch builds only what it names; the run fails when
+  something did not build, so Nyxian's notice says so. It no longer runs on
+  every push.
+
 ## 1.83.1 — 2026-11-19
 
 - iOS Wheels workflow: the binaries of every wheel it builds get an ad-hoc code

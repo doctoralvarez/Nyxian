@@ -1,6 +1,13 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.0.0
+# Fork doctoralvarez/Nyxian — version 1.1.0
 # Changelog:
+#  - 1.1.0 (2026-11-19): Fortran (experimental): LLVM Flang from Homebrew
+#    compiles for arm64-apple-ios through a wrapper (drops -arch/-isysroot/
+#    -m*-version-min, which flang does not take, and adds --target); CMake,
+#    Meson and autotools get it as their Fortran compiler. Recipes: flang-rt
+#    (Flang's runtime built for iOS from llvm-project at flang's own version,
+#    needed to link Fortran code) and lapack (Reference-LAPACK with BLAS,
+#    CBLAS and LAPACKE). IOS_NATIVE_FORTRAN=1 also builds flang-rt first.
 #  - 1.0.0 (2026-11-19): builds C and C++ libraries for iOS (arm64 device,
 #    iOS 13.0, static .a + headers + pkg-config files) with CMake or
 #    autotools, from a recipe (leptonica, tesseract) or any source archive
@@ -12,6 +19,7 @@
 #   native.sh deps <python-package>     native libraries a Python package needs
 #   native.sh ensure <spec>...          download from the release or build (+ deps)
 #   native.sh env                       CIBW environment for the ensured libraries
+#   IOS_NATIVE_FORTRAN=1                Fortran library: flang-rt is built too
 #
 # <spec>: a recipe name (leptonica, tesseract), name@version, a source archive
 # URL (.tar.gz/.tar.xz/.zip) or a git URL (ending in .git, optionally #tag).
@@ -35,6 +43,8 @@ recipe_version() {
   case "$1" in
     leptonica) echo 1.87.0 ;;
     tesseract) echo 5.5.4 ;;
+    lapack) echo 3.12.1 ;;
+    flang-rt) flang_version ;;
     *) echo "" ;;
   esac
 }
@@ -42,6 +52,8 @@ recipe_url() {  # name version
   case "$1" in
     leptonica) echo "https://github.com/DanBloomberg/leptonica/archive/refs/tags/$2.tar.gz" ;;
     tesseract) echo "https://github.com/tesseract-ocr/tesseract/archive/refs/tags/$2.tar.gz" ;;
+    lapack) echo "https://github.com/Reference-LAPACK/lapack/archive/refs/tags/v$2.tar.gz" ;;
+    flang-rt) echo "llvm-project:llvmorg-$2" ;;
   esac
 }
 recipe_deps() {
@@ -55,6 +67,7 @@ recipe_deps() {
 recipe_cmake_args() {
   case "$1" in
     leptonica) echo "-DENABLE_ZLIB=ON -DENABLE_PNG=OFF -DENABLE_GIF=OFF -DENABLE_JPEG=OFF -DENABLE_TIFF=OFF -DENABLE_WEBP=OFF -DENABLE_OPENJPEG=OFF -DBUILD_PROG=OFF -DSW_BUILD=OFF" ;;
+    lapack) echo "-DCBLAS=ON -DLAPACKE=ON -DBUILD_TESTING=OFF -DBUILD_INDEX64=OFF -DUSE_OPTIMIZED_BLAS=OFF" ;;
     tesseract) echo "-DBUILD_TRAINING_TOOLS=OFF -DBUILD_TESTS=OFF -DGRAPHICS_DISABLED=ON -DOPENMP_BUILD=OFF -DENABLE_LTO=OFF -DENABLE_NATIVE=OFF -DDISABLE_TIFF=ON -DDISABLE_ARCHIVE=ON -DDISABLE_CURL=ON -DENABLE_CCACHE=OFF -DENABLE_PRECOMPILED_HEADERS=OFF -DINSTALL_CONFIGS=ON -DLEPT_TIFF_RESULT=1 -DLEPT_TIFF_RESULT__TRYRUN_OUTPUT= -DLeptonica_DIR=$ROOT/leptonica/lib/cmake/leptonica" ;;
     *) echo "" ;;
   esac
@@ -103,6 +116,95 @@ spec_url() {
   esac
 }
 
+# ---------- Fortran (LLVM Flang, experimental) ----------
+FLANG=""
+find_flang() {
+  [ -n "$FLANG" ] && return 0
+  local f
+  for f in flang flang-new; do
+    if command -v "$f" >/dev/null 2>&1; then FLANG=$(command -v "$f"); break; fi
+  done
+  if [ -z "$FLANG" ] && command -v brew >/dev/null; then
+    brew install flang >&2 || return 1
+    local p; p=$(brew --prefix flang)
+    for f in "$p/bin/flang" "$p/bin/flang-new"; do [ -x "$f" ] && FLANG="$f" && break; done
+  fi
+  [ -n "$FLANG" ] || return 1
+  log "Fortran compiler: $FLANG ($("$FLANG" --version 2>&1 | head -1))"
+}
+flang_version() {
+  find_flang || { echo ""; return; }
+  "$FLANG" --version 2>&1 | head -1 | sed -nE 's/.*version ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p'
+}
+# flang does not take Apple's -arch/-isysroot/-m*-version-min: the wrapper drops them and
+# gives the iOS target instead, so any build system can use it as its Fortran compiler
+FC_WRAP=""
+fortran_wrapper() {
+  [ -n "$FC_WRAP" ] && return 0
+  find_flang || return 1
+  FC_WRAP="$WORK/ios-flang"
+  cat > "$FC_WRAP" <<EOF
+#!/bin/bash
+args=(); skip=0
+for a in "\$@"; do
+  if [ \$skip = 1 ]; then skip=0; continue; fi
+  case "\$a" in
+    -arch|-isysroot) skip=1 ;;
+    -mios-version-min=*|-miphoneos-version-min=*|-mmacosx-version-min=*|-fembed-bitcode*) ;;
+    *) args+=("\$a") ;;
+  esac
+done
+exec "$FLANG" --target=arm64-apple-ios$MIN_IOS "\${args[@]}"
+EOF
+  chmod +x "$FC_WRAP"
+}
+has_fortran() {  # src
+  [ "${IOS_NATIVE_FORTRAN:-0}" = "1" ] && return 0
+  find "$1" -maxdepth 4 -type f \( -iname '*.f' -o -iname '*.f90' -o -iname '*.f95' -o -iname '*.f03' -o -iname '*.f08' -o -iname '*.for' \) 2>/dev/null | head -1 | grep -q .
+}
+
+# Flang's runtime for iOS, from llvm-project at the version of the flang that compiles
+build_flang_rt() {  # tag prefix
+  local tag="$1" prefix="$2" src="$WORK/llvm-project" bdir="$WORK/build-flang-rt"
+  fortran_wrapper || return 1
+  rm -rf "$src" "$bdir"
+  git clone -q --depth 1 --branch "$tag" --filter=blob:none --sparse https://github.com/llvm/llvm-project "$src"
+  git -C "$src" sparse-checkout set runtimes flang-rt flang/include flang/lib/Decimal flang/lib/Common \
+    flang/module flang/cmake cmake llvm/cmake llvm/utils/llvm-lit llvm/utils/merge-json.py third-party >/dev/null 2>&1 \
+    || git -C "$src" sparse-checkout set runtimes flang-rt flang cmake llvm/cmake llvm/utils third-party
+  cmake -S "$src/runtimes" -B "$bdir" -G Ninja \
+    -DLLVM_ENABLE_RUNTIMES=flang-rt \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_SYSTEM_NAME=iOS \
+    -DCMAKE_SYSTEM_PROCESSOR=arm64 \
+    -DCMAKE_OSX_SYSROOT=iphoneos \
+    -DCMAKE_OSX_ARCHITECTURES=arm64 \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET=$MIN_IOS \
+    -DCMAKE_C_COMPILER="$CC_BIN" -DCMAKE_CXX_COMPILER="$CXX_BIN" \
+    -DCMAKE_Fortran_COMPILER="$FC_WRAP" -DCMAKE_Fortran_COMPILER_WORKS=ON \
+    -DCMAKE_Fortran_COMPILER_ID=LLVMFlang \
+    -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+    -DCMAKE_INSTALL_PREFIX="$prefix" \
+    -DFLANG_RT_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_TESTS=OFF \
+    -DFLANG_RT_ENABLE_STATIC=ON -DFLANG_RT_ENABLE_SHARED=OFF \
+    -DLLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-ios$MIN_IOS \
+    -DFLANG_RT_INSTALL_RESOURCE_PATH=lib
+  cmake --build "$bdir" -j "$JOBS"
+  cmake --install "$bdir"
+  # whatever directory the runtime chose: every .a also in lib/
+  find "$prefix" -name '*.a' -not -path "$prefix/lib/*.a" -exec cp -f {} "$prefix/lib/" \; 2>/dev/null || true
+  mkdir -p "$prefix/lib/pkgconfig"
+  local libs; libs=$(cd "$prefix/lib" && ls libflang_rt*.a 2>/dev/null | sed -E 's/^lib(.*)\.a$/-l\1/' | tr '\n' ' ')
+  cat > "$prefix/lib/pkgconfig/flang-rt.pc" <<EOF
+prefix=$prefix
+libdir=\${prefix}/lib
+Name: flang-rt
+Description: LLVM Flang Fortran runtime for iOS
+Version: ${tag#llvmorg-}
+Libs: -L\${libdir} $libs -lc++
+EOF
+}
+
 # ---------- toolchain ----------
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 CC_BIN=$(xcrun --sdk iphoneos -f clang)
@@ -117,17 +219,17 @@ fetch_source() {  # url dest
     *.git|*.git\#*|git@*)
       local repo="${url%%#*}" ref=""
       [[ "$url" == *#* ]] && ref="${url##*#}"
-      if [ -n "$ref" ]; then git clone -q --depth 1 --branch "$ref" "$repo" "$dest/src"
-      else git clone -q --depth 1 "$repo" "$dest/src"; fi
+      if [ -n "$ref" ]; then git clone -q --depth 1 --branch "$ref" "$repo" "$dest/src" || return 1
+      else git clone -q --depth 1 "$repo" "$dest/src" || return 1; fi
       git -C "$dest/src" submodule update -q --init --depth 1 --recursive || true
       echo "$dest/src" ;;
     *)
       local f="$dest/archive"
-      curl -fsSL --retry 3 -o "$f" "$url"
+      curl -fsSL --retry 3 -o "$f" "$url" || return 1
       mkdir -p "$dest/x"
       case "$url" in
-        *.zip) unzip -q "$f" -d "$dest/x" ;;
-        *) tar -xf "$f" -C "$dest/x" ;;
+        *.zip) unzip -q "$f" -d "$dest/x" || return 1 ;;
+        *) tar -xf "$f" -C "$dest/x" || return 1 ;;
       esac
       local top; top=$(find "$dest/x" -mindepth 1 -maxdepth 1)
       if [ "$(echo "$top" | wc -l)" -eq 1 ] && [ -d "$top" ]; then echo "$top"; else echo "$dest/x"; fi ;;
@@ -148,6 +250,11 @@ pc_paths() {
 build_cmake() {  # src prefix extra-args
   local src="$1" prefix="$2" extra="$3" bdir="$WORK/build-$(basename "$prefix")"
   rm -rf "$bdir"
+  FORTRAN_CMAKE=""
+  if has_fortran "$src" && fortran_wrapper; then
+    # no Fortran program can be linked for iOS before flang-rt exists: the checks only compile
+    FORTRAN_CMAKE="-DCMAKE_Fortran_COMPILER=$FC_WRAP -DCMAKE_Fortran_COMPILER_WORKS=ON -DCMAKE_Fortran_COMPILER_ID=LLVMFlang"
+  fi
   # shellcheck disable=SC2086
   PKG_CONFIG_LIBDIR="$(pc_paths)" PKG_CONFIG_PATH="" \
   cmake -S "$src" -B "$bdir" -G Ninja \
@@ -171,6 +278,7 @@ build_cmake() {  # src prefix extra-args
     -DBUILD_SHARED_LIBS=OFF \
     -DCMAKE_MACOSX_BUNDLE=OFF \
     -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+    $FORTRAN_CMAKE \
     $extra
   cmake --build "$bdir" -j "$JOBS"
   cmake --install "$bdir"
@@ -180,6 +288,7 @@ build_autotools() {  # src prefix
   local src="$1" prefix="$2"
   ( cd "$src"
     [ -x configure ] || { [ -x autogen.sh ] && ./autogen.sh; } || autoreconf -fi
+    if has_fortran . && fortran_wrapper; then export FC="$FC_WRAP" F77="$FC_WRAP" FFLAGS="-O2" FCFLAGS="-O2"; fi
     CC="$CC_BIN $IOS_FLAGS" CXX="$CXX_BIN $IOS_FLAGS" \
     CFLAGS="-O2" CXXFLAGS="-O2" \
     PKG_CONFIG_LIBDIR="$(pc_paths)" PKG_CONFIG_PATH="" \
@@ -194,6 +303,7 @@ build_meson() {  # src prefix
 [binaries]
 c = ['$CC_BIN', '-arch', 'arm64', '-isysroot', '$SDK', '-mios-version-min=$MIN_IOS']
 cpp = ['$CXX_BIN', '-arch', 'arm64', '-isysroot', '$SDK', '-mios-version-min=$MIN_IOS']
+$( has_fortran "$src" && fortran_wrapper && echo "fortran = ['$FC_WRAP']" )
 ar = '$(xcrun --sdk iphoneos -f ar)'
 strip = '$(xcrun --sdk iphoneos -f strip)'
 pkg-config = 'pkg-config'
@@ -254,9 +364,15 @@ ensure_one() {
   name=$(spec_name "$spec"); ver=$(spec_version "$spec"); url=$(spec_url "$spec")
   case "$DONE" in *" $name "*) return 0 ;; esac
   if [ -z "$url" ]; then log "$spec: unknown library (give a recipe name or a source URL)"; return 1; fi
+  if [ "$url" = "llvm-project:llvmorg-" ]; then log "flang-rt: no Fortran compiler (LLVM Flang) on this Mac"; return 1; fi
   [ -z "$ver" ] && ver=src
   local dep
   for dep in $(recipe_deps "$name"); do ensure_one "$dep"; done
+  # Fortran code needs Flang's runtime to be linked later: built (or fetched) too, if it can be
+  if [ "${IOS_NATIVE_FORTRAN:-0}" = "1" ] && [ "$name" != "flang-rt" ]; then
+    IOS_NATIVE_FORTRAN=0 bash "$0" ensure flang-rt || log "flang-rt (Flang's runtime) did not build for iOS: $name can still build, but linking it needs that runtime"
+    case "$DONE" in *" flang-rt "*) ;; *) [ -d "$ROOT/flang-rt" ] && DONE="${DONE}flang-rt " ;; esac
+  fi
   prefix="$ROOT/$name"
   tarball="ios-native-$name-$ver.tar.gz"
   if [ "${IOS_NATIVE_REBUILD:-0}" != "1" ] && [ "$ver" != "head" ] && release_has "$tarball"; then
@@ -266,9 +382,12 @@ ensure_one() {
     tar -xzf "$WORK/$tarball" -C "$ROOT"
   else
     log "$name $ver: building for iOS from $url"
-    src=$(fetch_source "$url" "$WORK/src-$name")
     rm -rf "$prefix"
-    if [ -f "$src/CMakeLists.txt" ]; then
+    if [ "${url#llvm-project:}" != "$url" ]; then
+      build_flang_rt "${url#llvm-project:}" "$prefix"
+    elif ! src=$(fetch_source "$url" "$WORK/src-$name"); then
+      log "$name: could not download $url"; return 1
+    elif [ -f "$src/CMakeLists.txt" ]; then
       build_cmake "$src" "$prefix" "$(recipe_cmake_args "$name")"
     elif [ -f "$src/meson.build" ]; then
       build_meson "$src" "$prefix"

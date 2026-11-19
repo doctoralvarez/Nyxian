@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.10.0
+ Fork doctoralvarez/Nyxian — version 1.11.0
  Changelog:
+  - 1.11.0 (2026-11-19): builds for iOS can be sent from Nyxian for three
+    kinds: Python wheels, C/C++ libraries and Fortran libraries (the
+    shell's iosbuild command: ESC ] 7770 ; nyxian-build ; kind;rebuild;names
+    BEL, and Settings › Toolchain › iOS Builds). "Build Again" replaces one
+    that already exists.
   - 1.10.0 (2026-11-18): after a pip install that worked (ESC ] 7770 ;
     nyxian-installed ; names BEL) Nyxian says so and offers "Open New
     Window": this window closes and a new one opens (the same kind; after
@@ -179,6 +184,8 @@ import Security
             pages.append(contentsOf: self.forkLocalServers(in: data))
             /* fork: pip found no iOS wheel for packages that need compiling */
             let wheels = TerminalViewObjC.forkTakeRequests(TerminalViewObjC.wheelStart, from: &data)
+            /* fork: iosbuild in the shell: a Python wheel, C/C++ or Fortran library to build for iOS */
+            let builds = TerminalViewObjC.forkTakeRequests(TerminalViewObjC.buildStart, from: &data)
             /* fork: pip installed something: offer a fresh window to import it */
             let installed = TerminalViewObjC.forkTakeRequests(TerminalViewObjC.installedStart, from: &data)
             
@@ -193,6 +200,14 @@ import Security
                 if let packages = wheels.last, let root = self.window?.rootViewController {
                     _ = self.resignFirstResponder()
                     ForkWheelBuilder.offer(packages: packages, from: root)
+                }
+                if let request = builds.last, let root = self.window?.rootViewController {
+                    /* "kind;rebuild;names" */
+                    let parts = request.split(separator: ";", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+                    if parts.count == 3, let kind = ForkWheelBuilder.Kind(rawValue: parts[0]) {
+                        _ = self.resignFirstResponder()
+                        ForkWheelBuilder.confirm(kind: kind, specs: parts[2], rebuild: parts[1] == "1", from: root)
+                    }
                 }
             }
         }
@@ -253,6 +268,7 @@ import Security
     static let openStart = Array("\u{1b}]7770;nyxian-open;".utf8)
     static let wheelStart = Array("\u{1b}]7770;nyxian-wheel;".utf8)
     static let installedStart = Array("\u{1b}]7770;nyxian-installed;".utf8)
+    static let buildStart = Array("\u{1b}]7770;nyxian-build;".utf8)
     
     /// Takes every ESC ] 7770 ; KIND ; text BEL of one kind out of the output; returns the texts.
     static func forkTakeRequests(_ prefix: [UInt8], from data: inout Data) -> [String] {
@@ -668,6 +684,46 @@ final class ForkTerminalKeyBar: UIInputView {
 /// iOS Wheels): a fine-grained token on doctoralvarez/Nyxian with
 /// "Actions: Read and write". It is kept in the Keychain, never given to Python.
 enum ForkWheelBuilder {
+    /// What to build: each kind is one input of the workflow
+    enum Kind: String, CaseIterable {
+        case python, native, fortran
+
+        var input: String {
+            switch self {
+            case .python: return "packages"
+            case .native: return "native"
+            case .fortran: return "fortran"
+            }
+        }
+        var title: String {
+            switch self {
+            case .python: return "Python Wheel"
+            case .native: return "C/C++ Library"
+            case .fortran: return "Fortran Library"
+            }
+        }
+        var what: String {
+            switch self {
+            case .python: return "the iOS wheel"
+            case .native: return "the C/C++ library for iOS"
+            case .fortran: return "the Fortran library for iOS"
+            }
+        }
+        var hint: String {
+            switch self {
+            case .python: return "pip names, e.g. tesserocr pyyaml==6.0"
+            case .native: return "leptonica, tesseract, name@version or a source URL (.tar.gz, .zip, .git)"
+            case .fortran: return "lapack, flang-rt, name@version or a source URL (.tar.gz, .zip, .git)"
+            }
+        }
+        func ready(_ names: [String]) -> String {
+            switch self {
+            case .python: return "iOS wheel ready: run pip install \(names.joined(separator: " ")) again"
+            default: return "\(title) for iOS ready: \(names.joined(separator: ", ")) (ios-native release)"
+            }
+        }
+    }
+
     static let repository = "doctoralvarez/Nyxian"
     static let branch = "mejoras-editor-ipad"
     static let workflow = "ios-wheels.yml"
@@ -736,7 +792,54 @@ enum ForkWheelBuilder {
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(UIAlertAction(title: "Build", style: .default) { _ in
-            start(names: names, from: root)
+            start(kind: .python, names: names, rebuild: false, from: root)
+        })
+        top(root).present(alert, animated: true)
+    }
+
+    /// Asks before building what the shell's iosbuild named
+    static func confirm(kind: Kind, specs: String, rebuild: Bool, from root: UIViewController) {
+        let names = specs.split(separator: " ").map(String.init).filter { !$0.isEmpty }
+        guard !names.isEmpty else { return }
+        guard token != nil else {
+            tell("GitHub token needed", "Add a GitHub token in Settings › Toolchain › iOS Builds to build for iOS on your Mac (or GitHub's).", from: root)
+            return
+        }
+        let alert = UIAlertController(
+            title: rebuild ? "Build again for iOS?" : "Build for iOS?",
+            message: "\(kind.title): \(names.joined(separator: ", "))\n\nIt builds on your Mac (or on GitHub's Mac if yours is off) and usually takes 10–40 minutes. Nyxian tells you when it is ready.",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Build", style: .default) { _ in
+            start(kind: kind, names: names, rebuild: rebuild, from: root)
+        })
+        top(root).present(alert, animated: true)
+    }
+
+    /// Asks what to build (Settings › Toolchain › iOS Builds)
+    static func ask(kind: Kind, from root: UIViewController) {
+        guard token != nil else {
+            tell("GitHub token needed", "Add the GitHub token first (the row above).", from: root)
+            return
+        }
+        let alert = UIAlertController(title: "Build \(kind.title) for iOS", message: "Names separated by spaces: \(kind.hint).", preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = kind.hint
+            field.autocorrectionType = .no
+            field.autocapitalizationType = .none
+            field.keyboardType = .URL
+        }
+        let names: (UIAlertController?) -> [String] = { alert in
+            (alert?.textFields?.first?.text ?? "").split(whereSeparator: { $0 == " " || $0 == "," || $0 == "\n" }).map(String.init)
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Build Again", style: .default) { [weak alert] _ in
+            let list = names(alert)
+            if !list.isEmpty { start(kind: kind, names: list, rebuild: true, from: root) }
+        })
+        alert.addAction(UIAlertAction(title: "Build", style: .default) { [weak alert] _ in
+            let list = names(alert)
+            if !list.isEmpty { start(kind: kind, names: list, rebuild: false, from: root) }
         })
         top(root).present(alert, animated: true)
     }
@@ -758,16 +861,20 @@ enum ForkWheelBuilder {
         return request
     }
 
-    private static func start(names: [String], from root: UIViewController) {
+    private static func start(kind: Kind, names: [String], rebuild: Bool, from root: UIViewController) {
         let sent = Date()
-        let body: [String: Any] = ["ref": branch, "inputs": ["packages": names.joined(separator: " ")]]
+        /* the other kinds go empty, so the workflow builds only these */
+        var inputs: [String: Any] = [:]
+        for other in Kind.allCases { inputs[other.input] = other == kind ? names.joined(separator: " ") : "" }
+        inputs["rebuild"] = rebuild ? "true" : "false"
+        let body: [String: Any] = ["ref": branch, "inputs": inputs]
         guard let request = makeRequest("workflows/\(workflow)/dispatches", method: "POST", body: body) else { return }
         URLSession.shared.dataTask(with: request) { data, response, error in
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             DispatchQueue.main.async {
                 if status == 204 {
-                    NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Building the iOS wheel for \(names.joined(separator: ", "))…", withDelay: 0.0)
-                    follow(names: names, since: sent)
+                    NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Building \(kind.what) for \(names.joined(separator: ", "))…", withDelay: 0.0)
+                    follow(kind: kind, names: names, since: sent)
                 } else {
                     var reason = error?.localizedDescription ?? "GitHub answered \(status)"
                     if status == 401 { reason = "The token is not valid (or expired)." }
@@ -780,7 +887,7 @@ enum ForkWheelBuilder {
     }
 
     /// Watches the run that started and says how it ended (up to 3 hours)
-    private static func follow(names: [String], since: Date) {
+    private static func follow(kind: Kind, names: [String], since: Date) {
         Task.detached {
             let list = names.joined(separator: ", ")
             var runID: Int?
@@ -805,8 +912,8 @@ enum ForkWheelBuilder {
                 let ok = (run["conclusion"] as? String) == "success"
                 await MainActor.run {
                     let message = ok
-                        ? "iOS wheel ready: run pip install \(names.joined(separator: " ")) again"
-                        : "The iOS wheel build for \(list) did not finish (it may not build for iOS yet)"
+                        ? kind.ready(names)
+                        : "The build of \(kind.what) for \(list) failed (it may not build for iOS yet; the run's summary on GitHub says why)"
                     NXAlertDiagnosticPresenter.notifyUser(with: ok ? .note : .warning, withMessage: message, withDelay: 0.0)
                 }
                 return
