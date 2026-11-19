@@ -1,6 +1,8 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.1.3
+# Fork doctoralvarez/Nyxian — version 1.1.4
 # Changelog:
+#  - 1.1.4 (2026-11-19): flang-rt's sources include libc's shared RPC headers
+#    (io-api-server.cpp needs shared/rpc.h).
 #  - 1.1.3 (2026-11-19): flang-rt for iOS leaves out runtime trampolines
 #    (-fsafe-trampoline only): they write code into executable memory, which
 #    iOS does not allow; the entry points stop with a message instead.
@@ -209,8 +211,9 @@ build_flang_rt() {  # tag prefix
   rm -rf "$src" "$bdir"
   git clone -q --depth 1 --branch "$tag" --filter=blob:none --sparse https://github.com/llvm/llvm-project "$src"
   git -C "$src" sparse-checkout set runtimes flang-rt flang/include flang/lib/Decimal flang/lib/Common \
-    flang/module flang/cmake cmake llvm/cmake llvm/utils/llvm-lit llvm/utils/merge-json.py third-party >/dev/null 2>&1 \
-    || git -C "$src" sparse-checkout set runtimes flang-rt flang cmake llvm/cmake llvm/utils third-party
+    flang/module flang/cmake cmake llvm/cmake llvm/utils/llvm-lit llvm/utils/merge-json.py third-party \
+    libc/shared libc/src/__support libc/hdr libc/include >/dev/null 2>&1 \
+    || git -C "$src" sparse-checkout set runtimes flang-rt flang cmake llvm/cmake llvm/utils third-party libc
   # EXECUTE_COMMAND_LINE calls system(), which iOS does not have (an app runs no shell):
   # on iOS it reports "not supported" (-1, ENOENT) like a system without a shell
   local ex="$src/flang-rt/lib/runtime/execute.cpp"

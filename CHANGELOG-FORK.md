@@ -4,6 +4,10 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.84.5 — 2026-11-19
+
+- Fortran for iOS: flang-rt's sources include libc's shared headers it needs.
+
 ## 1.84.4 — 2026-11-19
 
 - Fortran for iOS: flang-rt leaves out runtime trampolines (only used by code
