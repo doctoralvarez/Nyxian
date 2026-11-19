@@ -1,5 +1,6 @@
-# Fork doctoralvarez/Nyxian — version 0.1.3
+# Fork doctoralvarez/Nyxian — version 0.1.4
 # Changelog:
+#  - 0.1.4 (2026-11-19): R's errors and warnings printed as R prints them.
 #  - 0.1.3 (2026-11-19): R's start-script environment given directly (rpy2
 #    ran Rscript, a process, to read it).
 #  - 0.1.2 (2026-11-19): rpy2 3.6 starts R with initr() (initr_simple is
@@ -158,6 +159,10 @@ def start():
         ("R_DOC_DIR", os.path.join(HOME, "doc")),
         ("R_ARCH", ""),
     )
+    # R's messages, warnings and errors: plain text on stderr (rpy2 logs them as Python warnings)
+    from rpy2.rinterface_lib import callbacks
+    callbacks.consolewrite_warnerror = lambda text: (sys.stderr.write(text), sys.stderr.flush())
+    callbacks.showmessage = lambda text: print(text)
     ri.initr(interactive=False)
     _set_c_shell()
 

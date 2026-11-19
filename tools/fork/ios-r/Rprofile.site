@@ -1,5 +1,7 @@
-# Fork doctoralvarez/Nyxian — version 0.1.0
+# Fork doctoralvarez/Nyxian — version 0.1.1
 # Changelog:
+#  - 0.1.1 (2026-11-19): a replacement that fails is reported and skipped,
+#    never making its package fail to load.
 #  - 0.1.0 (2026-11-19): R inside Nyxian (iOS): an app cannot start other
 #    programs, so what R would run as a separate process goes elsewhere:
 #      system(), system2(), shell commands  -> Nyxian Shell, in this process
@@ -23,7 +25,10 @@ local({
     f
   }
 
-  replace_in <- function(ns_name, name, value) {
+  # never lets a package fail to load: a replacement that cannot be made is reported
+  replace_in <- function(ns_name, name, value) tryCatch(replace_now(ns_name, name, value),
+    error = function(e) message(sprintf("Nyxian: %s::%s left as it is (%s)", ns_name, name, conditionMessage(e))))
+  replace_now <- function(ns_name, name, value) {
     env <- asNamespace(ns_name)
     if (exists(name, envir = env, inherits = FALSE)) {
       unlockBinding(name, env)
