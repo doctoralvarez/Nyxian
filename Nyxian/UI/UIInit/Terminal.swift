@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.11.0
+ Fork doctoralvarez/Nyxian — version 1.11.1
  Changelog:
+  - 1.11.1 (2026-11-19): "Open New Window" after pip signs what pip just
+    installed first (the new window used the prepared launcher as it was,
+    so new binary modules were never signed: "missing code signature",
+    "code signature invalid").
   - 1.11.0 (2026-11-19): builds for iOS can be sent from Nyxian for three
     kinds: Python wheels, C/C++ libraries and Fortran libraries (the
     shell's iosbuild command: ESC ] 7770 ; nyxian-build ; kind;rebuild;names
@@ -410,8 +414,39 @@ import Security
             message: "Open a new window to import it right away (its compiled parts get signed when a window opens). This window closes.",
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Not Now", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Open New Window", style: .default) { _ in reopen() })
+        alert.addAction(UIAlertAction(title: "Open New Window", style: .default) { [weak self] _ in
+            self?.forkSignThenReopen(reopen, from: root)
+        })
         top.present(alert, animated: true)
+    }
+    
+    /// Signs the binary modules pip just installed (as opening Python does), then reopens.
+    private func forkSignThenReopen(_ reopen: @escaping () -> Void, from root: UIViewController) {
+        var top = root
+        while let shown = top.presentedViewController, !shown.isBeingDismissed { top = shown }
+        let progress = UIAlertController(title: "Preparing", message: "Signing installed packages…", preferredStyle: .alert)
+        top.present(progress, animated: true)
+        DispatchQueue.global(qos: .userInitiated).async {
+            var failure: String?
+            do {
+                _ = try ForkPython.prepare { message in
+                    DispatchQueue.main.async { progress.message = message }
+                }
+            } catch {
+                failure = error.localizedDescription
+            }
+            DispatchQueue.main.async {
+                progress.dismiss(animated: true) {
+                    if let failure {
+                        let alert = UIAlertController(title: "Could not sign the new packages", message: failure, preferredStyle: .alert)
+                        alert.addAction(UIAlertAction(title: "OK", style: .default))
+                        top.present(alert, animated: true)
+                        return
+                    }
+                    reopen()
+                }
+            }
+        }
     }
     
     func forkCloseWindowAction() {
