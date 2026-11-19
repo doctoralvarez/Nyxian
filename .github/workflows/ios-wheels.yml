@@ -1,5 +1,8 @@
-# Fork doctoralvarez/Nyxian — version 1.4.0
+# Fork doctoralvarez/Nyxian — version 1.5.0
 # Changelog:
+#  - 1.5.0 (2026-11-18): a pure-Python package that only has a source package
+#    gets its universal wheel published (pip cannot build it on iOS); your
+#    Mac counts as available while it is busy with another build.
 #  - 1.4.0 (2026-11-18): your own Mac first (the self-hosted runner, when the
 #    variable NYXIAN_RUNNER is "self-hosted" and RUNNER_STATUS_TOKEN sees it
 #    online), else GitHub's Mac; Homebrew's Python 3.14 when setup-python
@@ -35,6 +38,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: ios-wheels
@@ -52,6 +56,7 @@ jobs:
         env:
           WANT: ${{ vars.NYXIAN_RUNNER }}
           STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           choice='"macos-15"'
@@ -67,6 +72,15 @@ jobs:
                 if [ "$online" = "error" ] || [ "$online" -gt 0 ]; then break; fi
                 sleep 10
               done
+              # busy with another build (the runners list can show it as offline then): still yours
+              if [ "$online" != "error" ] && [ "$online" -eq 0 ]; then
+                busy=0
+                for id in $(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/$REPO/actions/runs?status=in_progress&per_page=20" | jq -r '.workflow_runs[].id' 2>/dev/null); do
+                  n=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/$REPO/actions/runs/$id/jobs" | jq '[.jobs[] | select(.status == "in_progress") | select(.labels | index("self-hosted"))] | length' 2>/dev/null || echo 0)
+                  busy=$((busy + n))
+                done
+                if [ "$busy" -gt 0 ]; then echo "Your Mac is busy with another build: this one waits for it"; online=1; fi
+              fi
               if [ "$online" = "error" ] || [ "$online" -gt 0 ]; then
                 choice='["self-hosted","macOS","ARM64"]'
               else
@@ -154,6 +168,18 @@ jobs:
               # scipy also needs a Fortran compiler for iOS, which the runners do not have
               scipy) export CIBW_CONFIG_SETTINGS_IOS="setup-args=-Dblas=accelerate setup-args=-Dlapack=accelerate" ;;
             esac
+            # pure Python with only a source package (pip cannot build it on iOS: no processes):
+            # the universal wheel is what Nyxian needs
+            rm -rf purecheck && mkdir -p purecheck
+            if python -m pip wheel --quiet --no-deps --no-build-isolation -w purecheck "$project" 2>/dev/null \
+               || python -m pip wheel --quiet --no-deps -w purecheck "$project"; then
+              pure=$(ls purecheck/*-none-any.whl 2>/dev/null | head -1)
+              if [ -n "$pure" ]; then
+                cp "$pure" wheelhouse/
+                echo "$spec: pure Python, universal wheel $(basename "$pure")" | tee -a summary.txt
+                echo "::endgroup::"; continue
+              fi
+            fi
             if cibuildwheel --output-dir wheelhouse "$project"; then
               echo "$spec: built $(ls -t wheelhouse | head -1)" | tee -a summary.txt
             else
