@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.17.0
+ Fork doctoralvarez/Nyxian — version 1.17.1
  Changelog:
+  - 1.17.1 (2026-11-20): "All" / "None" did not show in the files list (in
+    folders and subfolders): nine buttons did not fit the bar (the iPad
+    sidebar, the iPhone), so the last one was left out. Duplicate, Compress
+    and Share now share a "⋯" button; Delete, Copy, Cut, Paste, ⋯ and All
+    fit.
   - 1.17.0 (2026-11-20): selection toolbar (also after the two-finger
     slide): "All" selects everything and becomes "None" (deselects
     everything); a Paste button pastes what was copied or cut here.
@@ -286,7 +291,15 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             self.updateSelectAllButton()
             let spacer = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
             
-            setToolbarItems([deleteButton, spacer, copyButton, spacer, cutButton, spacer, pasteButton, spacer, duplicateButton, spacer, zipButton, spacer, shareButton, spacer, selectAllButton], animated: true)
+            /* fork 1.17.1: these three in one "⋯" button, so every button fits the bar */
+            let moreButton = UIBarButtonItem(image: UIImage(systemName: "ellipsis.circle"), menu: UIMenu(children: [
+                UIAction(title: "Duplicate", image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in self?.forkDuplicateSelected() },
+                UIAction(title: "Compress", image: UIImage(systemName: "archivebox")) { [weak self] _ in self?.forkCompressSelected() },
+                UIAction(title: "Share / Export", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in self?.shareSelected() }
+            ]))
+            moreButton.accessibilityLabel = "More"
+            _ = (duplicateButton, zipButton, shareButton)
+            setToolbarItems([deleteButton, spacer, copyButton, spacer, cutButton, spacer, pasteButton, spacer, moreButton, spacer, selectAllButton], animated: true)
             navigationController?.setToolbarHidden(false, animated: true)
             tabBarController?.tabBar.isHidden = true
             

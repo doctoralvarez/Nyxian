@@ -4,6 +4,12 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.95.1 — 2026-11-20
+
+- Files list (folders and subfolders): "All" / "None" now shows. Nine
+  buttons did not fit the bar, so the last one was left out; Duplicate,
+  Compress and Share are now in a "⋯" button.
+
 ## 1.95.0 — 2026-11-20
 
 - Selection mode in lists (two-finger slide or Select): the toolbar's
