@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.48.0
+ Fork doctoralvarez/Nyxian — version 1.48.1
  Changelog:
+  - 1.48.1 (2026-11-19): Nyxian Shell's help no longer says R needs pip
+    install nyxian-r (it comes with Nyxian).
   - 1.48.0 (2026-11-19): an R section in the Python panel, between Python
     and Terminal: R Console, R Packages (yours and R's, search, details,
     help index, remove with a warning about the packages that use it,
@@ -5876,7 +5878,7 @@ def b_help(args, inp, out, err):
         "  jobs     jobs · fg [%%n] · bg [%%n] · kill [-9|-STOP|-CONT] PID|%%n · ^Z stops the program in front\n"
         "  programs python3 FILE.py · pip install NAME · your command line tools (by path or PATH)\n"
         "  ios      iosbuild python|c|fortran NAME… [--rebuild]: builds a wheel or library for iOS on your Mac\n"
-        "  R        R (console) · Rscript FILE.R [ARGS] · Rscript -e 'CODE'   (after pip install nyxian-r)\n"
+        "  R        R (console) · Rscript FILE.R [ARGS] · Rscript -e 'CODE'   (comes with Nyxian)\n"
         "  node     node [FILE.js] · npm install/run/ls … · npx NAME · commands in node_modules/.bin\n"
         "  java     java FILE.java / java -jar APP.jar / java -cp DIR CLASS · javac -d DIR FILES · jar cf/tf/xf/uf (miniJVM: Java 8 subset)\n"
         "  scripts  sh FILE.sh / source FILE: its lines run in Nyxian Shell · ./tool with #! runs with its interpreter\n"
@@ -6213,7 +6215,7 @@ def run_pipeline(pipeline, background, text):
         if name == "pip":
             stages.append(("program", command, [sys.executable, "-m", "nyxian_pip"] + argv[1:]))
         elif name in ("R", "Rscript"):
-            # R for iOS (pip install nyxian-r): its console, or a script like Rscript
+            # R for iOS (bundled nyxian-r): its console, or a script like Rscript
             stages.append(("program", command, [sys.executable, "-m", "nyxian_r"] + argv[1:]))
         elif name in BUILTINS:
             stages.append(("builtin", command, None))

@@ -4,6 +4,20 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.91.1 — 2026-11-19
+
+- R from Nyxian Shell no longer stops with "Fatal error: cannot create
+  'R_TempDir'": R gets a temporary folder that exists and can be written.
+- R Console no longer shows the old utils/stats warnings: 1.91.0 bundled an
+  old nyxian_r (the Python runtime was cached since 1.88.0); the runtime now
+  carries nyxian_r's code and Rprofile.site from this repository and is
+  rebuilt whenever they change.
+- R packages for iOS: C libraries built for iOS (libpng, libjpeg, libtiff,
+  libwebp, freetype, harfbuzz, fribidi, plus openssl and curl) for png,
+  jpeg, curl, openssl, s2, systemfonts, textshaping, ragg and gdtools
+  (survminer needs png/jpeg/curl through gridtext; flextable needs gdtools).
+  V8 stays out: its JavaScript engine needs JIT.
+
 ## 1.91.0 — 2026-11-19
 
 - Python panel: an **R** section between Python and Terminal — R Console,

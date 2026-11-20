@@ -242,13 +242,13 @@ jobs:
           path: Frameworks/CoreCompiler/CoreCompilerSupportLibs
           key: ${{ steps.llvm-key.outputs.key }}
 
-      # fork: CPython for iOS, packed as Shared/python-ios.zip (cached per version)
+      # fork: CPython for iOS, packed as Shared/python-ios.zip (cached per version; nyxian_r's code and Rprofile.site count too)
       - name: Restore Python runtime cache
         id: python-cache
         uses: actions/cache/restore@v4
         with:
           path: Shared/python-ios.zip
-          key: python-ios-3.14-b14-${{ hashFiles('tools/fork/build_python_runtime.sh', 'tools/fork/python_launcher.c') }}
+          key: python-ios-3.14-b14-${{ hashFiles('tools/fork/build_python_runtime.sh', 'tools/fork/python_launcher.c', 'tools/fork/ios-r/nyxian_r/*.py', 'tools/fork/ios-r/Rprofile.site') }}
 
       - name: Restore Python runtime from the backup (cache miss)
         id: python-backup
@@ -257,7 +257,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
         run: |
-          name="python-ios-3.14-b14-${{ hashFiles('tools/fork/build_python_runtime.sh', 'tools/fork/python_launcher.c') }}.zip"
+          name="python-ios-3.14-b14-${{ hashFiles('tools/fork/build_python_runtime.sh', 'tools/fork/python_launcher.c', 'tools/fork/ios-r/nyxian_r/*.py', 'tools/fork/ios-r/Rprofile.site') }}.zip"
           ./tools/fork/backup_asset.sh restore python-runtime "$name"
           mv "$name" Shared/python-ios.zip
 
@@ -274,14 +274,14 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: Shared/python-ios.zip
-          key: python-ios-3.14-b14-${{ hashFiles('tools/fork/build_python_runtime.sh', 'tools/fork/python_launcher.c') }}
+          key: python-ios-3.14-b14-${{ hashFiles('tools/fork/build_python_runtime.sh', 'tools/fork/python_launcher.c', 'tools/fork/ios-r/nyxian_r/*.py', 'tools/fork/ios-r/Rprofile.site') }}
 
       - name: Back up the Python runtime (once per version)
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
         run: |
-          ./tools/fork/backup_asset.sh save python-runtime "python-ios-3.14-b14-${{ hashFiles('tools/fork/build_python_runtime.sh', 'tools/fork/python_launcher.c') }}.zip" Shared/python-ios.zip || true
+          ./tools/fork/backup_asset.sh save python-runtime "python-ios-3.14-b14-${{ hashFiles('tools/fork/build_python_runtime.sh', 'tools/fork/python_launcher.c', 'tools/fork/ios-r/nyxian_r/*.py', 'tools/fork/ios-r/Rprofile.site') }}.zip" Shared/python-ios.zip || true
 
       # fork: Node.js for iOS (nodejs-mobile, no JIT), npm and the node launcher: Shared/node-ios.zip
       - name: Restore Node.js runtime cache

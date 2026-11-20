@@ -1,6 +1,11 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.6.0
+# Fork doctoralvarez/Nyxian — version 1.7.0
 # Changelog:
+#  - 1.7.0 (2026-11-19): nyxian_r's Python code and Rprofile.site come from
+#    this repository (over the nyxian-r wheel), and the app build's runtime
+#    cache follows them: 1.91.0 shipped an old nyxian_r (the runtime cached
+#    at 1.88.0) and, now that the bundled one wins, R showed the old
+#    utils/stats warnings again.
 #  - 1.6.0 (2026-11-19): R for iOS comes bundled (nyxian-r, ~55 MB, with
 #    rpy2 and cffi), and the iOS builds made for the fork: slycot + control
 #    (Fortran), tesserocr (Tesseract OCR).
@@ -133,6 +138,12 @@ for data in "$SITE"/*.data; do
   rm -rf "$data"
 done
 for info in "$SITE"/*.dist-info; do echo "pip" > "$info/INSTALLER"; done
+# nyxian_r: its Python code and Rprofile.site as they are in this repository (R itself from the wheel)
+if [ -d "$SITE/nyxian_r" ]; then
+  cp -f "$ROOT"/tools/fork/ios-r/nyxian_r/*.py "$SITE/nyxian_r/"
+  cp -f "$ROOT/tools/fork/ios-r/Rprofile.site" "$SITE/nyxian_r/R/etc/Rprofile.site"
+  grep -m1 "version" "$SITE/nyxian_r/__init__.py"
+fi
 # Nyxian's own list of what came bundled (re-added to a kept site-packages once)
 ls "$SITE" > "$HOME_DIR/BUNDLED_PACKAGES"
 du -sh "$SITE"

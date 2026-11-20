@@ -1,6 +1,10 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.3.0
+# Fork doctoralvarez/Nyxian — version 1.4.0
 # Changelog:
+#  - 1.4.0 (2026-11-19): recipes for R's image and font packages: libpng,
+#    libjpeg (libjpeg-turbo), libtiff, libwebp, freetype, harfbuzz and
+#    fribidi (the last two with Meson; recipe_meson_args gives each its
+#    options).
 #  - 1.3.0 (2026-11-19): recipes for R's libraries: xz (liblzma), pcre2
 #    (without JIT: iOS allows no code written at run time), openssl (its own
 #    Configure, target ios64-xcrun) and curl (https through OpenSSL).
@@ -70,6 +74,13 @@ recipe_version() {
     pcre2) echo 10.49 ;;
     openssl) echo 3.6.5 ;;
     curl) echo 8.23.0 ;;
+    libpng) echo 1.6.50 ;;
+    libjpeg) echo 3.1.1 ;;
+    libtiff) echo 4.7.0 ;;
+    libwebp) echo 1.5.0 ;;
+    freetype) echo 2.13.3 ;;
+    harfbuzz) echo 11.2.1 ;;
+    fribidi) echo 1.0.16 ;;
     *) echo "" ;;
   esac
 }
@@ -83,12 +94,21 @@ recipe_url() {  # name version
     pcre2) echo "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-$2/pcre2-$2.tar.gz" ;;
     openssl) echo "https://github.com/openssl/openssl/releases/download/openssl-$2/openssl-$2.tar.gz" ;;
     curl) echo "https://github.com/curl/curl/releases/download/curl-${2//./_}/curl-$2.tar.gz" ;;
+    libpng) echo "https://github.com/pnggroup/libpng/archive/refs/tags/v$2.tar.gz" ;;
+    libjpeg) echo "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/$2/libjpeg-turbo-$2.tar.gz" ;;
+    libtiff) echo "https://download.osgeo.org/libtiff/tiff-$2.tar.gz" ;;
+    libwebp) echo "https://github.com/webmproject/libwebp/archive/refs/tags/v$2.tar.gz" ;;
+    freetype) echo "https://github.com/freetype/freetype/archive/refs/tags/VER-${2//./-}.tar.gz" ;;
+    harfbuzz) echo "https://github.com/harfbuzz/harfbuzz/releases/download/$2/harfbuzz-$2.tar.xz" ;;
+    fribidi) echo "https://github.com/fribidi/fribidi/releases/download/v$2/fribidi-$2.tar.xz" ;;
   esac
 }
 recipe_deps() {
   case "$1" in
     tesseract) echo leptonica ;;
     curl) echo openssl ;;
+    libtiff) echo libjpeg ;;
+    harfbuzz) echo freetype ;;
     *) echo "" ;;
   esac
 }
@@ -100,9 +120,22 @@ recipe_cmake_args() {
     xz) echo "-DBUILD_TESTING=OFF -DXZ_TOOL_XZ=OFF -DXZ_TOOL_XZDEC=OFF -DXZ_TOOL_LZMADEC=OFF -DXZ_TOOL_LZMAINFO=OFF -DXZ_TOOL_SCRIPTS=OFF -DXZ_TOOL_SYMLINKS=OFF -DXZ_TOOL_SYMLINKS_LZMA=OFF -DXZ_DOC=OFF -DXZ_NLS=OFF" ;;
     pcre2) echo "-DPCRE2_SUPPORT_JIT=OFF -DPCRE2_BUILD_PCRE2GREP=OFF -DPCRE2_BUILD_TESTS=OFF -DPCRE2_BUILD_PCRE2_8=ON -DPCRE2_SUPPORT_UNICODE=ON" ;;
     curl) echo "-DCURL_USE_OPENSSL=ON -DOPENSSL_ROOT_DIR=$ROOT/openssl -DOPENSSL_USE_STATIC_LIBS=ON -DBUILD_CURL_EXE=OFF -DBUILD_TESTING=OFF -DCURL_USE_LIBPSL=OFF -DUSE_LIBIDN2=OFF -DCURL_ZSTD=OFF -DCURL_BROTLI=OFF -DUSE_NGHTTP2=OFF -DCURL_USE_LIBSSH2=OFF -DCURL_DISABLE_LDAP=ON -DBUILD_LIBCURL_DOCS=OFF -DBUILD_MISC_DOCS=OFF -DENABLE_CURL_MANUAL=OFF -DCURL_CA_FALLBACK=OFF" ;;
+    libpng) echo "-DPNG_SHARED=OFF -DPNG_STATIC=ON -DPNG_TESTS=OFF -DPNG_TOOLS=OFF -DPNG_FRAMEWORK=OFF" ;;
+    libjpeg) echo "-DENABLE_SHARED=FALSE -DENABLE_STATIC=TRUE -DWITH_TURBOJPEG=FALSE -DWITH_SIMD=FALSE" ;;
+    libtiff) echo "-Dtiff-tools=OFF -Dtiff-tests=OFF -Dtiff-contrib=OFF -Dtiff-docs=OFF -Dcxx=OFF -Djpeg=ON -Dzlib=ON -Dzstd=OFF -Dlzma=OFF -Dwebp=OFF -Djbig=OFF -Dlerc=OFF -Dlibdeflate=OFF" ;;
+    libwebp) echo "-DWEBP_BUILD_ANIM_UTILS=OFF -DWEBP_BUILD_CWEBP=OFF -DWEBP_BUILD_DWEBP=OFF -DWEBP_BUILD_GIF2WEBP=OFF -DWEBP_BUILD_IMG2WEBP=OFF -DWEBP_BUILD_VWEBP=OFF -DWEBP_BUILD_WEBPINFO=OFF -DWEBP_BUILD_WEBPMUX=OFF -DWEBP_BUILD_EXTRAS=OFF -DWEBP_BUILD_LIBWEBPMUX=ON" ;;
+    freetype) echo "-DFT_DISABLE_BZIP2=ON -DFT_DISABLE_PNG=ON -DFT_DISABLE_HARFBUZZ=ON -DFT_DISABLE_BROTLI=ON" ;;
     lapack) echo "-DCBLAS=ON -DLAPACKE=ON -DBUILD_TESTING=OFF -DBUILD_INDEX64=OFF -DUSE_OPTIMIZED_BLAS=OFF" ;;
     tesseract) echo "-DBUILD_TRAINING_TOOLS=OFF -DBUILD_TESTS=OFF -DGRAPHICS_DISABLED=ON -DOPENMP_BUILD=OFF -DENABLE_LTO=OFF -DENABLE_NATIVE=OFF -DDISABLE_TIFF=ON -DDISABLE_ARCHIVE=ON -DDISABLE_CURL=ON -DENABLE_CCACHE=OFF -DENABLE_PRECOMPILED_HEADERS=OFF -DINSTALL_CONFIGS=ON -DLEPT_TIFF_RESULT=1 -DLEPT_TIFF_RESULT__TRYRUN_OUTPUT= -DLeptonica_DIR=$ROOT/leptonica/lib/cmake/leptonica" ;;
     *) echo "" ;;
+  esac
+}
+# libraries built with Meson (even when they also have a CMake build), and their options
+recipe_meson_args() {
+  case "$1" in
+    harfbuzz) echo "-Dglib=disabled -Dgobject=disabled -Dcairo=disabled -Dicu=disabled -Dgraphite2=disabled -Dfreetype=enabled -Dcoretext=disabled -Dtests=disabled -Ddocs=disabled -Dutilities=disabled -Dintrospection=disabled -Dbenchmark=disabled" ;;
+    fribidi) echo "-Ddocs=false -Dbin=false -Dtests=false" ;;
+    *) return 1 ;;
   esac
 }
 # Python package -> native libraries it links
@@ -432,8 +465,8 @@ build_autotools() {  # src prefix
     make install )
 }
 
-build_meson() {  # src prefix
-  local src="$1" prefix="$2" cross="$WORK/ios-cross.ini"
+build_meson() {  # src prefix [options]
+  local src="$1" prefix="$2" opts="${3:-}" cross="$WORK/ios-cross.ini"
   cat > "$cross" <<EOF
 [binaries]
 c = ['$CC_BIN', '-arch', 'arm64', '-isysroot', '$SDK', '-mios-version-min=$MIN_IOS']
@@ -442,6 +475,9 @@ $( has_fortran "$src" && fortran_wrapper && echo "fortran = ['$FC_WRAP']" )
 ar = '$(xcrun --sdk iphoneos -f ar)'
 strip = '$(xcrun --sdk iphoneos -f strip)'
 pkg-config = 'pkg-config'
+[properties]
+# in a cross build Meson reads the iOS libraries' .pc files from here (not PKG_CONFIG_LIBDIR)
+pkg_config_libdir = [$(pc_paths | tr ':' '\n' | sed "s/.*/'&'/" | paste -sd, -)]
 [host_machine]
 system = 'ios'
 subsystem = 'ios'
@@ -450,10 +486,12 @@ cpu_family = 'aarch64'
 cpu = 'arm64'
 endian = 'little'
 EOF
-  python -m pip install --quiet meson
+  command -v meson >/dev/null || brew install meson
+  rm -rf "$WORK/build-meson-$(basename "$prefix")"
   PKG_CONFIG_LIBDIR="$(pc_paths)" PKG_CONFIG_PATH="" \
+  # shellcheck disable=SC2086
   meson setup "$WORK/build-meson-$(basename "$prefix")" "$src" --cross-file "$cross" \
-    --prefix "$prefix" --libdir lib --default-library static --buildtype release
+    --prefix "$prefix" --libdir lib --default-library static --buildtype release $opts
   meson install -C "$WORK/build-meson-$(basename "$prefix")"
 }
 
@@ -524,6 +562,8 @@ ensure_one() {
       log "$name: could not download $url"; return 1
     elif [ "$name" = openssl ]; then
       build_openssl "$src" "$prefix"
+    elif recipe_meson_args "$name" >/dev/null; then
+      build_meson "$src" "$prefix" "$(recipe_meson_args "$name")"
     elif [ -f "$src/CMakeLists.txt" ]; then
       build_cmake "$src" "$prefix" "$(recipe_cmake_args "$name")"
     elif [ -f "$src/meson.build" ]; then

@@ -1,5 +1,9 @@
-# Fork doctoralvarez/Nyxian — version 0.2.4
+# Fork doctoralvarez/Nyxian — version 0.2.5
 # Changelog:
+#  - 0.2.5 (2026-11-19): R gets a temporary folder it can write (TMPDIR, TMP and
+#    TEMP set to one that exists): from Nyxian Shell R stopped with "Fatal
+#    error: cannot create 'R_TempDir'" (the shell's TMPDIR did not exist and
+#    R's fallback, /tmp, is not writable on iOS).
 #  - 0.2.4 (2026-11-19): ships Rprofile.site 0.2.0 (help pages as HTML in
 #    Nyxian's preview).
 #  - 0.2.3 (2026-11-19): the bridge functions return TRUE, not rpy2's NULL
@@ -220,11 +224,33 @@ def _set_c_shell():
     hook.value = ctypes.cast(callback, ctypes.c_void_p).value
 
 
+def _temp_folder():
+    """A temporary folder R can write (it stops at start without one: R_TempDir)."""
+    home = os.path.expanduser("~")
+    for folder in (os.environ.get("TMPDIR"), os.environ.get("TMP"), os.environ.get("TEMP"),
+                   os.path.join(home, "Tmp"), os.path.join(home, "tmp"), tempfile.gettempdir(),
+                   os.path.join(os.path.dirname(LIBRARY), "nyxian_r_tmp")):
+        if not folder:
+            continue
+        try:
+            os.makedirs(folder, exist_ok=True)
+            os.rmdir(tempfile.mkdtemp(prefix="Rcheck", dir=folder))
+            return folder
+        except OSError:
+            continue
+    return None
+
+
 def start():
     """Opens R (once per process) with the bridge in place."""
     global _started
     if _started:
         return
+    temp = _temp_folder()
+    if temp:
+        for name in ("TMPDIR", "TMP", "TEMP"):
+            os.environ[name] = temp
+        tempfile.tempdir = temp
     os.environ["R_HOME"] = HOME
     os.environ.setdefault("RPY2_CFFI_MODE", "ABI")
     os.environ.setdefault("R_LIBS_USER", LIBRARY)

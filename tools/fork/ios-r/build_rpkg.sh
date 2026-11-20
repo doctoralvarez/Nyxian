@@ -1,6 +1,13 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 0.3.0
+# Fork doctoralvarez/Nyxian — version 0.4.0
 # Changelog:
+#  - 0.4.0 (2026-11-19): packages that link C libraries find them built for
+#    iOS (native.sh: openssl, curl, libpng, libjpeg, libtiff, libwebp,
+#    freetype, harfbuzz, fribidi) through pkg-config, before their configure
+#    falls back to Homebrew's Mac libraries (openssl, curl, s2, systemfonts,
+#    textshaping, ragg, gdtools); png gets a libpng-config for iOS and jpeg
+#    JPEG_CFLAGS/JPEG_LIBS. V8 is said to be left out: its JavaScript engine
+#    needs JIT, which iOS does not allow.
 #  - 0.3.0 (2026-11-19): the Mac builds link CoreFoundation (R for the Mac
 #    was built without it, and timechange/s2 need it: "_CFRelease not
 #    found"), the iOS builds too; a package that cannot install for the Mac
@@ -63,6 +70,14 @@ brew list gcc >/dev/null 2>&1 || brew install gcc
 # ---------- the iOS toolchain as a Makevars file ----------
 IOS_NATIVE_FORTRAN=1 bash "$NATIVE" ensure flang-rt >/dev/null
 FC_WRAP=$(bash "$NATIVE" fc)
+# C libraries some packages link, built for iOS (from the ios-native release, or built now)
+R_NATIVE="openssl curl libpng libjpeg libtiff libwebp freetype harfbuzz fribidi"
+for l in $R_NATIVE; do
+  bash "$NATIVE" ensure "$l" >/dev/null || log "$l: did not build for iOS (packages that need it will fail)"
+done
+PCDIRS=""
+for l in $R_NATIVE; do [ -d "$ROOT/$l/lib/pkgconfig" ] && PCDIRS="${PCDIRS:+$PCDIRS:}$ROOT/$l/lib/pkgconfig"; done
+log "C libraries for iOS: $(ls "$ROOT" | tr '\n' ' ')"
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 CC_BIN=$(xcrun --sdk iphoneos -f clang)
 CXX_BIN=$(xcrun --sdk iphoneos -f clang++)
@@ -107,6 +122,8 @@ BLAS_LIBS = -L$IOS_RH/lib -lRblas
 LAPACK_LIBS = -L$IOS_RH/lib -lRlapack
 FLIBS = $RT -lc++
 LIBINTL =
+JPEG_CFLAGS = -I$ROOT/libjpeg/include
+JPEG_LIBS = -L$ROOT/libjpeg/lib
 EOF
 
 # ---------- dependencies, for the Mac ----------
@@ -155,7 +172,17 @@ published() { gh release view "$RELEASE" -R "$REPO" --json assets -q '.assets[].
 gh release view "$RELEASE" -R "$REPO" >/dev/null 2>&1 || gh release create "$RELEASE" -R "$REPO" --prerelease \
   --title "R packages for iOS" --notes "CRAN packages built for R for iOS (Nyxian): <name>-ios-arm64.tar.gz, unpacked into R's library by install.packages() in Nyxian." >/dev/null
 # what a package's own configure needs to build for iOS
-mkdir -p "$T/pkgconfig-none"
+mkdir -p "$T/pkgconfig-none" "$T/bin"
+# png's Makevars asks libpng-config (Homebrew's is the Mac one): this one answers for iOS
+cat > "$T/bin/libpng-config" <<EOF
+#!/bin/sh
+export PKG_CONFIG_LIBDIR="$PCDIRS" PKG_CONFIG_PATH=""
+case "\$*" in
+  *--cflags*|*--I_opts*) exec pkg-config --cflags libpng ;;
+  *) exec pkg-config --static --libs libpng ;;
+esac
+EOF
+chmod +x "$T/bin/libpng-config"
 # autoconf scripts read this: no iOS test program can run here
 cat > "$T/config.site" <<EOF
 cross_compiling=yes
@@ -184,7 +211,7 @@ ios_install() {  # pkg tarball
     # its configure downloads Homebrew's Mac libuv (autobrew); the bundled one builds for iOS
     fs) envs+=("USE_BUNDLED_LIBUV=1") ;;
   esac
-  env ${envs[@]+"${envs[@]}"} PKG_CONFIG_LIBDIR="$T/pkgconfig-none" PKG_CONFIG_PATH="" \
+  env ${envs[@]+"${envs[@]}"} PATH="$T/bin:$PATH" PKG_CONFIG_LIBDIR="${PCDIRS:-$T/pkgconfig-none}" PKG_CONFIG_PATH="" \
     CONFIG_SITE="$T/config.site" CMAKE_TOOLCHAIN_FILE="$T/ios-toolchain.cmake" SDKROOT="$SDK" \
     R_LIBS="$HOSTLIB" R_LIBS_USER="$HOSTLIB" R_MAKEVARS_USER="$MV" R_MAKEVARS_SITE=/dev/null \
     "$HOST/bin/R" CMD INSTALL --libs-only --no-test-load --library="$IOSLIB" \
@@ -199,6 +226,10 @@ while read -r pkg; do
     gh release download "$RELEASE" -R "$REPO" -p "$pkg-ios-arm64.tar.gz" -D "$T" --clobber && tar -xzf "$T/$pkg-ios-arm64.tar.gz" -C "$IOSLIB"
     log "$pkg: already built for iOS"
     continue
+  fi
+  if [ "$pkg" = V8 ]; then
+    log "V8: left out (Google's V8 JavaScript engine needs JIT, which iOS does not allow)"
+    failed="$failed $pkg"; continue
   fi
   tarball=$(ls "$SRC"/"${pkg}"_*.tar.gz | head -1)
   log "$pkg: building for iOS"
