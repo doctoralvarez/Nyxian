@@ -1,6 +1,11 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 1.4.0
+# Fork doctoralvarez/Nyxian — version 1.4.1
 # Changelog:
+#  - 1.4.1 (2026-11-19): a zlib.pc for the iOS SDK's zlib (sdk-zlib/): the
+#    .pc files of freetype and curl require "zlib", and without one
+#    pkg-config found neither (R packages fell back to Homebrew's Mac
+#    libraries; harfbuzz built its own freetype); Meson builds no fallback
+#    subprojects; libpng's libpng.pc symlink is left alone by flatten_pc.
 #  - 1.4.0 (2026-11-19): recipes for R's image and font packages: libpng,
 #    libjpeg (libjpeg-turbo), libtiff, libwebp, freetype, harfbuzz and
 #    fribidi (the last two with Meson; recipe_meson_args gives each its
@@ -60,6 +65,9 @@ RELEASE=ios-native
 REPO="${GITHUB_REPOSITORY:-doctoralvarez/Nyxian}"
 MIN_IOS=13.0
 mkdir -p "$ROOT" "$WORK" "$DIST"
+# zlib comes with the iOS SDK (no .pc file there): this one lets pkg-config resolve "Requires: zlib"
+mkdir -p "$ROOT/sdk-zlib/lib/pkgconfig"
+printf 'Name: zlib\nDescription: zlib from the iOS SDK\nVersion: 1.2.12\nLibs: -lz\nCflags:\n' > "$ROOT/sdk-zlib/lib/pkgconfig/zlib.pc"
 
 log() { echo "[native] $*" >&2; }
 
@@ -491,7 +499,7 @@ EOF
   PKG_CONFIG_LIBDIR="$(pc_paths)" PKG_CONFIG_PATH="" \
   # shellcheck disable=SC2086
   meson setup "$WORK/build-meson-$(basename "$prefix")" "$src" --cross-file "$cross" \
-    --prefix "$prefix" --libdir lib --default-library static --buildtype release $opts
+    --prefix "$prefix" --libdir lib --default-library static --buildtype release --wrap-mode=nofallback $opts
   meson install -C "$WORK/build-meson-$(basename "$prefix")"
 }
 
@@ -502,7 +510,7 @@ EOF
 flatten_pc() {
   local prefix="$1" f priv req keep extra m
   for f in "$prefix"/lib/pkgconfig/*.pc; do
-    [ -f "$f" ] || continue
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
     priv=$(sed -n 's/^Libs\.private:[[:space:]]*//p' "$f" | head -1)
     req=$(sed -n 's/^Requires\.private:[[:space:]]*//p' "$f" | head -1 | tr ',' ' ')
     keep="" extra=""

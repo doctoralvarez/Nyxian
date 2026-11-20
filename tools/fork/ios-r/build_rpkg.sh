@@ -1,6 +1,10 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 0.4.0
+# Fork doctoralvarez/Nyxian — version 0.4.1
 # Changelog:
+#  - 0.4.1 (2026-11-19): pkg-config also sees native.sh's zlib.pc (the iOS
+#    SDK's zlib), which freetype2 and libcurl require; it says which
+#    libraries it finds before the packages build; harfbuzz is built again
+#    if it carries its own freetype.
 #  - 0.4.0 (2026-11-19): packages that link C libraries find them built for
 #    iOS (native.sh: openssl, curl, libpng, libjpeg, libtiff, libwebp,
 #    freetype, harfbuzz, fribidi) through pkg-config, before their configure
@@ -75,9 +79,16 @@ R_NATIVE="openssl curl libpng libjpeg libtiff libwebp freetype harfbuzz fribidi"
 for l in $R_NATIVE; do
   bash "$NATIVE" ensure "$l" >/dev/null || log "$l: did not build for iOS (packages that need it will fail)"
 done
+# harfbuzz built before native.sh 1.4.1 carried its own freetype (pkg-config did not find ours): again
+if [ -f "$ROOT/harfbuzz/lib/libfreetype.a" ]; then
+  IOS_NATIVE_REBUILD=1 bash "$NATIVE" ensure harfbuzz >/dev/null || log "harfbuzz: did not build for iOS"
+fi
 PCDIRS=""
-for l in $R_NATIVE; do [ -d "$ROOT/$l/lib/pkgconfig" ] && PCDIRS="${PCDIRS:+$PCDIRS:}$ROOT/$l/lib/pkgconfig"; done
+for l in $R_NATIVE sdk-zlib; do [ -d "$ROOT/$l/lib/pkgconfig" ] && PCDIRS="${PCDIRS:+$PCDIRS:}$ROOT/$l/lib/pkgconfig"; done
 log "C libraries for iOS: $(ls "$ROOT" | tr '\n' ' ')"
+for m in openssl libcurl libpng libjpeg libtiff-4 libwebp freetype2 harfbuzz fribidi; do
+  log "pkg-config $m: $(PKG_CONFIG_LIBDIR="$PCDIRS" PKG_CONFIG_PATH="" pkg-config --static --libs "$m" 2>&1 | head -2 | tr '\n' ' ')"
+done
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 CC_BIN=$(xcrun --sdk iphoneos -f clang)
 CXX_BIN=$(xcrun --sdk iphoneos -f clang++)
