@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.89.3 — 2026-11-19
+
+- R starts quietly: no default packages at R's own start (it warned that
+  utils and stats were not found), attached right after by nyxian_r.
+- The nyxian-r wheel's version is R's plus nyxian_r's revision
+  (4.6.2.22…), so `pip install --upgrade nyxian-r` replaces an older copy
+  (one installed with pip is kept over the bundled one).
+
 ## 1.89.2 — 2026-11-19
 
 - R: install.packages() downloads verify HTTPS with certifi's certificates

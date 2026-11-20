@@ -259,7 +259,9 @@ log "R_HOME for iOS: $(du -sh "$RH" | cut -f1); compiled parts:"
 
 # ---------- 6. for Nyxian's pip: R as a wheel, and rpy2 (ABI mode: no compiling) ----------
 WH="$OUT/wheels"; rm -rf "$WH"; mkdir -p "$WH"
-python3 "$HERE/make_wheel.py" "$RH" "$HERE/nyxian_r" "$RVER" "$WH"
+# the wheel's version: R's + nyxian_r's own (4.6.2.N), so pip sees each new nyxian_r as newer
+NR_REV=$(sed -n 's/^# Fork doctoralvarez\/Nyxian — version 0\.\([0-9]*\)\.\([0-9]*\).*/\1\2/p' "$HERE/nyxian_r/__init__.py" | head -1)
+python3 "$HERE/make_wheel.py" "$RH" "$HERE/nyxian_r" "$RVER.${NR_REV:-0}" "$WH"
 ( cd "$T"
   python3 -m venv rpy2env
   # ABI mode needs no R at build time; with no R found its build skips asking R for flags

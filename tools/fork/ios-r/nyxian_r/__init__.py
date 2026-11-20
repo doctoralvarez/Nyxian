@@ -1,5 +1,8 @@
-# Fork doctoralvarez/Nyxian — version 0.2.1
+# Fork doctoralvarez/Nyxian — version 0.2.2
 # Changelog:
+#  - 0.2.2 (2026-11-19): R starts with no default packages (its own attempt
+#    printed "package 'utils' … was not found") and nyxian_r attaches them
+#    right after, quietly.
 #  - 0.2.1 (2026-11-19): downloads verify HTTPS with certifi's certificates
 #    (pip's own copy if certifi is not installed): Python on iOS has no
 #    system certificate store, so every download failed and install.packages
@@ -221,6 +224,9 @@ def start():
     os.environ["R_HOME"] = HOME
     os.environ.setdefault("RPY2_CFFI_MODE", "ABI")
     os.environ.setdefault("R_LIBS_USER", LIBRARY)
+    # R's own start would try utils/stats before Nyxian's bridge is in place (and warn): none
+    # at start, the usual ones attached by start() below
+    os.environ["R_DEFAULT_PACKAGES"] = "NULL"
     os.makedirs(os.environ["R_LIBS_USER"], exist_ok=True)
     ca = _ca_file()
     if ca:
@@ -281,7 +287,7 @@ def start():
              '{ r <- f(cmd, input); names(r) <- c("out", "err", "status"); r }, envir = globalenv()) })')
     # the default packages R attaches at start (utils, stats…): whatever startup missed, now,
     # with the real error shown if one still does not load
-    ri.evalr('for (p in getOption("defaultPackages")) if (!(paste0("package:", p) %in% search())) '
+    ri.evalr('for (p in c("datasets", "utils", "grDevices", "graphics", "stats", "methods")) if (!(paste0("package:", p) %in% search())) '
              'tryCatch(suppressPackageStartupMessages(library(p, character.only = TRUE)), '
              'error = function(e) message("could not load ", p, ": ", conditionMessage(e)))')
     _started = True
