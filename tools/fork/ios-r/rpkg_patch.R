@@ -1,5 +1,8 @@
-# Fork doctoralvarez/Nyxian — version 0.1.0
+# Fork doctoralvarez/Nyxian — version 0.1.1
 # Changelog:
+#  - 0.1.1 (2026-11-19): the patched package installs (and its install
+#    check loads) with the Mac library of its dependencies first: epiR's
+#    check found an older knitr of R's own library without "evaluate".
 #  - 0.1.0 (2026-11-19): CRAN packages built for iOS without a dependency
 #    that cannot exist there yet (epiR without sf: sf needs GDAL, GEOS and
 #    PROJ; epiR uses it only for maps). nyx_strip_db() takes it out of the
@@ -32,7 +35,7 @@ nyx_patch_dir <- function(dir, rm) {
     d[1, f] <- nyx_strip_field(d[1, f], rm)
   d <- cbind(d, NyxianRemoved = paste(rm, collapse = ", "))
   write.dcf(d, file.path(dir, "DESCRIPTION"), keep.white = colnames(d))
-  ns <- readLines(file.path(dir, "NAMESPACE"))
+  ns <- readLines(file.path(dir, "NAMESPACE"), warn = FALSE)
   pat <- paste0("^\\s*import(From)?\\(\\s*\"?(", paste(rm, collapse = "|"), ")\"?\\s*[,)]")
   writeLines(ns[!grepl(pat, ns)], file.path(dir, "NAMESPACE"))
   # where the package still calls it (those functions will stop with an error)
@@ -55,6 +58,9 @@ nyx_install_patched <- function(p, lib, work) {
   unlink(file.path(work, p), recursive = TRUE)
   untar(f, exdir = work)
   nyx_patch_dir(file.path(work, p), nyx_drop[[p]])
+  # its dependencies are in lib: there first (also for R CMD INSTALL's load check)
+  .libPaths(c(lib, .libPaths()))
+  Sys.setenv(R_LIBS = paste(unique(c(lib, .libPaths())), collapse = ":"), R_LIBS_USER = lib)
   install.packages(file.path(work, p), lib = lib, repos = NULL, type = "source", quiet = TRUE)
   f
 }
