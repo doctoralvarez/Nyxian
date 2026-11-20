@@ -1,5 +1,7 @@
-# Fork doctoralvarez/Nyxian — version 0.2.2
+# Fork doctoralvarez/Nyxian — version 0.2.3
 # Changelog:
+#  - 0.2.3 (2026-11-19): the bridge functions return TRUE, not rpy2's NULL
+#    (plots showed "ValueError: rternalized … NULLType" after opening).
 #  - 0.2.2 (2026-11-19): R starts with no default packages (its own attempt
 #    printed "package 'utils' … was not found") and nyxian_r attaches them
 #    right after, quietly.
@@ -263,18 +265,18 @@ def start():
 
     def r_open(url):
         _escape("nyxian-open", str(url[0]))
-        return ri.NULL
+        return ri.BoolSexpVector([True])  # (rternalize does not take rpy2's NULL back)
 
     def r_preview(path):
         _escape("nyxian-preview", str(path[0]))
-        return ri.NULL
+        return ri.BoolSexpVector([True])  # (rternalize does not take rpy2's NULL back)
 
     def r_install(packages, lib):
         return ri.BoolSexpVector([_install([str(p) for p in packages], str(lib[0]))])
 
     def r_quit(status):
         _quit[0] = int(status[0]) if len(status) else 0
-        return ri.NULL
+        return ri.BoolSexpVector([True])  # (rternalize does not take rpy2's NULL back)
 
     env = ri.globalenv
     for name, fn in ((".nyxian_shell", r_shell), (".nyxian_which", r_which), (".nyxian_open", r_open),

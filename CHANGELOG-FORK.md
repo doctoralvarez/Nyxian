@@ -6,6 +6,9 @@ Nyxian uses it to check compatibility with emexLabs OTA updates.
 
 ## 1.89.3 — 2026-11-19
 
+- R: plots open in the preview without the "ValueError: rternalized …"
+  message (the bridge's functions return TRUE instead of rpy2's NULL).
+
 - R starts quietly: no default packages at R's own start (it warned that
   utils and stats were not found), attached right after by nyxian_r.
 - The nyxian-r wheel's version is R's plus nyxian_r's revision
