@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.95.0 — 2026-11-20
+
+- Selection mode in lists (two-finger slide or Select): the toolbar's
+  "All" selects everything and turns into "None" (deselects everything).
+  Files list: a Paste button joins Delete, Copy, Cut, Duplicate, Compress
+  and Share. Projects list: Copy and Paste buttons join Delete, Duplicate,
+  Export and Show in Files (Paste makes copies with their own name and
+  bundle ID).
+
 ## 1.94.0 — 2026-11-20
 
 - App Preview (iPad) starts paused: opening a project or a Swift file

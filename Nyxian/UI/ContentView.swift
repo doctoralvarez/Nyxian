@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.48.1
+ Fork doctoralvarez/Nyxian — version 1.49.0
  Changelog:
+  - 1.49.0 (2026-11-20): projects list, selection mode (also after the
+    two-finger slide): Copy and Paste buttons (Paste makes copies of the
+    copied projects, with names and bundle IDs of their own), and "All"
+    selects every project and becomes "None" (deselects them).
   - 1.48.1 (2026-11-19): Nyxian Shell's help no longer says R needs pip
     install nyxian-r (it comes with Nyxian).
   - 1.48.0 (2026-11-19): an R section in the Python panel, between Python
@@ -784,6 +788,9 @@ import Network
     private var forkSelecting = false
     private var forkSavedLeftItems: [UIBarButtonItem]?
     private weak var forkSelectAllItem: UIBarButtonItem?
+    private weak var forkPasteItem: UIBarButtonItem?
+    /// fork: projects copied with Copy (their folders), pasted as copies with Paste
+    private static var forkCopiedProjects: [URL] = []
 
     private var forkSelectedProjects: [NXProject] {
         (tableView.indexPathsForSelectedRows ?? []).sorted().compactMap { forkProject(at: $0) }
@@ -825,10 +832,16 @@ import Network
             export.accessibilityLabel = "Export"
             let showInFiles = UIBarButtonItem(image: UIImage(systemName: "folder"), style: .plain, target: self, action: #selector(forkShowSelectedInFiles))
             showInFiles.accessibilityLabel = "Show in Files"
-            let selectAll = UIBarButtonItem(title: "Select All", style: .plain, target: self, action: #selector(forkToggleSelectAll))
+            /* fork: copy / paste projects */
+            let copy = UIBarButtonItem(image: UIImage(systemName: "doc.on.doc"), style: .plain, target: self, action: #selector(forkCopySelectedProjects))
+            copy.accessibilityLabel = "Copy"
+            let paste = UIBarButtonItem(image: UIImage(systemName: "doc.on.clipboard"), style: .plain, target: self, action: #selector(forkPasteProjects))
+            paste.accessibilityLabel = "Paste"
+            forkPasteItem = paste
+            let selectAll = UIBarButtonItem(title: "All", style: .plain, target: self, action: #selector(forkToggleSelectAll))
             forkSelectAllItem = selectAll
             let spacer = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
-            setToolbarItems([delete, spacer, duplicate, spacer, export, spacer, showInFiles, spacer, selectAll], animated: true)
+            setToolbarItems([delete, spacer, copy, spacer, paste, spacer, duplicate, spacer, export, spacer, showInFiles, spacer, selectAll], animated: true)
             navigationController?.setToolbarHidden(false, animated: true)
             tabBarController?.tabBar.isHidden = true
             refreshControl = nil
@@ -853,11 +866,15 @@ import Network
         }
         let count = tableView.indexPathsForSelectedRows?.count ?? 0
         let total = projectsList.values.reduce(0) { $0 + $1.count }
-        for item in toolbarItems ?? [] where item !== forkSelectAllItem {
+        for item in toolbarItems ?? [] where item !== forkSelectAllItem && item !== forkPasteItem {
             item.isEnabled = count > 0
         }
+        let fm = FileManager.default
+        forkPasteItem?.isEnabled = Self.forkCopiedProjects.contains { fm.fileExists(atPath: $0.path) }
         forkSelectAllItem?.isEnabled = total > 0
-        forkSelectAllItem?.title = (count == total && total > 0) ? "Deselect All" : "Select All"
+        let everything = count == total && total > 0
+        forkSelectAllItem?.title = everything ? "None" : "All"
+        forkSelectAllItem?.accessibilityLabel = everything ? "Deselect All" : "Select All"
         title = count == 0 ? "Select Projects" : "\(count) Selected"
     }
 
@@ -898,20 +915,48 @@ import Network
         }
     }
 
+    /* fork: Copy — remembered until Paste (also later, in another selection) */
+    @objc private func forkCopySelectedProjects() {
+        let projects = forkSelectedProjects
+        guard !projects.isEmpty else { return }
+        Self.forkCopiedProjects = projects.map { $0.url as URL }
+        /* still selecting: Paste is right there */
+        for indexPath in tableView.indexPathsForSelectedRows ?? [] { tableView.deselectRow(at: indexPath, animated: true) }
+        forkUpdateSelectionBar()
+        NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Copied \(projects.count) project\(projects.count == 1 ? "" : "s"): Paste makes copies of them", withDelay: 0.0)
+    }
+
+    /* fork: Paste — a copy of each copied project */
+    @objc private func forkPasteProjects() {
+        let fm = FileManager.default
+        let sources = Self.forkCopiedProjects.filter { fm.fileExists(atPath: $0.path) }
+        guard !sources.isEmpty else { return }
+        let made = forkMakeCopies(of: sources)
+        forkFinishSelecting()
+        NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Pasted \(made) project\(made == 1 ? "" : "s")", withDelay: 0.0)
+    }
+
     @objc private func forkDuplicateSelectedProjects() {
         let projects = forkSelectedProjects
         guard !projects.isEmpty else { return }
+        let made = forkMakeCopies(of: projects.map { $0.url as URL })
+        forkFinishSelecting()
+        NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Duplicated \(made) project\(made == 1 ? "" : "s")", withDelay: 0.0)
+    }
+
+    /// fork: copies of project folders, each with a name and bundle identifier of its own
+    private func forkMakeCopies(of sources: [URL]) -> Int {
         let fm = FileManager.default
         let folder = NXBootstrap.shared().rootURL.appendingPathComponent("Projects")
         var made = 0
-        for project in projects {
+        for source in sources {
             let destination = folder.appendingPathComponent(UUID().uuidString)
-            guard (try? fm.copyItem(at: project.url, to: destination)) != nil else { continue }
+            guard (try? fm.copyItem(at: source, to: destination)) != nil else { continue }
             /* a name and bundle identifier of its own, so both can be installed */
             let plistURL = destination.appendingPathComponent("Config/Project.plist")
             if let data = try? Data(contentsOf: plistURL),
                var plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] {
-                let name = (plist["NXDisplayName"] as? String) ?? project.projectConfig.displayName ?? "Project"
+                let name = (plist["NXDisplayName"] as? String) ?? "Project"
                 plist["NXDisplayName"] = name + " copy"
                 if let bundle = plist["NXBundleIdentifier"] as? String {
                     plist["NXBundleIdentifier"] = bundle + ".copy" + String(UUID().uuidString.prefix(4)).lowercased()
@@ -924,8 +969,7 @@ import Network
             try? fm.removeItem(at: destination.appendingPathComponent("Cache"))
             made += 1
         }
-        forkFinishSelecting()
-        NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Duplicated \(made) project\(made == 1 ? "" : "s")", withDelay: 0.0)
+        return made
     }
 
     private func forkExportSelectedProjects() {

@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.16.0
+ Fork doctoralvarez/Nyxian — version 1.17.0
  Changelog:
+  - 1.17.0 (2026-11-20): selection toolbar (also after the two-finger
+    slide): "All" selects everything and becomes "None" (deselects
+    everything); a Paste button pastes what was copied or cut here.
   - 1.16.0 (2026-11-18): iPad-only layout checks now ask
       NXForkIsPadLayout(), so iPhone Duo's large inner screen gets the iPad
       layout too.
@@ -273,12 +276,17 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             zipButton.accessibilityLabel = "Compress"
             let shareButton = UIBarButtonItem(image: UIImage(systemName: "square.and.arrow.up"), style: .plain, target: self, action: #selector(shareSelected))
             shareButton.accessibilityLabel = "Share / Export"
-            let selectAllButton = UIBarButtonItem(title: "Select All", style: .plain, target: self, action: #selector(toggleSelectAll))
+            /* fork: paste what was copied or cut, here */
+            let pasteButton = UIBarButtonItem(image: UIImage(systemName: "doc.on.clipboard"), style: .plain, target: self, action: #selector(forkPasteHere))
+            pasteButton.accessibilityLabel = "Paste"
+            pasteButton.isEnabled = !PasteBoardServices.paths.isEmpty
+            /* fork: short, so it fits next to the other buttons on an iPhone */
+            let selectAllButton = UIBarButtonItem(title: "All", style: .plain, target: self, action: #selector(toggleSelectAll))
             self.selectAllButton = selectAllButton
             self.updateSelectAllButton()
             let spacer = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
             
-            setToolbarItems([deleteButton, spacer, copyButton, spacer, cutButton, spacer, duplicateButton, spacer, zipButton, spacer, shareButton, spacer, selectAllButton], animated: true)
+            setToolbarItems([deleteButton, spacer, copyButton, spacer, cutButton, spacer, pasteButton, spacer, duplicateButton, spacer, zipButton, spacer, shareButton, spacer, selectAllButton], animated: true)
             navigationController?.setToolbarHidden(false, animated: true)
             tabBarController?.tabBar.isHidden = true
             
@@ -315,7 +323,8 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
     }
     
     private func updateSelectAllButton() {
-        selectAllButton?.title = allEntriesSelected ? "Deselect All" : "Select All"
+        selectAllButton?.title = allEntriesSelected ? "None" : "All"
+        selectAllButton?.accessibilityLabel = allEntriesSelected ? "Deselect All" : "Select All"
         selectAllButton?.isEnabled = !entries.isEmpty
     }
     
@@ -383,6 +392,15 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             popover.permittedArrowDirections = .down
         }
         present(activityVC, animated: true)
+    }
+
+    /* fork: Paste from the selection toolbar: into this folder */
+    @objc func forkPasteHere() {
+        guard !PasteBoardServices.paths.isEmpty else { return }
+        if isSelecting { toggleSelectionMode() }
+        PasteBoardServices.paste(path: self.path) { [weak self] file in
+            self?.addFile(destination: file)
+        }
     }
 
     @objc func copySelected() {
