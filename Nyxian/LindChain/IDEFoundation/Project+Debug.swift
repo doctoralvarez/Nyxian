@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-20): copy buttons (icon only). Each issue or message
+    row has one at its right (also "Contains no messages"): it copies
+    "error: File.swift:12:5: message" (or the message alone). The top bar
+    has one more that copies every issue, grouped by file, ready to share.
   - 1.3.0 (2026-11-18): iPad-only layout checks now ask NXForkIsPadLayout(),
       so iPhone Duo's large inner screen gets the iPad layout too.
   - 1.2.0 (2026-11-17): Build Times rows use digits of equal width (the
@@ -323,7 +327,65 @@ class UIDebugViewController: UITableViewController {
         
         let testButton: UIBarButtonItem = UIBarButtonItem(image: UIImage(systemName: "trash.fill"), style: .plain, target: self, action: #selector(clearDatabase))
         testButton.tintColor = UIColor.systemRed
-        self.navigationItem.rightBarButtonItem = testButton
+        /* fork: copy every issue */
+        let copyAll = UIBarButtonItem(image: UIImage(systemName: "doc.on.doc"), style: .plain, target: self, action: #selector(forkCopyAll))
+        copyAll.accessibilityLabel = "Copy All Issues"
+        self.navigationItem.rightBarButtonItems = [testButton, copyAll]
+    }
+
+    // MARK: fork — copy
+
+    private func forkSeverityName(_ level: MDKDiagnosticLevel) -> String {
+        switch level {
+        case .warning: return "warning"
+        case .error: return "error"
+        case .fatal: return "fatal error"
+        default: return "note"
+        }
+    }
+
+    /// "error: File.swift:12:5: message", or the message alone when it points nowhere
+    private func forkText(of item: DebugItem, in object: DebugObject) -> String {
+        if let target = item.navigationTarget(in: object) {
+            let name = (target.path as NSString).lastPathComponent
+            return "\(forkSeverityName(item.severity)): \(name):\(target.line):\(target.column): \(item.message)"
+        }
+        return "\(forkSeverityName(item.severity)): \(item.message)"
+    }
+
+    private func forkCopy(_ text: String, what: String) {
+        UIPasteboard.general.string = text
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Copied \(what)", withDelay: 0.0)
+    }
+
+    @objc private func forkCopyAll() {
+        var blocks: [String] = []
+        for object in sortedDebugObjects where !object.debugItems.isEmpty {
+            let title = object.flavour == .File ? (object.title as NSString).lastPathComponent : object.title
+            blocks.append("— \(title) —\n" + object.debugItems.map { forkText(of: $0, in: object) }.joined(separator: "\n"))
+        }
+        let total = sortedDebugObjects.reduce(0) { $0 + $1.debugItems.count }
+        let header = "\(project.projectConfig.displayName ?? "Project") — \(total) issue\(total == 1 ? "" : "s")"
+        forkCopy(blocks.isEmpty ? header + "\nContains no messages" : header + "\n\n" + blocks.joined(separator: "\n\n"),
+                 what: total == 1 ? "1 issue" : "\(total) issues")
+    }
+
+    @objc private func forkCopyRow(_ sender: UIButton) {
+        let section = sender.tag >> 16, row = sender.tag & 0xFFFF
+        guard section < sortedDebugObjects.count else { return }
+        let object = sortedDebugObjects[section]
+        let text: String
+        if row < object.debugItems.count {
+            text = forkText(of: object.debugItems[row], in: object)
+        } else {
+            text = "\(object.title): Contains no messages"
+        }
+        forkCopy(text, what: "the message")
+        sender.setImage(UIImage(systemName: "checkmark"), for: .normal)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak sender] in
+            sender?.setImage(UIImage(systemName: "doc.on.doc"), for: .normal)
+        }
     }
     
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
@@ -445,6 +507,22 @@ class UIDebugViewController: UITableViewController {
         
         cell.contentView.addSubview(stripeView)
         
+        /* fork: copy this row (icon only) */
+        let copyButton = UIButton(type: .system)
+        copyButton.setImage(UIImage(systemName: "doc.on.doc"), for: .normal)
+        copyButton.tintColor = .label
+        copyButton.accessibilityLabel = "Copy"
+        copyButton.tag = (indexPath.section << 16) | (indexPath.row & 0xFFFF)
+        copyButton.addTarget(self, action: #selector(forkCopyRow(_:)), for: .touchUpInside)
+        copyButton.translatesAutoresizingMaskIntoConstraints = false
+        cell.contentView.addSubview(copyButton)
+        NSLayoutConstraint.activate([
+            copyButton.trailingAnchor.constraint(equalTo: cell.contentView.trailingAnchor, constant: -4),
+            copyButton.centerYAnchor.constraint(equalTo: cell.contentView.centerYAnchor),
+            copyButton.widthAnchor.constraint(equalToConstant: 36),
+            copyButton.heightAnchor.constraint(equalToConstant: 36)
+        ])
+        
         // Setting the constraints how we wanna layout our views
         NSLayoutConstraint.activate([
             stripeView.topAnchor.constraint(equalTo: cell.contentView.topAnchor),
@@ -454,7 +532,7 @@ class UIDebugViewController: UITableViewController {
             
             cell.textLabel!.centerYAnchor.constraint(equalTo: cell.contentView.centerYAnchor),
             cell.textLabel!.leadingAnchor.constraint(equalTo: stripeView.trailingAnchor, constant: 10),
-            cell.textLabel!.trailingAnchor.constraint(equalTo: cell.contentView.trailingAnchor, constant: -10),
+            cell.textLabel!.trailingAnchor.constraint(equalTo: copyButton.leadingAnchor, constant: -4),
             
             cell.contentView.heightAnchor.constraint(equalTo: cell.textLabel!.heightAnchor, constant: 20),
             
