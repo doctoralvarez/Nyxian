@@ -4,6 +4,12 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.95.2 — 2026-11-20
+
+- Files list (folders and subfolders): "All" / "None" is now in the top
+  bar, at the right, while selecting; the bottom bar of the iPad's side
+  column still had no room for it. Bottom: Delete, Copy · Cut · Paste, ⋯.
+
 ## 1.95.1 — 2026-11-20
 
 - Files list (folders and subfolders): "All" / "None" now shows. Nine

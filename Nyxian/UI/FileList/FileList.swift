@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.17.1
+ Fork doctoralvarez/Nyxian — version 1.17.2
  Changelog:
+  - 1.17.2 (2026-11-20): "All" / "None" moves to the top bar, at the right
+    (where + was, which is off while selecting): in the iPad's side column
+    the bottom bar still had no room for it. The bottom bar keeps Delete,
+    Copy · Cut · Paste (one group) and ⋯.
   - 1.17.1 (2026-11-20): "All" / "None" did not show in the files list (in
     folders and subfolders): nine buttons did not fit the bar (the iPad
     sidebar, the iPhone), so the last one was left out. Duplicate, Compress
@@ -124,6 +128,8 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
     var selectedPaths: Set<String> = []
     /* fork: toolbar button that toggles between "Select All" and "Deselect All" */
     private var selectAllButton: UIBarButtonItem?
+    /* fork 1.17.2: the top bar's right items, put back after selecting */
+    private var forkSavedRightItems: [UIBarButtonItem]?
     
     var observation: NSKeyValueObservation?
 
@@ -263,6 +269,10 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             tableView.setEditing(isSelecting, animated: true)
         }
 
+        if isSelecting {
+            /* fork 1.17.2: the top bar's right side shows All / None while selecting */
+            forkSavedRightItems = navigationItem.rightBarButtonItems
+        }
         navigationItem.rightBarButtonItem?.isEnabled = !isSelecting
 
         if isSelecting {
@@ -299,7 +309,9 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             ]))
             moreButton.accessibilityLabel = "More"
             _ = (duplicateButton, zipButton, shareButton)
-            setToolbarItems([deleteButton, spacer, copyButton, spacer, cutButton, spacer, pasteButton, spacer, moreButton, spacer, selectAllButton], animated: true)
+            /* fork 1.17.2: Copy, Cut and Paste in one group; All / None in the top bar (always room there) */
+            setToolbarItems([deleteButton, spacer, copyButton, cutButton, pasteButton, spacer, moreButton], animated: true)
+            navigationItem.setRightBarButtonItems([selectAllButton], animated: true)
             navigationController?.setToolbarHidden(false, animated: true)
             tabBarController?.tabBar.isHidden = true
             
@@ -308,6 +320,10 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             self.refreshControl = nil
         } else {
             self.selectAllButton = nil
+            /* fork 1.17.2: the right side as it was */
+            navigationItem.setRightBarButtonItems(forkSavedRightItems, animated: true)
+            forkSavedRightItems = nil
+            navigationItem.rightBarButtonItems?.forEach { $0.isEnabled = true }
             setToolbarItems(nil, animated: true)
             navigationController?.setToolbarHidden(true, animated: true)
             tabBarController?.tabBar.isHidden = false
