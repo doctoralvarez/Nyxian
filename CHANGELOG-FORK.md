@@ -4,6 +4,20 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.93.0 — 2026-11-20
+
+- Playgrounds Sync with several devices (iPad + iPhone, same Playgrounds
+  folder): projects now end up identical. Each .swiftpm carries an exact
+  copy of the Nyxian project in a hidden .nyxian folder; another device
+  takes that copy as is (files deleted or moved, Config, the app icon in
+  Config/AppIcon.png, Info). Before, only what a .swiftpm holds came across,
+  nothing was ever removed, and the icon could stay behind. A first pairing
+  with the same contents is no longer a conflict (the newer device used to
+  overwrite the package with its own copy). Edits made in Swift Playgrounds
+  still come in (their Swift files over that copy).
+- Playgrounds Sync › App projects › tap one: "Send This Device's Version"
+  or "Use the Playgrounds Version" (the replaced one goes to the backups).
+
 ## 1.92.0 — 2026-11-19
 
 - While a project builds (▶), the bar shows the percentage left of the

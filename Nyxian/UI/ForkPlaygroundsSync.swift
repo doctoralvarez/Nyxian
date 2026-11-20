@@ -21,8 +21,21 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-20): Nyxian ↔ Nyxian on several devices (same
+    Playgrounds folder) keeps projects identical. Each package carries an
+    exact copy of the Nyxian project in its hidden .nyxian folder (Config,
+    icon, every file where it was, plus hashes); a device updating from it
+    takes that copy as is, so files deleted, moved or only kept by Nyxian
+    (Config/AppIcon.png, Info, loose images) come across too. Before: only
+    what a .swiftpm holds came across, nothing was ever removed, and the
+    icon could stay behind. If Swift Playgrounds edited the package after,
+    its Swift files are laid over that copy. A first pairing (or both sides
+    changed) whose contents are in fact the same is no longer a conflict
+    (the newer device used to overwrite the package with its own copy).
+    App projects › tap one: "Send This Device's Version" or "Use the
+    Playgrounds Version" sets it right by hand.
   - 1.1.0 (2026-11-13): Bundle identifiers. "Set Bundle IDs Now" gives every
     synced Swift app project com.<username>.<AppName> (Customization ›
     Credentials username; the app's own name without spaces), after showing
@@ -100,6 +113,8 @@ final class ForkPlaygroundsSync {
         var excludedProjects: Set<String> = []
         var lastSync: Date?
         var lastSummary: String?
+        /// fork 1.2: project key → "push" (this device's version wins) or "pull" (the package's)
+        var forced: [String: String] = [:]
 
         init() {}
 
@@ -113,6 +128,7 @@ final class ForkPlaygroundsSync {
             excludedProjects = try c.decodeIfPresent(Set<String>.self, forKey: .excludedProjects) ?? []
             lastSync = try c.decodeIfPresent(Date.self, forKey: .lastSync)
             lastSummary = try c.decodeIfPresent(String.self, forKey: .lastSummary)
+            forced = try c.decodeIfPresent([String: String].self, forKey: .forced) ?? [:]
         }
     }
 
@@ -219,6 +235,13 @@ final class ForkPlaygroundsSync {
         self.state = state
     }
 
+    /// fork 1.2: the next sync sends this device's version ("push") or takes the package's ("pull").
+    func force(_ direction: String, projectKey: String) {
+        var state = self.state
+        state.forced[projectKey] = direction
+        self.state = state
+    }
+
     func allowImportAgain(_ package: String) {
         var state = self.state
         state.ignoredPackages.remove(package)
@@ -288,6 +311,10 @@ final class ForkPlaygroundsSync {
                     fresh.pairs = working.pairs
                     fresh.ignoredPackages = working.ignoredPackages
                     fresh.excludedProjects = working.excludedProjects
+                    /* forced directions this sync carried out */
+                    for (key, direction) in snapshot.forced where working.forced[key] == nil && fresh.forced[key] == direction {
+                        fresh.forced.removeValue(forKey: key)
+                    }
                     if working.bookmark != snapshot.bookmark { fresh.bookmark = working.bookmark }
                 }
                 if failure == nil {
@@ -417,20 +444,49 @@ final class ForkPlaygroundsSync {
             let packageURL = folder.appendingPathComponent(pair.package)
             let local = signature(ofProject: project)
             let remote = signature(ofPackage: packageURL)
-            let localChanged = local.hash != pair.localSignature
-            let remoteChanged = remote.hash != pair.remoteSignature
+            var localChanged = local.hash != pair.localSignature
+            var remoteChanged = remote.hash != pair.remoteSignature
+            /* fork 1.2: set by hand in Playgrounds Sync */
+            var forcedDirection: String?
+            if let direction = state.forced.removeValue(forKey: key) {
+                if direction == "push" { (localChanged, remoteChanged) = (true, false); forcedDirection = direction }
+                else if mode == .full { (localChanged, remoteChanged) = (false, true); forcedDirection = direction }
+                else { state.forced[key] = direction }
+            }
 
             do {
+                /* fork 1.2: both "changed" (or a first pairing), yet the package holds exactly this project */
+                if localChanged && remoteChanged && mode == .full,
+                   let same = try sameContent(project, packageURL: packageURL) {
+                    switch same {
+                    case .identical:
+                        state.pairs[key] = Pair(package: pair.package, localSignature: local.hash, remoteSignature: remote.hash)
+                        continue
+                    case .editedInPlaygrounds:
+                        /* only Playgrounds changed it after this version: no conflict */
+                        (localChanged, remoteChanged) = (false, true)
+                    }
+                }
                 switch (localChanged, remoteChanged) {
                 case (false, false):
                     continue
                 case (true, false):
+                    if forcedDirection == "push" {
+                        /* fork 1.2: chosen by hand: the package's version is kept in the backups first */
+                        guard let copy = try materialize(packageURL) else {
+                            report.waiting.append(name)
+                            state.forced[key] = "push"
+                            continue
+                        }
+                        try backupPackage(copy, named: pair.package)
+                        try? fm.removeItem(at: copy.deletingLastPathComponent())
+                    }
                     let written = try exportProject(project, to: packageURL, report: &report)
                     state.pairs[key] = Pair(package: pair.package, localSignature: local.hash, remoteSignature: written.hash)
                     report.exported.append(name)
                 case (false, true):
                     guard mode == .full else { continue }
-                    if let updated = try importPackage(packageURL, into: project, backup: nil, report: &report) {
+                    if let updated = try importPackage(packageURL, into: project, backup: forcedDirection == "pull" ? name : nil, report: &report) {
                         state.pairs[key] = Pair(package: pair.package, localSignature: updated.local, remoteSignature: updated.remote)
                         report.imported.append(name)
                     }
@@ -473,12 +529,10 @@ final class ForkPlaygroundsSync {
                 }
                 defer { try? fm.removeItem(at: copy.deletingLastPathComponent()) }
                 let remote = signature(ofPackage: packageURL)
-                let result = try onMain {
-                    try SwiftPlaygroundsImporter.importPackage(at: copy, intoProjectsAt: projectsURL)
-                }
-                let local = signature(ofProject: result.project)
-                state.pairs[Self.key(of: result.project)] = Pair(package: package, localSignature: local.hash, remoteSignature: remote.hash)
-                report.newProjects.append(Self.name(of: result.project))
+                let created = try applyPackage(copy, to: nil, projectsURL: projectsURL)
+                let local = signature(ofProject: created)
+                state.pairs[Self.key(of: created)] = Pair(package: package, localSignature: local.hash, remoteSignature: remote.hash)
+                report.newProjects.append(Self.name(of: created))
             } catch {
                 /* not an app package (or broken): leave it alone from now on */
                 state.ignoredPackages.insert(package)
@@ -498,6 +552,8 @@ final class ForkPlaygroundsSync {
 
         let result = try onMain { try SwiftPlaygroundsExporter.export(project, into: temp) }
         let built = result.packageURL
+        /* fork 1.2: the exact project, for Nyxian on the other devices */
+        try writeMirror(of: project, into: built)
 
         var writeError: Error?
         var coordinationError: NSError?
@@ -509,6 +565,8 @@ final class ForkPlaygroundsSync {
                     for item in try fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
                         try fm.removeItem(at: item)
                     }
+                    let oldMirror = url.appendingPathComponent(Self.mirrorFolder)
+                    if fm.fileExists(atPath: oldMirror.path) { try fm.removeItem(at: oldMirror) }
                     for item in try fm.contentsOfDirectory(at: built, includingPropertiesForKeys: nil, options: []) {
                         try fm.copyItem(at: item, to: url.appendingPathComponent(item.lastPathComponent))
                     }
@@ -542,16 +600,147 @@ final class ForkPlaygroundsSync {
         }
         let remote = signature(ofPackage: packageURL)
         let projectsURL = NXBootstrap.shared().rootURL.appendingPathComponent("Projects")
-        let result = try onMain {
-            try SwiftPlaygroundsImporter.importPackage(at: copy, intoProjectsAt: projectsURL, updating: project)
+        let updated = try applyPackage(copy, to: project, projectsURL: projectsURL)
+        return (signature(ofProject: updated).hash, remote.hash)
+    }
+
+    // MARK: fork 1.2 — the Nyxian project inside the package (.nyxian)
+
+    static let mirrorFolder = ".nyxian"
+
+    private struct MirrorState: Codable {
+        var format: Int
+        /// content of the project when it was exported
+        var project: String
+        /// content of the package's visible files as written then
+        var package: String
+        var device: String?
+        var date: Date?
+    }
+
+    private enum SameContent { case identical, editedInPlaygrounds }
+
+    private func mirrorProject(in copy: URL) -> URL { copy.appendingPathComponent("\(Self.mirrorFolder)/project") }
+
+    private func mirrorState(in copy: URL) -> MirrorState? {
+        guard FileManager.default.fileExists(atPath: mirrorProject(in: copy).appendingPathComponent("Config/Project.plist").path),
+              let data = try? Data(contentsOf: copy.appendingPathComponent("\(Self.mirrorFolder)/state.json")) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(MirrorState.self, from: data)
+    }
+
+    /// Every visible file (hidden files and folders left out): path and SHA-256 of its bytes.
+    private func contentHash(_ root: URL) -> String {
+        var lines: [String] = []
+        let keys: Set<URLResourceKey> = [.isDirectoryKey]
+        if let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles]) {
+            for case let url as URL in enumerator {
+                guard (try? url.resourceValues(forKeys: keys))?.isDirectory != true else { continue }
+                let digest = (try? Data(contentsOf: url, options: .mappedIfSafe)).map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "-"
+                lines.append("\(ProjectFileIndex.relativePath(url, root: root))|\(digest)")
+            }
         }
-        return (signature(ofProject: result.project).hash, remote.hash)
+        return Self.hash(lines)
+    }
+
+    private func copyVisibleTree(from source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+        for item in try fm.contentsOfDirectory(at: source, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+            try fm.copyItem(at: item, to: destination.appendingPathComponent(item.lastPathComponent))
+        }
+    }
+
+    private func writeMirror(of project: NXProject, into package: URL) throws {
+        let fm = FileManager.default
+        let folder = package.appendingPathComponent(Self.mirrorFolder)
+        if fm.fileExists(atPath: folder.path) { try fm.removeItem(at: folder) }
+        try copyVisibleTree(from: project.url as URL, to: folder.appendingPathComponent("project"))
+        let device: String = onMain { UIDevice.current.name }
+        let state = MirrorState(format: 1, project: contentHash(project.url as URL), package: contentHash(package), device: device, date: Date())
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(state).write(to: folder.appendingPathComponent("state.json"))
+    }
+
+    /// The project becomes exactly the copy in the package (hidden items such as .git stay).
+    private func restoreMirror(from copy: URL, into project: NXProject) throws {
+        let fm = FileManager.default
+        let root = project.url as URL
+        for item in try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+            try fm.removeItem(at: item)
+        }
+        try copyVisibleTree(from: mirrorProject(in: copy), to: root)
+        _ = onMain { project.reload() }
+    }
+
+    /// Swift Playgrounds changed the package after Nyxian wrote it: its Swift files (added,
+    /// changed, removed) laid over the restored project.
+    private func overlaySwiftSources(from copy: URL, into project: NXProject) throws {
+        let fm = FileManager.default
+        let root = project.url as URL
+        let keys: Set<URLResourceKey> = [.isDirectoryKey]
+        func swiftFiles(_ base: URL, skipConfig: Bool) -> [String] {
+            var found: [String] = []
+            guard let walker = fm.enumerator(at: base, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles]) else { return [] }
+            for case let url as URL in walker {
+                let relative = ProjectFileIndex.relativePath(url, root: base)
+                if skipConfig && relative == "Config" { walker.skipDescendants(); continue }
+                if url.pathExtension.lowercased() == "swift", (try? url.resourceValues(forKeys: keys))?.isDirectory != true,
+                   relative != "Package.swift" {
+                    found.append(relative)
+                }
+            }
+            return found
+        }
+        let incoming = Set(swiftFiles(copy, skipConfig: false))
+        for relative in swiftFiles(root, skipConfig: true) where !incoming.contains(relative) {
+            try? fm.removeItem(at: root.appendingPathComponent(relative))
+        }
+        for relative in incoming {
+            let destination = root.appendingPathComponent(relative)
+            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
+            try fm.copyItem(at: copy.appendingPathComponent(relative), to: destination)
+        }
+        _ = onMain { project.reload() }
+    }
+
+    /// Updates `project` (or makes a new one) from a downloaded copy of the package.
+    private func applyPackage(_ copy: URL, to project: NXProject?, projectsURL: URL) throws -> NXProject {
+        let mirror = mirrorState(in: copy)
+        let untouched = mirror.map { contentHash(copy) == $0.package } ?? false
+        var target = project
+        if target == nil {
+            /* a new project (its folder, its name in the list) */
+            target = try onMain { try SwiftPlaygroundsImporter.importPackage(at: copy, intoProjectsAt: projectsURL).project }
+        }
+        guard let target else { throw SwiftPlaygroundsImporter.ImportError.projectCreationFailed }
+        if mirror != nil {
+            try onMain { try restoreMirror(from: copy, into: target) }
+            if !untouched { try onMain { try overlaySwiftSources(from: copy, into: target) } }
+        } else if project != nil {
+            /* made by Swift Playgrounds or an older Nyxian: what a .swiftpm holds */
+            _ = try onMain { try SwiftPlaygroundsImporter.importPackage(at: copy, intoProjectsAt: projectsURL, updating: target) }
+        }
+        return target
+    }
+
+    /// nil: not known to be the same (no copy of the project in the package, or a different one).
+    private func sameContent(_ project: NXProject, packageURL: URL) throws -> SameContent? {
+        guard let copy = try materialize(packageURL) else { return nil }
+        defer { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
+        guard let mirror = mirrorState(in: copy), mirror.project == contentHash(project.url as URL) else { return nil }
+        return contentHash(copy) == mirror.package ? .identical : .editedInPlaygrounds
     }
 
     /// A local copy of the package with every file downloaded; nil if iCloud did not finish within a minute.
     private func materialize(_ packageURL: URL) throws -> URL? {
         let fm = FileManager.default
-        let files = packageFiles(packageURL)
+        /* fork 1.2: with the copy of the Nyxian project (.nyxian) */
+        let files = packageFiles(packageURL, includeMirror: true)
 
         /* ask iCloud for what is not on the device yet, then wait a little */
         var pending = files.filter { !isDownloaded($0.url) }
@@ -656,7 +845,7 @@ final class ForkPlaygroundsSync {
         let date: Date
     }
 
-    private func packageFiles(_ packageURL: URL) -> [PackageFile] {
+    private func packageFiles(_ packageURL: URL, includeMirror: Bool = false) -> [PackageFile] {
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .contentModificationDateKey]
         var result: [PackageFile] = []
         guard let enumerator = FileManager.default.enumerator(at: packageURL, includingPropertiesForKeys: Array(keys), options: []) else { return [] }
@@ -664,11 +853,13 @@ final class ForkPlaygroundsSync {
             let name = url.lastPathComponent
             let isDirectory = (try? url.resourceValues(forKeys: keys))?.isDirectory == true
             if isDirectory {
-                if name.hasPrefix(".") || name == ".build" { enumerator.skipDescendants() }
+                let mirror = includeMirror && ProjectFileIndex.relativePath(url, root: packageURL) == Self.mirrorFolder
+                if (name.hasPrefix(".") && !mirror) || name == ".build" { enumerator.skipDescendants() }
                 continue
             }
             var real = url
-            if name.hasPrefix(".") {
+            let inMirror = includeMirror && ProjectFileIndex.relativePath(url, root: packageURL).hasPrefix(Self.mirrorFolder + "/")
+            if name.hasPrefix(".") && !(inMirror && !name.hasSuffix(".icloud")) {
                 /* only iCloud's placeholders of files not downloaded yet */
                 guard name.hasSuffix(".icloud") else { continue }
                 let realName = String(name.dropFirst().dropLast(".icloud".count))
@@ -789,7 +980,7 @@ final class ForkPlaygroundsSyncViewController: UITableViewController, UIDocument
             let sample = ForkBundleIdentifierFixer.identifier(forName: "My App")
             return "Every Swift app project whose switch is on below gets \(ForkBundleIdentifierFixer.organization()).<its name without spaces>, e.g. \(sample). The organization comes from Customization › Credentials › username. With \"On every sync\", it is done before each sync, so the .swiftpm in Playgrounds gets it too."
         case .projects:
-            return sync.hasFolder && !projects.isEmpty ? "Deleting never crosses over: a project deleted here leaves its package in Playgrounds, and a package deleted there turns its project's switch off." : nil
+            return sync.hasFolder && !projects.isEmpty ? "Deleting never crosses over: a project deleted here leaves its package in Playgrounds, and a package deleted there turns its project's switch off. Tap a project when it differs between your devices: send this device's version, or use the one in Playgrounds." : nil
         case .ignored:
             return sync.hasFolder && !ignored.isEmpty ? "Their project was deleted or left out, or they could not be imported. Tap one to import it again on the next sync." : nil
         case .more:
@@ -857,7 +1048,8 @@ final class ForkPlaygroundsSyncViewController: UITableViewController, UIDocument
             toggle.tag = indexPath.row
             toggle.addTarget(self, action: #selector(toggleProject(_:)), for: .valueChanged)
             cell.accessoryView = toggle
-            cell.selectionStyle = .none
+            /* fork 1.2: tap: which version wins */
+            cell.selectionStyle = state.pairs[key] == nil ? .none : .default
         case .ignored:
             cell.textLabel?.text = ignored[indexPath.row].replacingOccurrences(of: ".swiftpm", with: "")
             cell.detailTextLabel?.text = "Import again"
@@ -890,7 +1082,8 @@ final class ForkPlaygroundsSyncViewController: UITableViewController, UIDocument
             guard indexPath.row == 0, !sync.isRunning else { return }
             confirmBundleIDs()
         case .projects:
-            break
+            guard !sync.isRunning, projects.indices.contains(indexPath.row) else { return }
+            chooseVersion(projects[indexPath.row], at: indexPath)
         case .ignored:
             guard !sync.isRunning else { return }
             sync.allowImportAgain(ignored[indexPath.row])
@@ -910,6 +1103,28 @@ final class ForkPlaygroundsSyncViewController: UITableViewController, UIDocument
                 present(alert, animated: true)
             }
         }
+    }
+
+    /// fork 1.2: this device's version or the package's, chosen by hand.
+    private func chooseVersion(_ project: NXProject, at indexPath: IndexPath) {
+        let key = ForkPlaygroundsSync.key(of: project)
+        guard let pair = sync.state.pairs[key] else { return }
+        let name = ForkPlaygroundsSync.name(of: project)
+        let sheet = UIAlertController(title: name, message: "Which version should every device have? The one replaced is first copied to \(ForkPlaygroundsSync.backupsFolderName).", preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "Send This Device's Version", style: .default) { [weak self] _ in
+            self?.sync.force("push", projectKey: key)
+            self?.syncNow()
+        })
+        sheet.addAction(UIAlertAction(title: "Use the Playgrounds Version (\(pair.package.replacingOccurrences(of: ".swiftpm", with: "")))", style: .destructive) { [weak self] _ in
+            self?.sync.force("pull", projectKey: key)
+            self?.syncNow()
+        })
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        if let popover = sheet.popoverPresentationController {
+            popover.sourceView = tableView
+            popover.sourceRect = tableView.rectForRow(at: indexPath)
+        }
+        present(sheet, animated: true)
     }
 
     private func syncNow() {
