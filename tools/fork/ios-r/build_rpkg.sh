@@ -1,6 +1,12 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 0.2.2
+# Fork doctoralvarez/Nyxian — version 0.3.0
 # Changelog:
+#  - 0.3.0 (2026-11-19): the Mac builds link CoreFoundation (R for the Mac
+#    was built without it, and timechange/s2 need it: "_CFRelease not
+#    found"), the iOS builds too; a package that cannot install for the Mac
+#    (a missing system library: units needs udunits2, sf needs GDAL) no
+#    longer stops the rest: it and the packages needing it are reported and
+#    everything else is built.
 #  - 0.2.2 (2026-11-19): fs builds its bundled libuv (USE_BUNDLED_LIBUV=1).
 #  - 0.2.1 (2026-11-19): cross-compiling is said through a config.site
 #    (CONFIG_SITE: cross_compiling=yes), every autoconf script reads it (the
@@ -88,7 +94,7 @@ OBJCFLAGS = -O2 -fPIC
 FFLAGS = -O2 -fPIC
 FCFLAGS = -O2 -fPIC
 CPPFLAGS =
-LDFLAGS = $RPATH
+LDFLAGS = $RPATH -framework CoreFoundation
 SHLIB_LD = $CC_BIN $IOS
 SHLIB_CXXLD = $CXX_BIN $IOS
 SHLIB_CXX11LD = $CXX_BIN $IOS
@@ -108,7 +114,9 @@ HOSTLIB="$T/lib-mac"; IOSLIB="$T/lib-ios"; SRC="$T/src"
 mkdir -p "$HOSTLIB" "$IOSLIB" "$SRC"
 PKGS_R=$(printf '"%s",' "$@"); PKGS_R="c(${PKGS_R%,})"
 log "for the Mac: $* and their dependencies"
-"$HOST/bin/Rscript" --vanilla -e "
+# packages expect R for the Mac to bring CoreFoundation (the official one links it)
+printf 'LDFLAGS += -framework CoreFoundation\n' > "$T/Makevars-mac"
+R_MAKEVARS_USER="$T/Makevars-mac" "$HOST/bin/Rscript" --vanilla -e "
   options(repos = c(CRAN = '$CRAN'))
   pkgs <- $PKGS_R
   db <- available.packages()
@@ -120,7 +128,17 @@ log "for the Mac: $* and their dependencies"
   todo <- setdiff(deps, rownames(installed.packages(lib.loc = '$HOSTLIB')))
   if (length(todo)) install.packages(todo, lib = '$HOSTLIB', Ncpus = $JOBS, quiet = TRUE)
   ok <- deps %in% rownames(installed.packages(lib.loc = '$HOSTLIB'))
-  if (!all(ok)) stop('did not install for the Mac: ', paste(deps[!ok], collapse = ', '))
+  # what could not install for the Mac (a system library it needs is missing), and every
+  # package that needs one of those: left out, the rest goes on
+  bad <- deps[!ok]
+  if (length(bad)) {
+    rdeps <- tools::package_dependencies(deps, db = db, which = c('Depends', 'Imports', 'LinkingTo'), recursive = TRUE)
+    blocked <- deps[vapply(deps, function(p) p %in% bad || any(rdeps[[p]] %in% bad), NA)]
+    message('could not install for the Mac: ', paste(bad, collapse = ', '))
+    message('left out (they need those): ', paste(setdiff(blocked, bad), collapse = ', '))
+    writeLines(blocked, '$T/blocked.txt')
+    deps <- setdiff(deps, blocked)
+  }
   # install order for iOS: dependencies first
   order <- character()
   visit <- function(p) { if (p %in% order) return(invisible())
@@ -215,4 +233,8 @@ while read -r pkg; do
 done < "$T/order.txt"
 
 echo "built for iOS:${built:- (none new)}"
+if [ -s "$T/blocked.txt" ]; then
+  echo "not possible yet (a system library is missing): $(tr '\n' ' ' < "$T/blocked.txt")"
+  failed="$failed $(tr '\n' ' ' < "$T/blocked.txt")"
+fi
 if [ -n "$failed" ]; then echo "FAILED for iOS:$failed"; exit 1; fi
