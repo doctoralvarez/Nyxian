@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.6.0
+ Fork doctoralvarez/Nyxian — version 1.7.0
  Changelog:
+  - 1.7.0 (2026-11-20): App Preview starts paused (opening a project
+    builds nothing); ▶ in its bar loads it (or loads it again, ↻ while it
+    shows). New ⏸ pauses it: a build it started is cancelled, the app is
+    closed and its last picture stays. Hiding the panel pauses it too. While
+    paused, saving does not build and ▶ elsewhere runs the app in its own
+    window (not in the panel).
   - 1.6.0 (2026-11-18): iPad-only layout checks now ask NXForkIsPadLayout(),
       so iPhone Duo's large inner screen gets the iPad layout too.
   - 1.5.0 (2026-11-12): App Preview — a panel at the right of the editor
@@ -1107,7 +1113,8 @@ enum ForkAppPreview {
 
 final class ForkAppPreviewContainer: UIViewController {
     private enum State {
-        case idle, building, waitingWindow, running, paused, failed, stopped
+        /* fork 1.7: held — paused by hand (⏸, hiding the panel, or on open) */
+        case idle, building, waitingWindow, running, paused, failed, stopped, held
     }
 
     private let content: UIViewController
@@ -1137,6 +1144,11 @@ final class ForkAppPreviewContainer: UIViewController {
     private var saveWork: DispatchWorkItem?
     private var toggleItem: UIBarButtonItem?
     private var pauseWhenRunning = false
+    /* fork 1.7 */
+    private let reloadButton = UIButton(type: .system)
+    private let pauseButton = UIButton(type: .system)
+    /// a build this panel started was cancelled by ⏸ (if it still finishes, its app is closed)
+    private var cancelledOwnBuild = false
 
     /// The live app shows while it runs (and while it first builds); while
     /// paused or rebuilding after a change, the still picture shows instead
@@ -1144,7 +1156,7 @@ final class ForkAppPreviewContainer: UIViewController {
         switch state {
         case .running, .waitingWindow, .idle, .stopped: return true
         case .building: return snapshotView.image == nil
-        case .paused, .failed: return false
+        case .paused, .failed, .held: return false
         }
     }
 
@@ -1195,15 +1207,20 @@ final class ForkAppPreviewContainer: UIViewController {
         titles.axis = .vertical
         titles.spacing = 1
 
-        let reload = UIButton(type: .system)
-        reload.setImage(UIImage(systemName: "arrow.clockwise"), for: .normal)
-        reload.accessibilityLabel = "Reload Preview"
+        let reload = reloadButton
+        reload.setImage(UIImage(systemName: "play.fill"), for: .normal)
+        reload.accessibilityLabel = "Load Preview"
         reload.addTarget(self, action: #selector(reloadTapped), for: .touchUpInside)
+        /* fork 1.7: ⏸ */
+        let pause = pauseButton
+        pause.setImage(UIImage(systemName: "pause.fill"), for: .normal)
+        pause.accessibilityLabel = "Pause Preview"
+        pause.addTarget(self, action: #selector(pauseTapped), for: .touchUpInside)
         let hide = UIButton(type: .system)
         hide.setImage(UIImage(systemName: "sidebar.right"), for: .normal)
         hide.accessibilityLabel = "Hide Preview"
         hide.addTarget(self, action: #selector(hideTapped), for: .touchUpInside)
-        for button in [reload, hide] {
+        for button in [pause, reload, hide] {
             button.widthAnchor.constraint(equalToConstant: 36).isActive = true
             button.heightAnchor.constraint(equalToConstant: 36).isActive = true
         }
@@ -1215,6 +1232,7 @@ final class ForkAppPreviewContainer: UIViewController {
         header.addArrangedSubview(titles)
         header.addArrangedSubview(UIView())
         header.addArrangedSubview(spinner)
+        header.addArrangedSubview(pause)
         header.addArrangedSubview(reload)
         header.addArrangedSubview(hide)
         panel.addSubview(header)
@@ -1281,7 +1299,8 @@ final class ForkAppPreviewContainer: UIViewController {
         center.addObserver(self, selector: #selector(codeChanged(_:)), name: ForkAppPreview.codeChanged, object: nil)
         center.addObserver(self, selector: #selector(codeSaved(_:)), name: ForkAppPreview.codeSaved, object: nil)
         center.addObserver(self, selector: #selector(runFinished(_:)), name: ForkAppPreview.runFinished, object: nil)
-        setState(.idle)
+        /* fork 1.7: paused until ▶ */
+        setState(.held)
     }
 
     deinit {
@@ -1301,11 +1320,8 @@ final class ForkAppPreviewContainer: UIViewController {
         addToggleButton()
         updateWidth()
         if isShown {
+            /* fork 1.7: nothing loads on open: paused until ▶ */
             startTimer()
-            if !loadedOnce {
-                loadedOnce = true
-                adoptOrLoad()
-            }
         }
     }
 
@@ -1384,8 +1400,11 @@ final class ForkAppPreviewContainer: UIViewController {
         let text: String
         var status: String
         switch newState {
+        case .held:
+            text = snapshotView.image == nil ? "Paused.\nTap ▶ to load the app." : "Paused.\nTap ▶ to load the app again."
+            status = "Paused"
         case .idle:
-            text = "Tap ↻ to load the app"; status = "Not loaded"
+            text = "Tap ▶ to load the app"; status = "Not loaded"
         case .building:
             text = snapshotView.image == nil ? "Building the app…" : ""; status = "Building…"
         case .waitingWindow:
@@ -1396,10 +1415,10 @@ final class ForkAppPreviewContainer: UIViewController {
             text = "Paused — the code changed.\nSave (⌘S) to build again; the app comes back when there are no errors."
             status = "Paused"
         case .failed:
-            text = "The code has errors.\nFix them and save (⌘S), or tap ↻."
+            text = "The code has errors.\nFix them and save (⌘S), or tap ▶."
             status = "Build failed"
         case .stopped:
-            text = "The app is not running.\nTap ↻ to load it again."
+            text = "The app is not running.\nTap ▶ to load it again."
             status = "Stopped"
         }
         if let message { status = message }
@@ -1408,6 +1427,12 @@ final class ForkAppPreviewContainer: UIViewController {
         statusLabel.text = status
         if newState == .building || newState == .waitingWindow { spinner.startAnimating() } else { spinner.stopAnimating() }
         if newState == .running || newState == .idle || newState == .stopped { snapshotView.image = nil }
+        /* fork 1.7: ▶ when nothing is loaded, ↻ while it shows; ⏸ while something loads or runs */
+        let loaded = newState == .running || newState == .waitingWindow || newState == .building || newState == .paused
+        reloadButton.setImage(UIImage(systemName: loaded ? "arrow.clockwise" : "play.fill"), for: .normal)
+        reloadButton.accessibilityLabel = loaded ? "Reload Preview" : "Load Preview"
+        reloadButton.isEnabled = newState != .building
+        pauseButton.isEnabled = newState != .held && newState != .idle && newState != .stopped
         NXWindowServer.shared()?.forkShowDockedWindow(liveVisible)
     }
 
@@ -1452,6 +1477,9 @@ final class ForkAppPreviewContainer: UIViewController {
             }
         case .building, .paused, .failed:
             if exists { dock() }
+        case .held:
+            /* fork 1.7: paused: the panel does not take the app */
+            break
         }
     }
 
@@ -1472,11 +1500,16 @@ final class ForkAppPreviewContainer: UIViewController {
             busyRetries += 1
             guard busyRetries < 60 else { busyRetries = 0; setState(.failed, message: "Another build kept running"); return }
             setState(.building, message: "Waiting for the current build…")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.load() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                /* fork 1.7: not if it was paused meanwhile */
+                guard let self, self.state == .building else { return }
+                self.load()
+            }
             return
         }
         busyRetries = 0
         changedDuringBuild = false
+        cancelledOwnBuild = false
         setState(.building)
         guard let split = splitViewController as? MainSplitViewController else {
             setState(.failed, message: "Could not start the build")
@@ -1503,6 +1536,7 @@ final class ForkAppPreviewContainer: UIViewController {
     }
 
     @objc private func codeSaved(_ note: Notification) {
+        /* fork 1.7: held (paused by hand) does not build on save */
         guard (note.object as? String) == projectPath, isShown,
               state == .paused || state == .failed else { return }
         /* several files saved at once (Save All): one build */
@@ -1517,7 +1551,18 @@ final class ForkAppPreviewContainer: UIViewController {
         let result = note.userInfo?["result"] as? Bool ?? false
         if note.userInfo?["busy"] as? Bool == true {
             if state == .building {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.load() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                    guard let self, self.state == .building else { return }
+                    self.load()
+                }
+            }
+            return
+        }
+        /* fork 1.7: paused: the panel does not take the app; one it was building is closed */
+        if state == .held {
+            if result && cancelledOwnBuild {
+                cancelledOwnBuild = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.closeApp() }
             }
             return
         }
@@ -1548,6 +1593,40 @@ final class ForkAppPreviewContainer: UIViewController {
         setVisible(false)
     }
 
+    /* fork 1.7: ⏸ — stop loading: the build this panel started is cancelled, the app closed, its picture kept */
+    @objc private func pauseTapped() {
+        pausePreview()
+    }
+
+    private func pausePreview() {
+        switch state {
+        case .held, .idle, .stopped:
+            return
+        case .building:
+            if NXBuilder.builds && !NXBuilder.forkCancelRequested {
+                NXBuilder.forkCancelRequested = true
+                cancelledOwnBuild = true
+            }
+        case .running, .waitingWindow:
+            if let picture = NXWindowServer.shared()?.forkSnapshotDockedWindow() {
+                snapshotView.image = picture
+            }
+            closeApp()
+        case .paused, .failed:
+            closeApp()
+        }
+        saveWork?.cancel()
+        pauseWhenRunning = false
+        changedDuringBuild = false
+        setState(.held)
+    }
+
+    private func closeApp() {
+        guard !bundleIdentifier.isEmpty else { return }
+        NXWindowServer.shared()?.forkUndock(puttingAway: true)
+        PEProcessManager.shared().closeIfRunning(usingBundleIdentifier: bundleIdentifier)
+    }
+
     private func toggleVisible() {
         setVisible(!visible)
     }
@@ -1556,6 +1635,8 @@ final class ForkAppPreviewContainer: UIViewController {
         visible = newValue
         UserDefaults.standard.set(newValue, forKey: ForkAppPreview.visibleKey)
         if !newValue {
+            /* fork 1.7: hiding it pauses it */
+            pausePreview()
             timer?.invalidate()
             timer = nil
             NXWindowServer.shared()?.forkUndock(puttingAway: true)
@@ -1567,12 +1648,8 @@ final class ForkAppPreviewContainer: UIViewController {
         } completion: { _ in
             guard newValue, self.isShown else { return }
             self.startTimer()
-            if !self.loadedOnce || self.state == .idle || self.state == .stopped {
-                self.loadedOnce = true
-                self.adoptOrLoad()
-            } else {
-                self.dock()
-            }
+            /* fork 1.7: shown again, still paused until ▶ */
+            if self.state != .held { self.dock() }
         }
         if newValue && !hasRoom {
             NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "App Preview needs a wider window (full screen or a larger Split View)", withDelay: 0.0)

@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.94.0 — 2026-11-20
+
+- App Preview (iPad) starts paused: opening a project or a Swift file
+  builds nothing. ▶ in the panel's bar loads the app (↻ reloads it while it
+  shows, restarting it). New ⏸ button pauses it: a build it started is
+  cancelled, the app is closed and its last picture stays. Hiding the panel
+  pauses it too; showing it again keeps it paused until ▶.
+
 ## 1.93.0 — 2026-11-20
 
 - Playgrounds Sync with several devices (iPad + iPhone, same Playgrounds
