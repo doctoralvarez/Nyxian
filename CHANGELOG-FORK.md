@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.92.0 — 2026-11-19
+
+- While a project builds (▶), the bar shows the percentage left of the
+  hammer ("37 %", in real time, from the same progress the circle draws;
+  "Installing" while it installs). Informative only: it takes no taps.
+- R packages for iOS now built: curl, png, jpeg, openssl, s2, systemfonts,
+  textshaping, ragg, gdtools (survminer's and flextable's dependencies).
+
 ## 1.91.1 — 2026-11-19
 
 - R from Nyxian Shell no longer stops with "Fatal error: cannot create

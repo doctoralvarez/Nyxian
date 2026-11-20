@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.12.0
+ Fork doctoralvarez/Nyxian — version 1.13.0
  Changelog:
+  - 1.13.0 (2026-11-19): while it builds, the bar shows the percentage left
+    of the hammer (XCButton.percentView(), informative only).
   - 1.12.0 (2026-11-17): "Build Times" in the Issue Navigator after every
     build: total and each stage (prepare, Swift compile, C / Objective-C
     compile, link, other build work, sign and install) with a bar, the
@@ -571,7 +573,12 @@ func buildProjectWithArgumentUI(targetViewController: UIViewController,
         let barButton: UIBarButtonItem = UIBarButtonItem(customView: XCButton.shared())
         
         NXBuilder.builds = true
-        targetViewController.navigationItem.setRightBarButtonItems([barButton], animated: true)
+        /* fork: the percentage, left of the hammer (the first item is the rightmost) */
+        XCButton.resetProgress()
+        let percentItem = UIBarButtonItem(customView: XCButton.percentView())
+        percentItem.isEnabled = false
+        if #available(iOS 26.0, *) { percentItem.hidesSharedBackground = true }
+        targetViewController.navigationItem.setRightBarButtonItems([barButton, percentItem], animated: true)
         targetViewController.navigationItem.setHidesBackButton(true, animated: true)
         
         /* fork: Cancel (top left) while it builds: the screen is yours again at once,

@@ -20,6 +20,14 @@
  See LICENSE for the full license terms.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-19): a build percentage next to the hammer (+percentView:
+    "37 %" in real time from the same progress the circle draws; "Installing"
+    while it installs); informative only, it takes no taps.
+*/
+
 #import <UI/XCodeButton.h>
 
 @implementation ProgressCircleView
@@ -102,6 +110,7 @@
     
     self.progressLayer.strokeEnd = clamped;
     [self.progressLayer addAnimation:animation forKey:@"strokeEndAnim"];
+    [XCButton refreshPercent];
 }
 
 - (void)resetProgress
@@ -111,6 +120,7 @@
     self.progressLayer.strokeEnd = 0.0;
     [CATransaction commit];
     self.progress = 0.0;
+    [XCButton refreshPercent];
 }
 
 - (void)startSpinningWithArcFraction:(CGFloat)fraction duration:(CFTimeInterval)duration
@@ -144,6 +154,7 @@
     rotation.removedOnCompletion = NO;
     rotation.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear];
     [self.progressLayer addAnimation:rotation forKey:@"spinRotation"];
+    [XCButton refreshPercent];
 }
 
 - (void)startSpinning
@@ -180,6 +191,57 @@
     }
 
     [self.progressLayer removeAnimationForKey:@"spinRotation"];
+    [XCButton refreshPercent];
+}
+
+@end
+
+/* fork: the percentage label next to the hammer (informative: no taps) */
+@interface ForkBuildPercentView : UIView
+@property (nonatomic,strong) UILabel *label;
+@end
+
+@implementation ForkBuildPercentView
+
+- (instancetype)initWithFrame:(CGRect)frame
+{
+    self = [super initWithFrame:frame];
+    self.userInteractionEnabled = NO;
+    self.isAccessibilityElement = YES;
+    self.accessibilityTraits = UIAccessibilityTraitUpdatesFrequently | UIAccessibilityTraitStaticText;
+    self.backgroundColor = UIColor.tertiarySystemFillColor;
+    self.layer.cornerRadius = 11;
+    self.layer.cornerCurve = kCACornerCurveContinuous;
+    self.label = [[UILabel alloc] init];
+    self.label.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold];
+    self.label.textColor = UIColor.labelColor;
+    self.label.textAlignment = NSTextAlignmentCenter;
+    self.label.adjustsFontSizeToFitWidth = YES;
+    self.label.minimumScaleFactor = 0.7;
+    self.label.text = @"0 %";
+    self.label.translatesAutoresizingMaskIntoConstraints = NO;
+    [self addSubview:self.label];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.label.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:6],
+        [self.label.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-6],
+        [self.label.centerYAnchor constraintEqualToAnchor:self.centerYAnchor]
+    ]];
+    return self;
+}
+
+- (CGSize)intrinsicContentSize
+{
+    /* wide enough for "100 %" and "Installing" without the bar jumping */
+    return CGSizeMake(self.label.text.length > 5 ? 78 : 52, 22);
+}
+
+- (void)setText:(NSString *)text
+{
+    if([self.label.text isEqualToString:text]) return;
+    BOOL resize = (self.label.text.length > 5) != (text.length > 5);
+    self.label.text = text;
+    self.accessibilityLabel = [NSString stringWithFormat:@"Build progress %@", text];
+    if(resize) [self invalidateIntrinsicContentSize];
 }
 
 @end
@@ -392,6 +454,39 @@
 - (CGSize)intrinsicContentSize
 {
     return CGSizeMake(35, 35);
+}
+
+/* fork: the build's percentage */
++ (ForkBuildPercentView *)forkPercent
+{
+    static ForkBuildPercentView *view = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        view = [[ForkBuildPercentView alloc] initWithFrame:CGRectMake(0, 0, 52, 22)];
+    });
+    return view;
+}
+
++ (UIView *)percentView
+{
+    [self refreshPercent];
+    return [self forkPercent];
+}
+
++ (void)refreshPercent
+{
+    void (^block)(void) = ^{
+        ProgressCircleView *circle = [self shared].XCProgressView;
+        if([circle.progressLayer animationForKey:@"spinRotation"])
+        {
+            [[self forkPercent] setText:@"Installing"];
+            return;
+        }
+        double value = MIN(MAX(circle.progressLayer.strokeEnd, 0.0), 1.0);
+        [[self forkPercent] setText:[NSString stringWithFormat:@"%d %%", (int)floor(value * 100.0 + 0.0001)]];
+    };
+    if([NSThread isMainThread]) block();
+    else dispatch_async(dispatch_get_main_queue(), block);
 }
 
 @end
