@@ -1,6 +1,11 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 0.4.1
+# Fork doctoralvarez/Nyxian — version 0.5.0
 # Changelog:
+#  - 0.5.0 (2026-11-19): packages built without a dependency iOS cannot
+#    have yet (rpkg_patch.R: epiR without sf, which needs GDAL/GEOS/PROJ and
+#    epiR uses only for maps): left out of the closure, installed for the
+#    Mac from a patched source (that source also builds the iOS copy), then
+#    checked on the Mac (epi.tests, epi.2by2, epi.kappa, epi.ccc, epi.conf).
 #  - 0.4.1 (2026-11-19): pkg-config also sees native.sh's zlib.pc (the iOS
 #    SDK's zlib), which freetype2 and libcurl require; it says which
 #    libraries it finds before the packages build; harfbuzz is built again
@@ -148,13 +153,23 @@ R_MAKEVARS_USER="$T/Makevars-mac" "$HOST/bin/Rscript" --vanilla -e "
   options(repos = c(CRAN = '$CRAN'))
   pkgs <- $PKGS_R
   db <- available.packages()
+  # packages built without a dependency iOS cannot have yet (epiR without sf)
+  source('$HERE/rpkg_patch.R')
+  db <- nyx_strip_db(db)
   miss <- setdiff(pkgs, rownames(db)); if (length(miss)) stop('not on CRAN: ', paste(miss, collapse = ', '))
   deps <- unique(c(pkgs, unlist(tools::package_dependencies(pkgs, db = db, which = c('Depends', 'Imports', 'LinkingTo'), recursive = TRUE))))
   base <- rownames(installed.packages(lib.loc = .Library, priority = 'base'))
   deps <- setdiff(deps, base)
   writeLines(deps, '$T/closure.txt')
   todo <- setdiff(deps, rownames(installed.packages(lib.loc = '$HOSTLIB')))
-  if (length(todo)) install.packages(todo, lib = '$HOSTLIB', Ncpus = $JOBS, quiet = TRUE)
+  patched <- intersect(todo, names(nyx_drop))
+  rest <- setdiff(todo, patched)
+  if (length(rest)) install.packages(rest, lib = '$HOSTLIB', Ncpus = $JOBS, quiet = TRUE)
+  for (p in patched) tryCatch(nyx_install_patched(p, '$HOSTLIB', '$T/patched'),
+                              error = function(e) message(p, ' (patched): ', conditionMessage(e)))
+  # and they work on the Mac without it
+  for (p in intersect(deps, names(nyx_drop))) if (p %in% rownames(installed.packages(lib.loc = '$HOSTLIB')))
+    tryCatch(nyx_smoke(p, '$HOSTLIB'), error = function(e) { message(conditionMessage(e)); remove.packages(p, lib = '$HOSTLIB') })
   ok <- deps %in% rownames(installed.packages(lib.loc = '$HOSTLIB'))
   # what could not install for the Mac (a system library it needs is missing), and every
   # package that needs one of those: left out, the rest goes on
@@ -175,6 +190,8 @@ R_MAKEVARS_USER="$T/Makevars-mac" "$HOST/bin/Rscript" --vanilla -e "
   for (p in deps) visit(p)
   writeLines(order, '$T/order.txt')
   download.packages(order, destdir = '$SRC', quiet = TRUE)
+  # the iOS build takes the patched source
+  for (p in intersect(order, names(nyx_drop))) if (dir.exists(file.path('$T/patched', p))) nyx_repack(p, '$T/patched', '$SRC')
 "
 log "closure: $(tr '\n' ' ' < "$T/order.txt")"
 
