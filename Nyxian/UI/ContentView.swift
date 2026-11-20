@@ -21,8 +21,16 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.47.1
+ Fork doctoralvarez/Nyxian — version 1.48.0
  Changelog:
+  - 1.48.0 (2026-11-19): an R section in the Python panel, between Python
+    and Terminal: R Console, R Packages (yours and R's, search, details,
+    help index, remove with a warning about the packages that use it,
+    install), Install R Package (CRAN)…, Run R Script (.R)…, Shell in R
+    Library, Search R Help…, Build R Package for iOS…; R HOME and R LIBRARY
+    under Folders. Nyxian's own packages (nyxian-r, rpy2) always come from
+    a new runtime, even over a copy installed with pip (no pip --upgrade
+    after updating Nyxian).
   - 1.47.1 (2026-11-19): a Java .class file (same first bytes as a universal
     binary; R ships getsp.class) is not taken for a binary to sign.
   - 1.47.0 (2026-11-19): iosbuild r NAME… builds R packages (CRAN) for R
@@ -7568,6 +7576,43 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
     private static let skippedKey = "fork.python.signingSkipped"
     private static let queue = DispatchQueue(label: "fork.python.install")
     
+    /// The distributions Nyxian ships and keeps up to date itself.
+    private static let ownDistributions: Set<String> = ["nyxian_r", "rpy2", "rpy2_rinterface", "rpy2_robjects"]
+    
+    /// Top-level items of site-packages that a distribution installed (from its RECORD).
+    private static func topLevelItems(ofDistInfo info: URL) -> Set<String> {
+        var items: Set<String> = [info.lastPathComponent]
+        let record = (try? String(contentsOf: info.appendingPathComponent("RECORD"), encoding: .utf8)) ?? ""
+        for line in record.split(separator: "\n") {
+            let path = line.split(separator: ",", maxSplits: 1).first.map(String.init) ?? ""
+            guard !path.isEmpty, !path.hasPrefix("..") else { continue }
+            if let first = path.split(separator: "/").first { items.insert(String(first)) }
+        }
+        return items
+    }
+    
+    private static func distributionName(_ item: String) -> String {
+        String(item.prefix { $0 != "-" }).lowercased().replacingOccurrences(of: "-", with: "_").replacingOccurrences(of: ".", with: "_")
+    }
+    
+    /// Nyxian's own packages: the kept (pip-installed) copy goes, the runtime's copy goes in.
+    private static func replaceOwnPackages(kept: URL, fresh: URL) {
+        let fm = FileManager.default
+        for item in (try? fm.contentsOfDirectory(atPath: kept.path)) ?? [] where item.hasSuffix(".dist-info") && ownDistributions.contains(distributionName(item)) {
+            for top in topLevelItems(ofDistInfo: kept.appendingPathComponent(item)) where top != "nyxian_r_library" {
+                try? fm.removeItem(at: kept.appendingPathComponent(top))
+            }
+        }
+        for item in (try? fm.contentsOfDirectory(atPath: fresh.path)) ?? [] where item.hasSuffix(".dist-info") && ownDistributions.contains(distributionName(item)) {
+            for top in topLevelItems(ofDistInfo: fresh.appendingPathComponent(item)) {
+                let source = fresh.appendingPathComponent(top)
+                guard fm.fileExists(atPath: source.path) else { continue }
+                try? fm.removeItem(at: kept.appendingPathComponent(top))
+                try? fm.moveItem(at: source, to: kept.appendingPathComponent(top))
+            }
+        }
+    }
+    
     private static func isMachO(_ url: URL) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }
@@ -7723,6 +7768,9 @@ if os.environ.get("NYXIAN_TERMINAL") == "1":
             let bundledList = (try? String(contentsOf: home.appendingPathComponent("BUNDLED_PACKAGES"), encoding: .utf8)) ?? ""
             if fm.fileExists(atPath: kept.path) {
                 progress("Keeping your packages…")
+                /* fork: Nyxian's own packages (R for iOS, rpy2) always come from the new runtime, even
+                   over a copy installed with pip: an update brings their fixes without pip --upgrade */
+                replaceOwnPackages(kept: kept, fresh: sitePackages)
                 /* packages that come with the runtime (numpy, scipy, …) join the kept ones, once per
                    new set — never over a version installed by you, and not again after you uninstalled them */
                 if defaults.string(forKey: bundledMergedKey) != bundledList {
@@ -9609,6 +9657,7 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
 
     private enum Row {
         case console, shell, shellHome, packages, install, examples, notebook, browser, arguments
+        case rConsole, rPackages, rInstall, rScript, rShell, rBuild, rHelp
         case nodeConsole, npmInstall, npmList, nodeReinstall
         case javaShell, javaReinstall
         case folder(String, String, URL)     /* title, symbol, folder */
@@ -9632,7 +9681,11 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
         let python = ForkPython.home
         sections = [
             ("Python \(ForkPython.version)", nil, [.console, .packages, .install, .examples, .notebook]),
-            ("Terminal", "Shell: ls, cd, grep, pipes, python3, pip, jobs (^Z, fg, bg). Arguments: what sys.argv gets for each script (⌥⌘R in the editor).",
+            ("R \(ForkR.version)", ForkR.isInstalled
+                ? "R for iOS (rpy2 inside Python). install.packages() takes CRAN packages built for iOS; one not built yet is built on your Mac (or GitHub's). Plots and help open in the preview."
+                : "R is not installed: pip install nyxian-r (it comes with Nyxian's Python runtime).",
+             [.rConsole, .rPackages, .rInstall, .rScript, .rShell, .rHelp, .rBuild]),
+            ("Terminal", "Shell: ls, cd, grep, pipes, python3, pip, R, Rscript, jobs (^Z, fg, bg). Arguments: what sys.argv gets for each script (⌥⌘R in the editor).",
              [.shell, .shellHome, .arguments]),
             ("Node.js \(ForkNode.version)", "JavaScript without JIT (iOS). ▶ runs .js files; in Shell: node, npm, npx. Packages with native code (.node) or install scripts do not work.",
              [.nodeConsole, .npmInstall, .npmList]),
@@ -9643,6 +9696,8 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
                 .folder("python HOME", "folder", python),
                 .folder("python SITE-PACKAGES", "shippingbox", ForkPython.sitePackages),
                 .folder("python STDLIB", "books.vertical", python.appendingPathComponent("lib/python\(ForkPython.version)")),
+                .folder("R HOME", "chart.xyaxis.line", ForkR.home),
+                .folder("R LIBRARY (install.packages)", "shippingbox", ForkR.library),
                 .folder("node NODE_MODULES (npm install -g)", "shippingbox.fill", ForkNode.globalModules),
                 .folder("node HOME (npm, corepack)", "folder", ForkNode.home),
                 .folder("java HOME (miniJVM, javac)", "cup.and.saucer", ForkJava.home),
@@ -9680,6 +9735,15 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
             let count = UserDefaults.standard.dictionaryRepresentation().keys.filter { $0.hasPrefix("fork.python.args.") }.count
             return ("ARGS", "text.word.spacing", count == 0 ? "No script has arguments yet" : "\(count) script\(count == 1 ? "" : "s") with arguments")
         case .folder(let title, let symbol, let url): return (title, symbol, url.path.replacingOccurrences(of: NXBootstrap.shared().rootURL.path, with: "…"))
+        case .rConsole: return ("R Console", "chart.xyaxis.line", "R \(ForkR.version): plots and help in the preview · q() quits")
+        case .rPackages:
+            let count = ForkR.installedPackages().count
+            return ("R Packages", "shippingbox.circle", count > 0 ? "\(count) installed — see, remove, install" : "See, remove and install CRAN packages")
+        case .rInstall: return ("Install R Package (CRAN)…", "shippingbox", "install.packages() with the dependencies it lacks")
+        case .rScript: return ("Run R Script (.R)…", "doc.text", "Rscript FILE.R — pick a file")
+        case .rShell: return ("Shell in R Library", "apple.terminal", "R, Rscript -e '…', ls your packages")
+        case .rHelp: return ("Search R Help…", "questionmark.circle", "help.search(): topics in your installed packages")
+        case .rBuild: return ("Build R Package for iOS…", "hammer", "On your Mac (or GitHub's): CRAN names, with their dependencies")
         case .about: return ("About This Fork", "info.circle", "doctoralvarez/Nyxian · GitHub · backups · report a problem")
         case .changelog: return ("What's New", "sparkles", nil)
         case .reinstall: return ("Reinstall Python Runtime", "arrow.clockwise", "Unpacks and signs Python again (your packages stay)")
@@ -9732,6 +9796,21 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
         case .folder(_, _, let url):
             try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             navigationController?.pushViewController(FileListViewController(isSublink: true, path: url.path, isReadOnly: true), animated: true)
+        case .rConsole: ForkR.openConsole(from: self)
+        case .rPackages:
+            let manager = UINavigationController(rootViewController: ForkRPackagesViewController())
+            manager.modalPresentationStyle = .formSheet
+            present(manager, animated: true)
+        case .rInstall: ForkR.promptInstall(from: self)
+        case .rScript:
+            let types = [UTType(filenameExtension: "R") ?? .plainText, UTType(filenameExtension: "r") ?? .plainText, .plainText]
+            let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+            picker.delegate = self
+            rScriptPicking = true
+            present(picker, animated: true)
+        case .rShell: ForkPython.openShell(from: self, folder: ForkR.library)
+        case .rHelp: ForkR.promptHelpSearch(from: self)
+        case .rBuild: ForkWheelBuilder.ask(kind: .rpkg, from: self)
         case .about: navigationController?.pushViewController(ForkAboutViewController(style: .insetGrouped), animated: true)
         case .changelog: navigationController?.pushViewController(ForkTextViewController(title: "What's New", text: ForkAboutViewController.changelog()), animated: true)
         case .reinstall: ForkPython.reinstall(from: self)
@@ -9747,9 +9826,272 @@ final class ForkPythonHubViewController: UITableViewController, UIDocumentPicker
         }
     }
 
+    private var rScriptPicking = false
+    
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         guard let url = urls.first else { return }
+        if rScriptPicking {
+            rScriptPicking = false
+            ForkR.runScript(url, from: self)
+            return
+        }
         ForkNotebookViewController.open(url, project: nil, from: self)
+    }
+    
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        rScriptPicking = false
+    }
+}
+
+// MARK: - fork: R for iOS (nyxian-r: R inside Python through rpy2)
+
+enum ForkR {
+    static var home: URL { ForkPython.sitePackages.appendingPathComponent("nyxian_r/R") }
+    /// install.packages() puts packages here: next to Python's, where Nyxian signs binaries
+    static var library: URL { ForkPython.sitePackages.appendingPathComponent("nyxian_r_library") }
+    static var isInstalled: Bool { FileManager.default.fileExists(atPath: home.appendingPathComponent("lib/libR.dylib").path) }
+    static var version: String {
+        let text = (try? String(contentsOf: home.appendingPathComponent("library/base/DESCRIPTION"), encoding: .utf8)) ?? ""
+        return description(text)["Version"] ?? "4.6"
+    }
+    
+    static func description(_ text: String) -> [String: String] {
+        var fields: [String: String] = [:]
+        var key: String?
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            if let first = line.first, first == " " || first == "\t", let key {
+                fields[key, default: ""] += " " + line.trimmingCharacters(in: .whitespaces)
+            } else if let colon = line.firstIndex(of: ":") {
+                key = String(line[..<colon])
+                fields[key!] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return fields
+    }
+    
+    struct Package { let name: String; let version: String; let title: String; let url: URL; let removable: Bool }
+    
+    /// Yours (removable) first, then those that come with R.
+    static func installedPackages(includingBase: Bool = false) -> [Package] {
+        var result: [Package] = []
+        var folders: [(URL, Bool)] = [(library, true)]
+        if includingBase { folders.append((home.appendingPathComponent("library"), false)) }
+        for (folder, removable) in folders {
+            let names = ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).sorted { $0.lowercased() < $1.lowercased() }
+            for name in names {
+                let url = folder.appendingPathComponent(name)
+                guard let text = try? String(contentsOf: url.appendingPathComponent("DESCRIPTION"), encoding: .utf8) else { continue }
+                let fields = description(text)
+                result.append(Package(name: name, version: fields["Version"] ?? "", title: fields["Title"] ?? "", url: url, removable: removable))
+            }
+        }
+        return result
+    }
+    
+    private static func rString(_ text: String) -> String {
+        "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+    }
+    
+    static func openConsole(from presenter: UIViewController) {
+        guard isInstalled else { return notInstalled(presenter) }
+        try? FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        ForkPython.launch(from: presenter, arguments: ["-q", "-m", "nyxian_r"], workingDirectory: ForkPython.rootfs.appendingPathComponent("var/mobile"), title: "R \(version)", closeOnExit: true)
+    }
+    
+    /// Runs R code in a terminal window (where Nyxian's offers — build, new window — work).
+    static func run(_ code: String, title: String, from presenter: UIViewController) {
+        guard isInstalled else { return notInstalled(presenter) }
+        ForkPython.launch(from: presenter, arguments: ["-q", "-m", "nyxian_r", "-e", code], workingDirectory: ForkPython.rootfs.appendingPathComponent("var/mobile"), title: title)
+    }
+    
+    static func install(_ names: [String], from presenter: UIViewController) {
+        let list = names.map(rString).joined(separator: ", ")
+        run("install.packages(c(\(list)))", title: "install.packages", from: presenter)
+    }
+    
+    static func promptInstall(from presenter: UIViewController) {
+        let alert = UIAlertController(title: "Install R Package", message: "CRAN names separated by spaces. Packages already built for iOS install at once with the dependencies they lack; one not built yet is offered for building on your Mac (or GitHub's).", preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "ggplot2 survival"
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Install", style: .default) { [weak alert] _ in
+            let names = (alert?.textFields?.first?.text ?? "").split(whereSeparator: { $0 == " " || $0 == "," }).map(String.init).filter { !$0.isEmpty }
+            guard !names.isEmpty else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { install(names, from: presenter) }
+        })
+        presenter.present(alert, animated: true)
+    }
+    
+    static func promptHelpSearch(from presenter: UIViewController) {
+        let alert = UIAlertController(title: "Search R Help", message: "A word or a topic: help.search() looks through your installed packages; a function name (t.test) opens its page.", preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "regression  ·  t.test"
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Search", style: .default) { [weak alert] _ in
+            let text = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespaces)
+            guard !text.isEmpty else { return }
+            let topic = rString(text)
+            let code = "h <- utils::help(\(topic)); if (length(h)) print(h) else print(utils::help.search(\(topic)))"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { run(code, title: "R Help", from: presenter) }
+        })
+        presenter.present(alert, animated: true)
+    }
+    
+    static func runScript(_ url: URL, from presenter: UIViewController) {
+        guard isInstalled else { return notInstalled(presenter) }
+        let folder = ForkPython.rootfs.appendingPathComponent("var/mobile/Documents/R scripts")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let copy = folder.appendingPathComponent(url.lastPathComponent)
+        try? FileManager.default.removeItem(at: copy)
+        try? FileManager.default.copyItem(at: url, to: copy)
+        ForkPython.launch(from: presenter, arguments: ["-q", "-m", "nyxian_r", copy.path], workingDirectory: folder, title: "Rscript \(url.lastPathComponent)")
+    }
+    
+    static func remove(_ package: Package) throws {
+        try FileManager.default.removeItem(at: package.url)
+    }
+    
+    /// Installed packages of yours that list this one in Depends / Imports / LinkingTo.
+    static func dependents(of name: String) -> [String] {
+        installedPackages().filter { package in
+            guard package.name != name, let text = try? String(contentsOf: package.url.appendingPathComponent("DESCRIPTION"), encoding: .utf8) else { return false }
+            let fields = description(text)
+            let deps = ["Depends", "Imports", "LinkingTo"].compactMap { fields[$0] }.joined(separator: ",")
+            return deps.split(separator: ",").contains { $0.split(separator: "(").first?.trimmingCharacters(in: .whitespaces) == name }
+        }.map(\.name)
+    }
+    
+    private static func notInstalled(_ presenter: UIViewController) {
+        let alert = UIAlertController(title: "R is not installed", message: "R for iOS comes with Nyxian's Python runtime; if it was removed: pip install nyxian-r in Shell.", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        presenter.present(alert, animated: true)
+    }
+}
+
+/// R packages: yours (swipe to remove) and those that come with R; install more.
+final class ForkRPackagesViewController: UITableViewController, UISearchResultsUpdating {
+    private var mine: [ForkR.Package] = []
+    private var base: [ForkR.Package] = []
+    private var filter = ""
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "R Packages"
+        navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .add, primaryAction: UIAction { [weak self] _ in
+            guard let self else { return }
+            ForkR.promptInstall(from: self)
+        })
+        let search = UISearchController(searchResultsController: nil)
+        search.searchResultsUpdater = self
+        search.obscuresBackgroundDuringPresentation = false
+        navigationItem.searchController = search
+        reload()
+    }
+    
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        reload()
+    }
+    
+    private func reload() {
+        let all = ForkR.installedPackages(includingBase: true).filter { filter.isEmpty || $0.name.localizedCaseInsensitiveContains(filter) || $0.title.localizedCaseInsensitiveContains(filter) }
+        mine = all.filter(\.removable)
+        base = all.filter { !$0.removable }
+        tableView.reloadData()
+    }
+    
+    func updateSearchResults(for searchController: UISearchController) {
+        filter = searchController.searchBar.text ?? ""
+        reload()
+    }
+    
+    override func numberOfSections(in tableView: UITableView) -> Int { 2 }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { section == 0 ? max(mine.count, 1) : base.count }
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        section == 0 ? "Installed by you (\(mine.count))" : "Come with R \(ForkR.version) (\(base.count))"
+    }
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        section == 0 ? "Swipe to remove. + installs from CRAN (packages built for iOS); tap one to see its help and details." : nil
+    }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        if indexPath.section == 0 && mine.isEmpty {
+            cell.textLabel?.text = "No packages yet"
+            cell.textLabel?.textColor = .secondaryLabel
+            cell.detailTextLabel?.text = "Tap + to install one (ggplot2, dplyr, survival…)"
+            return cell
+        }
+        let package = indexPath.section == 0 ? mine[indexPath.row] : base[indexPath.row]
+        cell.textLabel?.text = "\(package.name)  \(package.version)"
+        cell.detailTextLabel?.text = package.title
+        cell.detailTextLabel?.textColor = .secondaryLabel
+        cell.detailTextLabel?.numberOfLines = 2
+        cell.imageView?.image = UIImage(systemName: package.removable ? "shippingbox" : "lock.fill")
+        cell.accessoryType = .disclosureIndicator
+        return cell
+    }
+    
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        guard !(indexPath.section == 0 && mine.isEmpty) else { ForkR.promptInstall(from: self); return }
+        let package = indexPath.section == 0 ? mine[indexPath.row] : base[indexPath.row]
+        let sheet = UIAlertController(title: "\(package.name) \(package.version)", message: package.title, preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "Help Index", style: .default) { [weak self] _ in
+            guard let self else { return }
+            ForkR.run("print(utils::help(package = \"\(package.name)\"))", title: "R Help · \(package.name)", from: self)
+        })
+        sheet.addAction(UIAlertAction(title: "Load in R Console", style: .default) { [weak self] _ in
+            guard let self else { return }
+            ForkR.run("library(\(package.name)); cat(\"\(package.name)\", as.character(packageVersion(\"\(package.name)\")), \"loaded\\n\")", title: "R · \(package.name)", from: self)
+        })
+        sheet.addAction(UIAlertAction(title: "Show Files", style: .default) { [weak self] _ in
+            self?.navigationController?.pushViewController(FileListViewController(isSublink: true, path: package.url.path, isReadOnly: true), animated: true)
+        })
+        if package.removable {
+            sheet.addAction(UIAlertAction(title: "Remove", style: .destructive) { [weak self] _ in self?.confirmRemove(package) })
+        }
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        if let popover = sheet.popoverPresentationController, let cell = tableView.cellForRow(at: indexPath) {
+            popover.sourceView = cell
+            popover.sourceRect = cell.bounds
+        }
+        present(sheet, animated: true)
+    }
+    
+    override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard indexPath.section == 0, !mine.isEmpty else { return nil }
+        let package = mine[indexPath.row]
+        let remove = UIContextualAction(style: .destructive, title: "Remove") { [weak self] _, _, done in
+            self?.confirmRemove(package)
+            done(true)
+        }
+        return UISwipeActionsConfiguration(actions: [remove])
+    }
+    
+    private func confirmRemove(_ package: ForkR.Package) {
+        let users = ForkR.dependents(of: package.name)
+        let message = users.isEmpty
+            ? "Removes it from your R library."
+            : "These installed packages use it and will stop loading: \(users.joined(separator: ", "))."
+        let alert = UIAlertController(title: "Remove \(package.name)?", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Remove", style: .destructive) { [weak self] _ in
+            do { try ForkR.remove(package) } catch {
+                let failure = UIAlertController(title: "Could not remove \(package.name)", message: error.localizedDescription, preferredStyle: .alert)
+                failure.addAction(UIAlertAction(title: "OK", style: .default))
+                self?.present(failure, animated: true)
+            }
+            self?.reload()
+        })
+        present(alert, animated: true)
     }
 }
 

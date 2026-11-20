@@ -4,6 +4,18 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.91.0 — 2026-11-19
+
+- Python panel: an **R** section between Python and Terminal — R Console,
+  R Packages (installed by you and those that come with R: search, help
+  index, load, show files, remove — warning which installed packages use
+  it —, + to install), Install R Package (CRAN)…, Run R Script (.R)…,
+  Shell in R Library, Search R Help…, Build R Package for iOS…. R HOME and
+  R LIBRARY in Folders.
+- Updating Nyxian brings R's fixes by itself: Nyxian's own packages
+  (nyxian-r, rpy2) are taken from the new runtime even over a copy
+  installed with pip; no `pip install --upgrade nyxian-r` needed.
+
 ## 1.90.0 — 2026-11-19
 
 - R: help pages (`?lm`, `help(...)`) open as HTML in Nyxian's preview
