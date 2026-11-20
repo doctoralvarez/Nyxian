@@ -1,6 +1,7 @@
 #!/bin/bash
-# Fork doctoralvarez/Nyxian — version 0.2.1
+# Fork doctoralvarez/Nyxian — version 0.2.2
 # Changelog:
+#  - 0.2.2 (2026-11-19): fs builds its bundled libuv (USE_BUNDLED_LIBUV=1).
 #  - 0.2.1 (2026-11-19): cross-compiling is said through a config.site
 #    (CONFIG_SITE: cross_compiling=yes), every autoconf script reads it (the
 #    configure check was cut short by pipefail); CMake builds inside packages
@@ -162,6 +163,8 @@ ios_install() {  # pkg tarball
   case "$pkg" in
     xml2) envs+=("INCLUDE_DIR=$SDK/usr/include/libxml2" "LIB_DIR=$SDK/usr/lib") ;;
     stringi) cargs="--disable-pkg-config" ;;
+    # its configure downloads Homebrew's Mac libuv (autobrew); the bundled one builds for iOS
+    fs) envs+=("USE_BUNDLED_LIBUV=1") ;;
   esac
   env ${envs[@]+"${envs[@]}"} PKG_CONFIG_LIBDIR="$T/pkgconfig-none" PKG_CONFIG_PATH="" \
     CONFIG_SITE="$T/config.site" CMAKE_TOOLCHAIN_FILE="$T/ios-toolchain.cmake" SDKROOT="$SDK" \
