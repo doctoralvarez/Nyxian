@@ -1,5 +1,9 @@
-# Fork doctoralvarez/Nyxian — version 0.1.1
+# Fork doctoralvarez/Nyxian — version 0.2.0
 # Changelog:
+#  - 0.2.0 (2026-11-19): help pages (?topic, help()) as HTML in Nyxian's
+#    preview: rendered here with tools::Rd2HTML (R's help server would need
+#    R's event loop, which the console does not run); options(nyxian.help =
+#    "text") prints them as text instead.
 #  - 0.1.1 (2026-11-19): a replacement that fails is reported and skipped,
 #    never making its package fail to load.
 #  - 0.1.0 (2026-11-19): R inside Nyxian (iOS): an app cannot start other
@@ -135,6 +139,32 @@ local({
   # utils is loaded after this file runs (default packages): replaced when it loads
   if (isNamespaceLoaded("utils")) replace_in("utils", "install.packages", nyx_install)
   setHook(packageEvent("utils", "onLoad"), function(...) replace_in("utils", "install.packages", nyx_install))
+
+  # ---- help pages: HTML in Nyxian's preview ----
+  nyx_help_print <- function(x, ...) {
+    paths <- as.character(x)
+    if (!length(paths) || identical(getOption("nyxian.help"), "text")) return(utils:::print.help_files_with_topic(x, ...))
+    css <- file.path(R.home("doc"), "html", "R.css")
+    shown <- character()
+    for (p in paths) {
+      pkg <- basename(dirname(dirname(p)))
+      out <- file.path(tempdir(), paste0(pkg, "-", basename(p), ".html"))
+      ok <- tryCatch({
+        rd <- utils:::.getHelpFile(p)
+        tools::Rd2HTML(rd, out = out, package = pkg, no_links = TRUE,
+                       stylesheet = if (file.exists(css)) paste0("file://", css) else "R.css")
+        TRUE }, error = function(e) { message("help as HTML: ", conditionMessage(e)); FALSE })
+      if (ok) shown <- c(shown, out)
+    }
+    if (!length(shown)) return(utils:::print.help_files_with_topic(x, ...))
+    for (f in shown) bridge(".nyxian_preview")(f)
+    invisible(x)
+  }
+  use_html_help <- function(...) tryCatch(
+    registerS3method("print", "help_files_with_topic", nyx_help_print, envir = asNamespace("utils")),
+    error = function(e) message("Nyxian: help stays as text (", conditionMessage(e), ")"))
+  if (isNamespaceLoaded("utils")) use_html_help()
+  setHook(packageEvent("utils", "onLoad"), use_html_help)
 
   # ---- the browser, help pages and the pager ----
   options(browser = function(url, ...) bridge(".nyxian_open")(url))

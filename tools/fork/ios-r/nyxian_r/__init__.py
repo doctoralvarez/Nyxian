@@ -1,5 +1,7 @@
-# Fork doctoralvarez/Nyxian — version 0.2.3
+# Fork doctoralvarez/Nyxian — version 0.2.4
 # Changelog:
+#  - 0.2.4 (2026-11-19): ships Rprofile.site 0.2.0 (help pages as HTML in
+#    Nyxian's preview).
 #  - 0.2.3 (2026-11-19): the bridge functions return TRUE, not rpy2's NULL
 #    (plots showed "ValueError: rternalized … NULLType" after opening).
 #  - 0.2.2 (2026-11-19): R starts with no default packages (its own attempt

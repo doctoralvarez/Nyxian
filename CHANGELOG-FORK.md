@@ -4,6 +4,11 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.90.0 — 2026-11-19
+
+- R: help pages (`?lm`, `help(...)`) open as HTML in Nyxian's preview
+  (`options(nyxian.help = "text")` prints them as text).
+
 ## 1.89.3 — 2026-11-19
 
 - R: plots open in the preview without the "ValueError: rternalized …"
