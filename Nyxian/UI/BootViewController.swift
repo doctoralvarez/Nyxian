@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.0
+ Fork doctoralvarez/Nyxian — version 1.5.0
  Changelog:
+  - 1.5.0 (2026-11-20): at launch, ForkBackgroundBuild registers the
+    background build task (iOS asks for it before launch ends).
   - 1.4.0 (2026-11-15): the window starts with Customization › Appearance
     (automatic, light or dark).
   - 1.3.0 (2026-11-10): Recovery › Settings › "Show welcome screen" brings back the
@@ -2888,6 +2890,8 @@ class BootViewController: UIViewController, NXBootHandoffHostDelegate {
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
+        /* fork: builds go on when you leave Nyxian */
+        ForkBackgroundBuild.registerAtLaunch()
         return true
     }
     

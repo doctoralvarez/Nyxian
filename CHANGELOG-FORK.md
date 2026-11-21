@@ -4,6 +4,17 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.97.0 — 2026-11-20
+
+- Builds go on when you leave Nyxian (without closing it). On iOS 26+ it
+  asks iOS for a continued processing task: the build keeps running in the
+  background with its progress in the system's banner ("Building X ·
+  37 %"), and stays a little longer so the app is installed and opened.
+  Before iOS 26: the usual short background time (~30 s). A notification
+  says how it ended (built and running / issues / cancelled) when Nyxian
+  is not in front. iOS may still stop it (low battery, heavy load): then
+  the build goes on when you come back.
+
 ## 1.96.0 — 2026-11-20
 
 - Issue Navigator: a copy button (icon only) on every issue or message row,

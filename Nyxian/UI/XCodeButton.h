@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-20): +forkProgress (0…1, what the circle shows), for the
+    background build's progress.
   - 1.0.0 (2026-11-19): a build percentage next to the hammer (+percentView:
     "37 %" in real time from the same progress the circle draws; "Installing"
     while it installs); informative only, it takes no taps.
@@ -71,6 +73,7 @@
 /* fork: the build's percentage (a label, not a button) for the bar, left of the hammer */
 + (UIView *)percentView;
 + (void)refreshPercent;
++ (double)forkProgress;
 
 @end
 

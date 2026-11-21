@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.13.0
+ Fork doctoralvarez/Nyxian — version 1.14.0
  Changelog:
+  - 1.14.0 (2026-11-20): builds go on when you leave Nyxian (without closing
+    it): ForkBackgroundBuild asks iOS for background time (iOS 26+: a
+    continued processing task, with its progress in the system's banner;
+    before: the usual ~30 s), keeps it until the app is installed and
+    launched, and tells you with a notification when it ends while you are
+    away.
   - 1.13.0 (2026-11-19): while it builds, the bar shows the percentage left
     of the hammer (XCButton.percentView(), informative only).
   - 1.12.0 (2026-11-17): "Build Times" in the Issue Navigator after every
@@ -80,6 +86,8 @@ import Foundation
 import Combine
 import MobileDevelopmentKit
 import CryptoKit
+import BackgroundTasks
+import UserNotifications
 
 final class NXBuilder: NSObject {
     private(set) var project: NXProject
@@ -573,6 +581,8 @@ func buildProjectWithArgumentUI(targetViewController: UIViewController,
         let barButton: UIBarButtonItem = UIBarButtonItem(customView: XCButton.shared())
         
         NXBuilder.builds = true
+        /* fork: it goes on if you leave Nyxian */
+        ForkBackgroundBuild.begin(name: project.projectConfig.displayName ?? "project")
         /* fork: the percentage, left of the hammer (the first item is the rightmost) */
         XCButton.resetProgress()
         let percentItem = UIBarButtonItem(customView: XCButton.percentView())
@@ -613,6 +623,7 @@ func buildProjectWithArgumentUI(targetViewController: UIViewController,
                     restoreUI()
                     
                     NXBuilder.builds = false
+                    ForkBackgroundBuild.finish(result: result, cancelled: cancelled)
                     
                     if cancelled {
                         NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Build cancelled", withDelay: 0.0)
@@ -632,6 +643,115 @@ func buildProjectWithArgumentUI(targetViewController: UIViewController,
                 }
             }
         }
+    }
+}
+
+// MARK: - fork: builds go on in the background
+
+/// While a build runs, Nyxian asks iOS to keep running when you leave it: on iOS 26+ a
+/// continued processing task (the system shows its progress; iOS may still end it, e.g.
+/// on low battery), otherwise UIKit's short background time. It is kept a little after
+/// the build so the app can be installed and opened; a notification says how it ended
+/// when Nyxian is not in front.
+enum ForkBackgroundBuild {
+    private static var uikitTask: UIBackgroundTaskIdentifier = .invalid
+    private static var continuedTask: AnyObject?
+    private static var timer: Timer?
+    private static var name = ""
+    private static var registered = false
+    private static var leftDuringBuild = false
+    private static var observer: NSObjectProtocol?
+
+    /// "<bundle id>.build", when Info.plist allows it (a re-signed copy with another id does not)
+    private static var identifier: String? {
+        guard let bundle = Bundle.main.bundleIdentifier,
+              let allowed = Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String] else { return nil }
+        let id = bundle + ".build"
+        return allowed.contains(id) ? id : nil
+    }
+
+    static func registerAtLaunch() {
+        guard !registered, let id = identifier else { return }
+        if #available(iOS 26.0, *) {
+            registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: id, using: .main) { task in
+                guard let task = task as? BGContinuedProcessingTask, NXBuilder.builds else {
+                    task.setTaskCompleted(success: true)
+                    return
+                }
+                continuedTask = task
+                task.progress.totalUnitCount = 100
+                task.progress.completedUnitCount = Int64(XCButton.forkProgress() * 100)
+                task.expirationHandler = {
+                    /* iOS ends it: Nyxian is suspended; the build goes on when you come back */
+                    if continuedTask === task { continuedTask = nil }
+                    task.setTaskCompleted(success: false)
+                }
+            }
+        }
+        observer = NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
+            if NXBuilder.builds { leftDuringBuild = true }
+        }
+    }
+
+    static func begin(name: String) {
+        self.name = name
+        leftDuringBuild = UIApplication.shared.applicationState != .active
+        if uikitTask == .invalid {
+            uikitTask = UIApplication.shared.beginBackgroundTask(withName: "Nyxian build") { endUIKitTask() }
+        }
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            if settings.authorizationStatus == .notDetermined {
+                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+            }
+        }
+        if #available(iOS 26.0, *), registered, let id = identifier, continuedTask == nil {
+            let request = BGContinuedProcessingTaskRequest(identifier: id, title: "Building \(name)", subtitle: "Nyxian · 0 %")
+            request.strategy = .fail
+            do { try BGTaskScheduler.shared.submit(request) } catch {
+                NSLog("[fork] background build: %@", "\(error)")
+            }
+        }
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in update() }
+    }
+
+    private static func update() {
+        guard #available(iOS 26.0, *), let task = continuedTask as? BGContinuedProcessingTask else { return }
+        let percent = Int64((XCButton.forkProgress() * 100).rounded(.down))
+        if task.progress.completedUnitCount != percent {
+            task.progress.completedUnitCount = percent
+            task.updateTitle("Building \(name)", subtitle: "Nyxian · \(percent) %")
+        }
+    }
+
+    static func finish(result: Bool, cancelled: Bool) {
+        timer?.invalidate()
+        timer = nil
+        if #available(iOS 26.0, *), let task = continuedTask as? BGContinuedProcessingTask {
+            task.progress.completedUnitCount = 100
+            task.updateTitle(cancelled ? "Build cancelled" : (result ? "Built \(name)" : "Build failed"),
+                             subtitle: result ? "Opening it in Nyxian" : "Open Nyxian to see the issues")
+            task.setTaskCompleted(success: result && !cancelled)
+        }
+        continuedTask = nil
+        if leftDuringBuild || UIApplication.shared.applicationState != .active {
+            let content = UNMutableNotificationContent()
+            content.title = cancelled ? "Build cancelled" : (result ? "✅ \(name) built" : "❌ \(name) did not build")
+            content.body = cancelled ? name : (result ? "It is installed and running: open Nyxian to see it." : "Open Nyxian to see the issues.")
+            content.sound = .default
+            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "fork.build", content: content, trigger: nil))
+        }
+        leftDuringBuild = false
+        /* a little longer, so the app is installed and opened before iOS suspends Nyxian */
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+            if !NXBuilder.builds { endUIKitTask() }
+        }
+    }
+
+    private static func endUIKitTask() {
+        guard uikitTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(uikitTask)
+        uikitTask = .invalid
     }
 }
 

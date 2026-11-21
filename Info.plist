@@ -137,5 +137,14 @@
 	</array>
 	<key>_EXIgnoreHostAppStateChanges</key>
 	<true/>
+	<!-- fork: builds go on in the background (BGContinuedProcessingTask, iOS 26) -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).build</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>processing</string>
+	</array>
 </dict>
 </plist>
