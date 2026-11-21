@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.17.2
+ Fork doctoralvarez/Nyxian — version 1.18.0
  Changelog:
+  - 1.18.0 (2026-11-20): an Import button (square.and.arrow.down) in the top
+    bar, left of the "⋯" menu, in a project's folders and subfolders; the
+    menu keeps its Import too (both open the same picker).
   - 1.17.2 (2026-11-20): "All" / "None" moves to the top bar, at the right
     (where + was, which is off while selecting): in the iPad's side column
     the bottom bar still had no room for it. The bottom bar keeps Delete,
@@ -250,11 +253,18 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
         }
         
         if !self.isReadOnly {
+            let menuItem: UIBarButtonItem
             if #available(iOS 26.0, *) {
-                self.navigationItem.setRightBarButton(UIBarButtonItem(image: UIImage(systemName: "ellipsis.circle.fill"), primaryAction: nil, menu: generateMenu()), animated: false)
+                menuItem = UIBarButtonItem(image: UIImage(systemName: "ellipsis.circle.fill"), primaryAction: nil, menu: generateMenu())
             } else {
-                self.navigationItem.setRightBarButton(UIBarButtonItem(image: UIImage(systemName: "ellipsis.circle"), primaryAction: nil, menu: generateMenu()), animated: false)
+                menuItem = UIBarButtonItem(image: UIImage(systemName: "ellipsis.circle"), primaryAction: nil, menu: generateMenu())
             }
+            /* fork 1.18: Import, left of the menu (the first item is the rightmost) */
+            let importItem = UIBarButtonItem(image: UIImage(systemName: "square.and.arrow.down"), primaryAction: UIAction { [weak self] _ in
+                self?.forkPresentImporter()
+            })
+            importItem.accessibilityLabel = "Import"
+            self.navigationItem.setRightBarButtonItems([menuItem, importItem], animated: false)
         }
     }
 
@@ -273,7 +283,7 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
             /* fork 1.17.2: the top bar's right side shows All / None while selecting */
             forkSavedRightItems = navigationItem.rightBarButtonItems
         }
-        navigationItem.rightBarButtonItem?.isEnabled = !isSelecting
+        navigationItem.rightBarButtonItems?.forEach { $0.isEnabled = !isSelecting }
 
         if isSelecting {
             /* fork: the usual actions for what is selected — delete, copy, cut (move),
@@ -583,6 +593,15 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
         present(alert, animated: true)
     }
     
+    /// fork 1.18: the Import picker (top bar button and menu)
+    func forkPresentImporter() {
+        let documentPicker: UIDocumentPickerViewController = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
+        documentPicker.allowsMultipleSelection = true
+        documentPicker.modalPresentationStyle = .formSheet
+        documentPicker.delegate = self
+        self.present(documentPicker, animated: true)
+    }
+
     func generateMenu() -> UIMenu {
         var rootMenuChildren: [UIMenu] = []
         
@@ -748,12 +767,7 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
                 }
             }))
             fileMenuElements.append(UIAction(title: "Import", image: UIImage(systemName: "square.and.arrow.down.fill")) { [weak self] _ in
-                guard let self = self else { return }
-                let documentPicker: UIDocumentPickerViewController = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
-                documentPicker.allowsMultipleSelection = true
-                documentPicker.modalPresentationStyle = .formSheet
-                documentPicker.delegate = self
-                self.present(documentPicker, animated: true)
+                self?.forkPresentImporter()
             })
             fileMenuElements.append(UIAction(title: "Select", image: UIImage(systemName: "checkmark.circle.fill")) { [weak self] _ in
                 guard let self = self else { return }

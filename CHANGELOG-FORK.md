@@ -4,6 +4,11 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.98.0 — 2026-11-20
+
+- In a project (folders and subfolders), an Import button in the top bar,
+  left of the "⋯" menu. The menu keeps its Import too.
+
 ## 1.97.0 — 2026-11-20
 
 - Builds go on when you leave Nyxian (without closing it). On iOS 26+ it
