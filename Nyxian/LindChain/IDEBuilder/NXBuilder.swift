@@ -653,7 +653,8 @@ func buildProjectWithArgumentUI(targetViewController: UIViewController,
 /// on low battery), otherwise UIKit's short background time. It is kept a little after
 /// the build so the app can be installed and opened; a notification says how it ended
 /// when Nyxian is not in front.
-enum ForkBackgroundBuild {
+/* an Objective-C class: the app delegate (another module) finds it by name at launch */
+@objc(ForkBackgroundBuild) final class ForkBackgroundBuild: NSObject {
     private static var uikitTask: UIBackgroundTaskIdentifier = .invalid
     private static var continuedTask: AnyObject?
     private static var timer: Timer?
@@ -670,7 +671,7 @@ enum ForkBackgroundBuild {
         return allowed.contains(id) ? id : nil
     }
 
-    static func registerAtLaunch() {
+    @objc static func registerAtLaunch() {
         guard !registered, let id = identifier else { return }
         if #available(iOS 26.0, *) {
             registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: id, using: .main) { task in

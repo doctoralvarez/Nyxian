@@ -2891,7 +2891,10 @@ class BootViewController: UIViewController, NXBootHandoffHostDelegate {
 class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         /* fork: builds go on when you leave Nyxian */
-        ForkBackgroundBuild.registerAtLaunch()
+        /* (ForkBackgroundBuild lives in NXBuilder.swift, another module: found by name) */
+        if let type = NSClassFromString("ForkBackgroundBuild") as? NSObject.Type {
+            _ = type.perform(NSSelectorFromString("registerAtLaunch"))
+        }
         return true
     }
     
