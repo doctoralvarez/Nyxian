@@ -4,6 +4,18 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.0.0 — 2026-11-21
+
+- Projects list › hold a project › "Rename…" (next to Export and Set App
+  Icon…): the new name is saved in Config/Project.plist (NXDisplayName,
+  and the app's CFBundleDisplayName / CFBundleName where they held the old
+  name) and shows at once in the list and inside the project; the app takes
+  it on its next build.
+- Playgrounds Sync renames the project's .swiftpm too (and its
+  Package.swift), and writes the move in the folder's .nyxian-renames.json:
+  your other devices follow the package to its new name (and take the new
+  name from it) instead of taking it as deleted.
+
 ## 1.99.0 — 2026-11-21
 
 - In a project (folders and subfolders), a Select button in the top bar,

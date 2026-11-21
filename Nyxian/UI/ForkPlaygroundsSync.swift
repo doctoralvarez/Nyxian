@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-21): a project renamed in Nyxian (Rename… in the projects
+    list) renames its .swiftpm in the Playgrounds folder too (its
+    Package.swift gets the new name on the same sync). The move is written
+    in the folder's .nyxian-renames.json, so your other devices follow the
+    package to its new name instead of taking it as deleted in Playgrounds.
   - 1.2.0 (2026-11-20): Nyxian ↔ Nyxian on several devices (same
     Playgrounds folder) keeps projects identical. Each package carries an
     exact copy of the Nyxian project in its hidden .nyxian folder (Config,
@@ -115,6 +120,8 @@ final class ForkPlaygroundsSync {
         var lastSummary: String?
         /// fork 1.2: project key → "push" (this device's version wins) or "pull" (the package's)
         var forced: [String: String] = [:]
+        /// fork 1.3: project keys renamed by hand: their package follows the name on the next sync
+        var renamedProjects: Set<String> = []
 
         init() {}
 
@@ -129,6 +136,7 @@ final class ForkPlaygroundsSync {
             lastSync = try c.decodeIfPresent(Date.self, forKey: .lastSync)
             lastSummary = try c.decodeIfPresent(String.self, forKey: .lastSummary)
             forced = try c.decodeIfPresent([String: String].self, forKey: .forced) ?? [:]
+            renamedProjects = try c.decodeIfPresent(Set<String>.self, forKey: .renamedProjects) ?? []
         }
     }
 
@@ -235,6 +243,14 @@ final class ForkPlaygroundsSync {
         self.state = state
     }
 
+    /// fork 1.3: the project was renamed: its package takes the new name on the next sync.
+    func markRenamed(projectKey: String) {
+        var state = self.state
+        guard state.pairs[projectKey] != nil else { return }
+        state.renamedProjects.insert(projectKey)
+        self.state = state
+    }
+
     /// fork 1.2: the next sync sends this device's version ("push") or takes the package's ("pull").
     func force(_ direction: String, projectKey: String) {
         var state = self.state
@@ -315,6 +331,10 @@ final class ForkPlaygroundsSync {
                     for (key, direction) in snapshot.forced where working.forced[key] == nil && fresh.forced[key] == direction {
                         fresh.forced.removeValue(forKey: key)
                     }
+                    /* renames this sync carried out */
+                    for key in snapshot.renamedProjects where !working.renamedProjects.contains(key) {
+                        fresh.renamedProjects.remove(key)
+                    }
                     if working.bookmark != snapshot.bookmark { fresh.bookmark = working.bookmark }
                 }
                 if failure == nil {
@@ -384,12 +404,23 @@ final class ForkPlaygroundsSync {
         var byKey: [String: NXProject] = [:]
         for project in projects { byKey[Self.key(of: project)] = project }
 
+        /* fork 1.3: packages renamed from Nyxian (here or on another device) */
+        let renames = readRenames(in: folder)
+
         /* deletions never cross over */
         for (key, pair) in state.pairs {
             if byKey[key] == nil {
                 state.pairs.removeValue(forKey: key)
                 state.ignoredPackages.insert(pair.package)
                 report.stopped.append(pair.package.replacingOccurrences(of: ".swiftpm", with: "") + " (deleted in Nyxian)")
+            } else if !packages.contains(pair.package),
+                      let renamed = renames.flatMap({ Self.follow($0, from: pair.package) }), packages.contains(renamed),
+                      !state.pairs.values.contains(where: { $0.package == renamed }) {
+                /* fork 1.3: renamed from Nyxian on another device: the pair follows it */
+                state.pairs[key]?.package = renamed
+            } else if !packages.contains(pair.package) && renames == nil {
+                /* the renames file is still downloading: decide next time */
+                report.waiting.append(Self.name(of: byKey[key]!))
             } else if !packages.contains(pair.package) {
                 state.pairs.removeValue(forKey: key)
                 state.excludedProjects.insert(key)
@@ -418,7 +449,7 @@ final class ForkPlaygroundsSync {
             let key = Self.key(of: project)
             let name = Self.name(of: project)
 
-            guard let pair = state.pairs[key] else {
+            guard var pair = state.pairs[key] else {
                 /* a project Playgrounds does not have yet */
                 var packageName = Self.packageName(of: project)
                 var counter = 2
@@ -439,6 +470,30 @@ final class ForkPlaygroundsSync {
                     report.problems.append("\(name): \(error.localizedDescription) Its sync was turned off; turn it back on in Playgrounds Sync when it is ready.")
                 }
                 continue
+            }
+
+            /* fork 1.3: renamed by hand: its package takes the new name first */
+            if state.renamedProjects.contains(key) {
+                let desired = Self.packageName(of: project)
+                if desired == pair.package {
+                    state.renamedProjects.remove(key)
+                } else if !usedNames.contains(desired), !state.ignoredPackages.contains(desired) {
+                    do {
+                        try movePackage(folder.appendingPathComponent(pair.package), to: folder.appendingPathComponent(desired))
+                        recordRename(from: pair.package, to: desired, in: folder)
+                        usedNames.remove(pair.package)
+                        usedNames.insert(desired)
+                        pair.package = desired
+                        state.pairs[key] = pair
+                        state.renamedProjects.remove(key)
+                    } catch {
+                        report.problems.append("\(name): its package could not be renamed (\(error.localizedDescription)); it keeps \(pair.package).")
+                        state.renamedProjects.remove(key)
+                    }
+                } else {
+                    /* that name is taken in Playgrounds: the package keeps its name */
+                    state.renamedProjects.remove(key)
+                }
             }
 
             let packageURL = folder.appendingPathComponent(pair.package)
@@ -893,6 +948,72 @@ final class ForkPlaygroundsSync {
     }
 
     /// The package name SwiftPlaygroundsExporter gives the project.
+    // MARK: fork 1.3 — renamed packages
+
+    static let renamesFile = ".nyxian-renames.json"
+
+    /// old package name → new one, following several renames (nil: none known)
+    static func follow(_ renames: [String: String], from package: String) -> String? {
+        var current = package
+        var seen: Set<String> = [package]
+        while let next = renames[current], !seen.contains(next) {
+            seen.insert(next)
+            current = next
+        }
+        return current == package ? nil : current
+    }
+
+    /// nil while iCloud has not downloaded the file yet
+    private func readRenames(in folder: URL) -> [String: String]? {
+        let fm = FileManager.default
+        let url = folder.appendingPathComponent(Self.renamesFile)
+        let placeholder = folder.appendingPathComponent("." + Self.renamesFile + ".icloud")
+        if !fm.fileExists(atPath: url.path) {
+            if fm.fileExists(atPath: placeholder.path) {
+                try? fm.startDownloadingUbiquitousItem(at: url)
+                return nil
+            }
+            return [:]
+        }
+        var result: [String: String] = [:]
+        var coordinationError: NSError?
+        NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: url, options: [], error: &coordinationError) { readURL in
+            if let data = try? Data(contentsOf: readURL),
+               let map = try? JSONDecoder().decode([String: String].self, from: data) {
+                result = map
+            }
+        }
+        return result
+    }
+
+    private func recordRename(from old: String, to new: String, in folder: URL) {
+        var map = readRenames(in: folder) ?? [:]
+        map[old] = new
+        /* a name used again later is no longer an old one */
+        map.removeValue(forKey: new)
+        guard let data = try? JSONEncoder().encode(map) else { return }
+        let url = folder.appendingPathComponent(Self.renamesFile)
+        var coordinationError: NSError?
+        NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { writeURL in
+            try? data.write(to: writeURL, options: .atomic)
+        }
+    }
+
+    private func movePackage(_ source: URL, to destination: URL) throws {
+        var coordinationError: NSError?
+        var moveError: Error?
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        coordinator.coordinate(writingItemAt: source, options: .forMoving, writingItemAt: destination, options: .forReplacing, error: &coordinationError) { from, to in
+            do {
+                try FileManager.default.moveItem(at: from, to: to)
+                coordinator.item(at: from, didMoveTo: to)
+            } catch {
+                moveError = error
+            }
+        }
+        if let error = coordinationError ?? moveError { throw error }
+    }
+
     static func packageName(of project: NXProject) -> String {
         var base = Self.name(of: project).replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
         if base.isEmpty { base = "App" }

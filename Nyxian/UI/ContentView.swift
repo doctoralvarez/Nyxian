@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.49.0
+ Fork doctoralvarez/Nyxian — version 1.50.0
  Changelog:
+  - 1.50.0 (2026-11-21): projects list › hold a project › "Rename…": the new
+    name goes into Config/Project.plist (NXDisplayName, and the app's
+    CFBundleDisplayName / CFBundleName when they held the old name), shows
+    at once in the list and inside the project, and Playgrounds Sync
+    renames its .swiftpm (Package.swift too) on the next sync.
   - 1.49.0 (2026-11-20): projects list, selection mode (also after the
     two-finger slide): Copy and Paste buttons (Paste makes copies of the
     copied projects, with names and bundle IDs of their own), and "All"
@@ -725,6 +730,53 @@ import Network
     
     // MARK: fork — pull to refresh, select several (two fingers) and act on them
 
+    /// fork 1.50: a new name for the project (list, inside it, its app and its .swiftpm)
+    private func forkPromptRename(_ project: NXProject) {
+        let old = project.projectConfig.displayName ?? ""
+        let alert = UIAlertController(title: "Rename Project", message: "The new name shows in the list, inside the project and in Swift Playgrounds; the app takes it on its next build.", preferredStyle: .alert)
+        alert.addTextField { field in
+            field.text = old
+            field.clearButtonMode = .whileEditing
+            field.autocapitalizationType = .words
+            field.returnKeyType = .done
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Rename", style: .default) { [weak self, weak alert] _ in
+            let name = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let self, !name.isEmpty, name != old else { return }
+            self.forkRename(project, from: old, to: name)
+        })
+        present(alert, animated: true)
+    }
+
+    private func forkRename(_ project: NXProject, from old: String, to name: String) {
+        let plistURL = project.url.appendingPathComponent("Config/Project.plist")
+        guard let data = try? Data(contentsOf: plistURL),
+              var plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else {
+            NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Could not read the project's Config/Project.plist", withDelay: 0.0)
+            return
+        }
+        plist["NXDisplayName"] = name
+        /* the app's own names, where they held the old one ("$(NXDisplayName)" follows by itself) */
+        if var info = plist["NXBundleInfo"] as? [String: Any] {
+            for key in ["CFBundleDisplayName", "CFBundleName"] where (info[key] as? String) == old {
+                info[key] = name
+            }
+            plist["NXBundleInfo"] = info
+        }
+        guard let output = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0),
+              (try? output.write(to: plistURL, options: .atomic)) != nil else {
+            NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Could not save the new name", withDelay: 0.0)
+            return
+        }
+        _ = project.reload()
+        /* Playgrounds: its .swiftpm follows on the next sync */
+        ForkPlaygroundsSync.shared.markRenamed(projectKey: ForkPlaygroundsSync.key(of: project))
+        forkRefreshProjects()
+        NXAlertDiagnosticPresenter.notifyUser(with: .note, withMessage: "Renamed to \(name)", withDelay: 0.0)
+        forkPlaygroundsAutoSync()
+    }
+
     @objc private func forkRefreshProjects() {
         /* instant: icons drawn before are dropped, so a new icon shows now */
         ForkProjectIconLookup.clear()
@@ -1117,13 +1169,18 @@ import Network
                 guard let project = self.forkProject(at: indexPath) else { return }
                 self.forkPresentPicker(.appIcon(project))
             }
+            /* fork 1.50: rename */
+            let rename: UIAction = UIAction(title: "Rename…", image: UIImage(systemName: "pencil")) { _ in
+                guard let project = self.forkProject(at: indexPath) else { return }
+                self.forkPromptRename(project)
+            }
             
             let showInFiles: UIAction = UIAction(title: "Show in Files", image: UIImage(systemName: "folder")) { _ in
                 guard let project = self.forkProject(at: indexPath) else { return }
                 ForkFilesApp.open(project.url, from: self)
             }
             
-            return UIMenu(children: [export, exportSwiftPM, updateSwiftPM, setIcon, showInFiles, item])
+            return UIMenu(children: [export, exportSwiftPM, updateSwiftPM, setIcon, rename, showInFiles, item])
         }
     }
     
