@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.18.0
+ Fork doctoralvarez/Nyxian — version 1.19.0
  Changelog:
+  - 1.19.0 (2026-11-21): a Select button (checkmark.circle) left of Import in
+    the top bar: it starts selection like the menu's Select (also kept), with
+    "All" / "None" at the top right and the bottom bar.
   - 1.18.0 (2026-11-20): an Import button (square.and.arrow.down) in the top
     bar, left of the "⋯" menu, in a project's folders and subfolders; the
     menu keeps its Import too (both open the same picker).
@@ -264,7 +267,13 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
                 self?.forkPresentImporter()
             })
             importItem.accessibilityLabel = "Import"
-            self.navigationItem.setRightBarButtonItems([menuItem, importItem], animated: false)
+            /* fork 1.19: Select, left of Import */
+            let selectItem = UIBarButtonItem(image: UIImage(systemName: "checkmark.circle"), primaryAction: UIAction { [weak self] _ in
+                guard let self, !self.isSelecting else { return }
+                self.toggleSelectionMode()
+            })
+            selectItem.accessibilityLabel = "Select"
+            self.navigationItem.setRightBarButtonItems([menuItem, importItem, selectItem], animated: false)
         }
     }
 

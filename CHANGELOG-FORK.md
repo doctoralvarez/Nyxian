@@ -4,6 +4,12 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 1.99.0 — 2026-11-21
+
+- In a project (folders and subfolders), a Select button in the top bar,
+  left of Import: it starts selection (with "All" / "None"), like the
+  menu's Select, which stays.
+
 ## 1.98.0 — 2026-11-20
 
 - In a project (folders and subfolders), an Import button in the top bar,
