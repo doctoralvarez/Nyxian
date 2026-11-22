@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.22.0
+ Fork doctoralvarez/Nyxian — version 1.23.0
  Changelog:
+  - 1.23.0 (2026-11-22): the copies made for previews also drop a widget's
+    #Preview(as: .systemSmall) { … } timeline: { … } whole (its trailing
+    timeline: block made the copy not compile).
   - 1.22.0 (2026-11-18): iPad-only layout checks now ask
       NXForkIsPadLayout(), so iPhone Duo's large inner screen gets the iPad
       layout too.
@@ -3434,7 +3437,13 @@ enum ForkSwiftUIPreview {
         guard let regex = try? NSRegularExpression(pattern: #"#Preview\s*(\([^)]*\))?\s*\{"#) else { return text }
         while let match = regex.firstMatch(in: ns as String, range: NSRange(location: 0, length: ns.length)) {
             let open = NSMaxRange(match.range) - 1
-            guard let close = matchingBrace(in: ns, open: open) else { break }
+            guard var close = matchingBrace(in: ns, open: open) else { break }
+            /* fork 1.23.0: a widget's #Preview(as: .systemSmall) { … } timeline: { … } goes whole */
+            if let trailing = try? NSRegularExpression(pattern: #"^\s*(timeline|timelineProvider|widget)\s*:\s*\{"#),
+               let more = trailing.firstMatch(in: ns as String, options: [.anchored], range: NSRange(location: close + 1, length: ns.length - close - 1)),
+               let end = matchingBrace(in: ns, open: NSMaxRange(more.range) - 1) {
+                close = end
+            }
             ns = ns.replacingCharacters(in: NSRange(location: match.range.location, length: close - match.range.location + 1), with: "") as NSString
         }
         return ns as String

@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.15.1
+ Fork doctoralvarez/Nyxian — version 1.16.0
  Changelog:
+  - 1.16.0 (2026-11-22): ▶ on a widget extension opens a gallery of its
+    widgets (ForkWidgetPreview): a copy of it built as an app, with the views
+    listed in NyxianWidgetPreviews at each family's size, light or dark, and
+    the App Groups of the apps that embed it.
   - 1.15.1 (2026-11-22): the exported app and its extensions carry the
     Info.plist keys Xcode always writes and Nyxian did not:
     CFBundlePackageType (APPL / XPC!), CFBundleInfoDictionaryVersion,
@@ -204,7 +208,8 @@ final class NXBuilder: NSObject {
         
         /* fork 1.15: a widget extension is built into its app (Export), it does not run by itself */
         if buildType == .run, let point = ForkEmbeddedExtensions.extensionPoint(of: self.project) {
-            throw NSError(domain: "com.cr4zy.nyxian.builder.headsup", code: 1, userInfo: [NSLocalizedDescriptionKey: "\"\(self.project.projectConfig.displayName ?? "This project")\" is an app extension (\(point)): it goes into its app's .ipa (the app's Export › Extensions) and does not run by itself. To look at its widgets inside Nyxian, use a gallery app that shows its views."])
+            /* fork 1.16: ▶ builds ForkWidgetPreview's gallery instead; this is only reached otherwise */
+            throw NSError(domain: "com.cr4zy.nyxian.builder.headsup", code: 1, userInfo: [NSLocalizedDescriptionKey: "\"\(self.project.projectConfig.displayName ?? "This project")\" is an app extension (\(point)): it goes into its app's .ipa (the app's Export › Extensions) and does not run by itself. ▶ in its project opens a gallery of its widgets."])
         }
 
         // Project requirement check
@@ -902,6 +907,348 @@ extension NXBuilder {
             self.database.addMessage(message: "Included the extension \(name) as PlugIns/\(destination.lastPathComponent) (\(extensionID))", severity: .note)
         }
     }
+}
+
+// MARK: - fork 1.16: Run on a widget extension opens a gallery of its widgets
+
+/// ▶ on an extension project (NXExtensionPoint) builds a copy of it as an app
+/// ("<Name> Widgets", bundle ID <its ID>.widgetpreview) whose only window is a
+/// gallery: every widget view the code lists in NyxianWidgetPreviews, at the
+/// size of its family, light or dark. The copy gets the App Groups of the apps
+/// that embed the extension, so it reads the same data the real widget would.
+enum ForkWidgetPreview {
+    static let flag = "NYXIAN_WIDGET_PREVIEW"
+    static let generatedFileName = "__NyxianWidgetGallery.swift"
+
+    static func isExtension(_ project: NXProject) -> Bool {
+        ForkEmbeddedExtensions.extensionPoint(of: project) != nil
+    }
+
+    private static func folder(_ ext: NXProject) -> URL {
+        NXBootstrap.shared().rootURL.appendingPathComponent("Previews")
+            .appendingPathComponent((ext.url as URL).lastPathComponent + "-WidgetPreview")
+    }
+
+    /// The project that ▶ builds and opens: the gallery for an extension, the project itself otherwise.
+    static func runnable(_ project: NXProject) throws -> NXProject {
+        isExtension(project) ? try makeProject(for: project) : project
+    }
+
+    /// Bundle ID of what ▶ opens for this project (App Preview, the switcher).
+    static func runBundleID(_ project: NXProject) -> String {
+        let id = project.projectConfig.bundleid ?? ""
+        return isExtension(project) && !id.isEmpty ? id + ".widgetpreview" : id
+    }
+
+    /// Apps whose Export takes this extension in (NXEmbeddedExtensions)
+    private static func hostApps(of ext: NXProject) -> [NXProject] {
+        let name = (ext.url as URL).lastPathComponent
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(at: ForkEmbeddedExtensions.projectsURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return [] }
+        return items.compactMap { url -> NXProject? in
+            guard url.lastPathComponent != name,
+                  let data = try? Data(contentsOf: url.appendingPathComponent("Config/Project.plist")),
+                  let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
+                  ((plist[ForkEmbeddedExtensions.listKey] as? [String]) ?? []).contains(name) else { return nil }
+            return NXProject(url: url)
+        }
+    }
+
+    private static func write(_ data: Data, to url: URL) throws {
+        if let existing = try? Data(contentsOf: url), existing == data { return }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: url, options: .atomic)
+    }
+
+    static func makeProject(for ext: NXProject) throws -> NXProject {
+        let fm = FileManager.default
+        let source: URL = ext.url
+        let destination = folder(ext)
+        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+
+        /* the sources, with no @main (the gallery is the app) and no #Preview blocks */
+        var keep: Set<String> = ["Config/Project.plist", "Config/AppEntitlements.plist", generatedFileName]
+        var listsPreviews = false
+        if let enumerator = fm.enumerator(at: source, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
+            for case let url as URL in enumerator {
+                guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+                let relative = ProjectFileIndex.relativePath(url, root: source)
+                if keep.contains(relative) || relative == "Config/GitHub.plist" { continue }
+                var data = (try? Data(contentsOf: url)) ?? Data()
+                if url.pathExtension == "swift" {
+                    let text = LiveEditorRegistry.editor(forPath: url.path)?.textView.text ?? String(data: data, encoding: .utf8) ?? ""
+                    if text.range(of: #"extension\s+NyxianWidgetPreviews\b"#, options: .regularExpression) != nil { listsPreviews = true }
+                    var copy = text.replacingOccurrences(of: #"@main\b"#, with: "", options: .regularExpression)
+                    copy = ForkSwiftUIPreview.strippingPreviews(copy)
+                    data = Data(copy.utf8)
+                }
+                keep.insert(relative)
+                try write(data, to: destination.appendingPathComponent(relative))
+            }
+        }
+        if let enumerator = fm.enumerator(at: destination, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
+            for case let url as URL in enumerator {
+                guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+                if !keep.contains(ProjectFileIndex.relativePath(url, root: destination)) { try? fm.removeItem(at: url) }
+            }
+        }
+
+        /* an app of its own: not an extension, its own bundle ID, -D NYXIAN_WIDGET_PREVIEW */
+        let plistData = try Data(contentsOf: source.appendingPathComponent("Config/Project.plist"))
+        guard var plist = try PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any] else { throw CocoaError(.fileReadCorruptFile) }
+        let name = (plist["NXDisplayName"] as? String) ?? ext.projectConfig.displayName ?? "Widget"
+        plist.removeValue(forKey: ForkEmbeddedExtensions.pointKey)
+        plist.removeValue(forKey: ForkEmbeddedExtensions.listKey)
+        plist["NXBundleIdentifier"] = runBundleID(ext)
+        plist["NXDisplayName"] = name + " Widgets"
+        plist["NXOutputPath"] = "$(CACHEROOT)/Payload/$(NXExecutable).app/$(NXExecutable)"
+        if var info = plist["NXBundleInfo"] as? [String: Any] {
+            info.removeValue(forKey: "NSExtension")
+            plist["NXBundleInfo"] = info
+        }
+        var swiftFlags = (plist["NXSwiftFlags"] as? [String]) ?? []
+        if !swiftFlags.contains("-D" + flag) { swiftFlags.append("-D" + flag) }
+        plist["NXSwiftFlags"] = swiftFlags
+        try write(try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0), to: destination.appendingPathComponent("Config/Project.plist"))
+
+        /* the App Groups of the extension and of the apps that embed it: the same shared data */
+        var entitlements = ForkAppEntitlements.read(ext)
+        var groups = entitlements["com.apple.security.application-groups"] as? [String] ?? []
+        for app in hostApps(of: ext) {
+            for group in ForkAppEntitlements.read(app)["com.apple.security.application-groups"] as? [String] ?? [] where !groups.contains(group) {
+                groups.append(group)
+            }
+        }
+        if !groups.isEmpty { entitlements["com.apple.security.application-groups"] = groups }
+        try write(try PropertyListSerialization.data(fromPropertyList: entitlements, format: .xml, options: 0), to: destination.appendingPathComponent("Config/AppEntitlements.plist"))
+
+        let gallery = galleryTemplate
+            .replacingOccurrences(of: "__NAME__", with: name.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))
+            .replacingOccurrences(of: "__EMPTY_LIST__", with: listsPreviews ? "" : "extension NyxianWidgetPreviews {\n    static var all: [NyxianWidgetPreview] { [] }\n}\n")
+        try write(Data(gallery.utf8), to: destination.appendingPathComponent(generatedFileName))
+
+        guard let project = NXProject(url: destination) else { throw CocoaError(.fileReadCorruptFile) }
+        return project
+    }
+
+    private static let galleryTemplate: String = #"""
+    // Generated by Nyxian: the gallery that ▶ opens for the widget extension "__NAME__".
+    // Not part of your project and not in the .ipa.
+    import SwiftUI
+    import WidgetKit
+
+    /// One widget view in Nyxian's gallery. List them in your extension, only for the gallery:
+    ///
+    ///     #if NYXIAN_WIDGET_PREVIEW
+    ///     extension NyxianWidgetPreviews {
+    ///         static var all: [NyxianWidgetPreview] { [
+    ///             NyxianWidgetPreview("Example", family: .systemSmall) { MyWidgetView(entry: .example) },
+    ///         ] }
+    ///     }
+    ///     #endif
+    struct NyxianWidgetPreview: Identifiable {
+        let id: String
+        let name: String
+        let family: WidgetFamily
+        let content: () -> AnyView
+        init<V: View>(_ name: String, family: WidgetFamily, @ViewBuilder _ content: @escaping () -> V) {
+            self.id = name + "|" + String(describing: family)
+            self.name = name
+            self.family = family
+            self.content = { AnyView(content()) }
+        }
+    }
+
+    enum NyxianWidgetPreviews {}
+
+    __EMPTY_LIST__
+    @main
+    struct __NyxianWidgetGalleryApp: App {
+        var body: some Scene {
+            WindowGroup { __NyxianWidgetGallery() }
+        }
+    }
+
+    private enum __Look: String, CaseIterable, Identifiable {
+        case system = "System", light = "Light", dark = "Dark"
+        var id: String { rawValue }
+        var scheme: ColorScheme? { self == .light ? .light : self == .dark ? .dark : nil }
+    }
+
+    private enum __Place: String, CaseIterable, Identifiable {
+        case all = "All", home = "Home Screen", lock = "Lock Screen"
+        var id: String { rawValue }
+    }
+
+    private func __isAccessory(_ family: WidgetFamily) -> Bool {
+        switch family {
+        case .accessoryCircular, .accessoryRectangular, .accessoryInline: return true
+        default: return false
+        }
+    }
+
+    /// Point sizes of an iPhone 6.1" (iPhone 15/16 Pro); other devices differ a little.
+    private func __size(_ family: WidgetFamily) -> CGSize {
+        switch family {
+        case .systemSmall: return CGSize(width: 158, height: 158)
+        case .systemMedium: return CGSize(width: 338, height: 158)
+        case .systemLarge: return CGSize(width: 338, height: 354)
+        case .systemExtraLarge: return CGSize(width: 715, height: 354)
+        case .accessoryCircular: return CGSize(width: 72, height: 72)
+        case .accessoryRectangular: return CGSize(width: 172, height: 76)
+        case .accessoryInline: return CGSize(width: 257, height: 26)
+        default: return CGSize(width: 158, height: 158)
+        }
+    }
+
+    private func __label(_ family: WidgetFamily) -> String {
+        switch family {
+        case .systemSmall: return "Small"
+        case .systemMedium: return "Medium"
+        case .systemLarge: return "Large"
+        case .systemExtraLarge: return "Extra Large (iPad)"
+        case .accessoryCircular: return "Circular"
+        case .accessoryRectangular: return "Rectangular"
+        case .accessoryInline: return "Inline"
+        default: return String(describing: family)
+        }
+    }
+
+    struct __NyxianWidgetGallery: View {
+        @Environment(\.scenePhase) private var scenePhase
+        @State private var look: __Look = .system
+        @State private var place: __Place = .all
+        @State private var refresh = 0
+        private let timer = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
+
+        private var previews: [NyxianWidgetPreview] {
+            NyxianWidgetPreviews.all.filter { p in
+                switch place {
+                case .all: return true
+                case .home: return !__isAccessory(p.family)
+                case .lock: return __isAccessory(p.family)
+                }
+            }
+        }
+
+        var body: some View {
+            NavigationStack {
+                Group {
+                    if NyxianWidgetPreviews.all.isEmpty {
+                        __HowTo()
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 22) {
+                                Picker("Where", selection: $place) {
+                                    ForEach(__Place.allCases) { Text($0.rawValue).tag($0) }
+                                }
+                                .pickerStyle(.segmented)
+                                ForEach(previews) { p in
+                                    __Card(preview: p).id("\(p.id)#\(refresh)")
+                                }
+                                Text("Sizes of a 6.1\" iPhone, approximate. Nyxian shows your views as widgets are drawn; iOS itself still decides the final look (margins, tint, Lock Screen style).")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }
+                            .padding()
+                        }
+                    }
+                }
+                .navigationTitle("__NAME__")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Picker("Look", selection: $look) {
+                            ForEach(__Look.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { refresh += 1 } label: { Image(systemName: "arrow.clockwise") }
+                    }
+                }
+            }
+            .preferredColorScheme(look.scheme)
+            .onChange(of: scenePhase) { _, phase in if phase == .active { refresh += 1 } }
+            .onReceive(timer) { _ in refresh += 1 }
+        }
+    }
+
+    private struct __Card: View {
+        let preview: NyxianWidgetPreview
+        @Environment(\.colorScheme) private var scheme
+
+        var body: some View {
+            let size = __size(preview.family)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("\(preview.name) · \(__label(preview.family))")
+                    .font(.subheadline.weight(.semibold))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    ZStack {
+                        if __isAccessory(preview.family) {
+                            preview.content()
+                                .frame(width: size.width, height: size.height)
+                                .foregroundStyle(.white)
+                                .environment(\.colorScheme, .dark)
+                                .padding(18)
+                                .background(LinearGradient(colors: [Color(red: 0.10, green: 0.12, blue: 0.22), Color(red: 0.22, green: 0.10, blue: 0.26)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        } else {
+                            preview.content()
+                                .padding(16)
+                                .frame(width: size.width, height: size.height)
+                                .background(Color(uiColor: .systemBackground))
+                                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                                .shadow(color: .black.opacity(scheme == .dark ? 0.5 : 0.18), radius: 8, y: 3)
+                                .padding(18)
+                                .background(LinearGradient(colors: scheme == .dark ? [Color(red: 0.08, green: 0.10, blue: 0.18), Color(red: 0.16, green: 0.10, blue: 0.20)] : [Color(red: 0.62, green: 0.76, blue: 0.95), Color(red: 0.86, green: 0.74, blue: 0.93)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        }
+                    }
+                    .allowsHitTesting(false)
+                }
+            }
+        }
+    }
+
+    private struct __HowTo: View {
+        private let sample = """
+        #if NYXIAN_WIDGET_PREVIEW
+        import SwiftUI
+        import WidgetKit
+
+        extension NyxianWidgetPreviews {
+            static var all: [NyxianWidgetPreview] { [
+                NyxianWidgetPreview("Example", family: .systemSmall) {
+                    MyWidgetView(entry: MyEntry(date: Date()))
+                },
+                NyxianWidgetPreview("Example", family: .systemMedium) {
+                    MyWidgetView(entry: MyEntry(date: Date()))
+                },
+            ] }
+        }
+        #endif
+        """
+
+        var body: some View {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Label("No widget views listed yet", systemImage: "square.grid.2x2")
+                        .font(.headline)
+                    Text("iOS draws a widget from the views your Widget's configuration returns, and only iOS can call it. For this gallery, add a Swift file to the extension that lists those views. It is compiled only here (NYXIAN_WIDGET_PREVIEW), never into the .ipa.")
+                    Text("@Environment(\\.widgetFamily) is always .systemSmall outside a real widget: give your view the family as a parameter for the other sizes.")
+                        .foregroundStyle(.secondary)
+                    Text(sample)
+                        .font(.system(.footnote, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                    Button { UIPasteboard.general.string = sample } label: { Label("Copy", systemImage: "doc.on.doc") }
+                        .buttonStyle(.bordered)
+                }
+                .padding()
+            }
+        }
+    }
+    """#
 }
 
 // MARK: - fork: why an app would not install

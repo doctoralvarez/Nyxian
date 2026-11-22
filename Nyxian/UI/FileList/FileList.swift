@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.21.0
+ Fork doctoralvarez/Nyxian — version 1.22.0
  Changelog:
+  - 1.22.0 (2026-11-22): Run on a widget extension opens Nyxian's gallery of
+    its widgets (ForkWidgetPreview) instead of an error.
   - 1.21.0 (2026-11-22): Export .ipa › Extensions: other projects (e.g. a
     widget project with its @main WidgetBundle) switched on there are built
     with the app and go into the .ipa as PlugIns/<Name>.appex, like Xcode's
@@ -634,16 +636,22 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
                         ForkPython.runProject(project, from: self)
                         return
                     }
-                    buildProjectWithArgumentUI(targetViewController: self, project: project, buildType: .run) { result, execPath in
+                    /* fork 1.22: a widget extension opens a gallery of its widgets */
+                    let runProject: NXProject
+                    do { runProject = try ForkWidgetPreview.runnable(project) } catch {
+                        NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Widget gallery: \(error.localizedDescription)", withDelay: 0.0)
+                        return
+                    }
+                    buildProjectWithArgumentUI(targetViewController: self, project: runProject, buildType: .run) { result, execPath in
                         if result {
-                            if project.projectConfig.schemeKind == .app {
+                            if runProject.projectConfig.schemeKind == .app {
                                 /* fork: print() output goes to the Console window */
-                                let pid = PEProcessManager.shared().spawnProcess(withBundleIdentifier: project.projectConfig.bundleid, withItems: ForkPhoneConsole.shared.itemsForNewRun(name: project.projectConfig.displayName ?? "App"), withKernelSurfaceProcess: nil, doRestartIfRunning: true)
+                                let pid = PEProcessManager.shared().spawnProcess(withBundleIdentifier: runProject.projectConfig.bundleid, withItems: ForkPhoneConsole.shared.itemsForNewRun(name: runProject.projectConfig.displayName ?? "App"), withKernelSurfaceProcess: nil, doRestartIfRunning: true)
                                 ForkPhoneConsole.shared.attach(processIdentifier: pid)
-                                ForkDebugSession.shared.start(processIdentifier: pid, project: project)
+                                ForkDebugSession.shared.start(processIdentifier: pid, project: runProject)
                                 /* fork 1.20: tell when it does not start or closes at once */
-                                ForkLaunchWatch.watch(pid, name: project.projectConfig.displayName ?? "App")
-                            } else if project.projectConfig.schemeKind == .utility, let execPath = execPath {
+                                ForkLaunchWatch.watch(pid, name: runProject.projectConfig.displayName ?? "App")
+                            } else if runProject.projectConfig.schemeKind == .utility, let execPath = execPath {
                                 let terminalSession: NXWindowSessionTerminal = NXWindowSessionTerminal(utilityPath: execPath)
                                 NXWindowServer.shared().openWindow(with: terminalSession, withCompletion: nil)
                             }

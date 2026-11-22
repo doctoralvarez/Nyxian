@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.7.1
+ Fork doctoralvarez/Nyxian — version 1.8.0
  Changelog:
+  - 1.8.0 (2026-11-22): Run (and the App Preview) on a widget extension opens
+    Nyxian's gallery of its widgets (ForkWidgetPreview).
   - 1.7.1 (2026-11-22): Run here too says when the app does not start or
     closes within 15 s (ForkLaunchWatch).
   - 1.7.0 (2026-11-20): App Preview starts paused (opening a project
@@ -241,7 +243,7 @@ class MainSplitViewController: UISplitViewController, UISplitViewControllerDeleg
         self.displayModeButtonVisibility = .never
         
         if self.project.projectConfig.schemeKind == .app {
-            NXWindowSessionApplication.bringSessionToFront(withBundleIdentifier: self.project.projectConfig.bundleid)
+            NXWindowSessionApplication.bringSessionToFront(withBundleIdentifier: ForkWidgetPreview.runBundleID(self.project))
         }
     }
     
@@ -362,7 +364,15 @@ class MainSplitViewController: UISplitViewController, UISplitViewControllerDeleg
             }
             do {
                 
-                let project = detailVC.project
+                /* fork 1.8: a widget extension opens a gallery of its widgets; the App Preview still follows its own project */
+                let ownPath = detailVC.project.url.path
+                let project: NXProject
+                do { project = try ForkWidgetPreview.runnable(detailVC.project) } catch {
+                    os_unfair_lock_unlock(&self.lock)
+                    NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "Widget gallery: \(error.localizedDescription)", withDelay: 0.0)
+                    NotificationCenter.default.post(name: ForkAppPreview.runFinished, object: ownPath, userInfo: ["result": false])
+                    return
+                }
                 
                 masterVC.navigationItem.leftBarButtonItem?.isEnabled = false
                 self.detailVC?.logView?.clearConsole()
@@ -377,7 +387,7 @@ class MainSplitViewController: UISplitViewController, UISplitViewControllerDeleg
                     masterVC.navigationItem.leftBarButtonItem?.isEnabled = true
                     os_unfair_lock_unlock(&self.lock)
                     /* fork: App Preview follows every run */
-                    defer { NotificationCenter.default.post(name: ForkAppPreview.runFinished, object: project.url.path, userInfo: ["result": result]) }
+                    defer { NotificationCenter.default.post(name: ForkAppPreview.runFinished, object: ownPath, userInfo: ["result": result]) }
                     
                     if result {
                         let fileTable: PEFileTable = PEFileTable.empty()
@@ -1173,7 +1183,8 @@ final class ForkAppPreviewContainer: UIViewController {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    private var bundleIdentifier: String { project.projectConfig.bundleid ?? "" }
+    /* fork 1.8: for a widget extension, its gallery */
+    private var bundleIdentifier: String { ForkWidgetPreview.runBundleID(project) }
 
     /// The panel shows only when there is room (not in a narrow Split View)
     private var hasRoom: Bool {

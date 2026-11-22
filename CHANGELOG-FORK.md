@@ -4,6 +4,21 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.3.0 — 2026-11-22
+
+- ▶ on a widget extension project opens a gallery of its widgets instead of
+  an error. Nyxian builds a copy of the extension as an app ("<Name>
+  Widgets"), without its @main, and shows each view the code lists in
+  `NyxianWidgetPreviews` at its family's size (small, medium, large, extra
+  large, circular, rectangular, inline), in System, Light or Dark look,
+  refreshed every 15 s and on ↻. The copy gets the App Groups of the apps
+  that embed the extension, so it shows the same shared data. The listing
+  goes in `#if NYXIAN_WIDGET_PREVIEW`, which only the gallery compiles; with
+  none, the gallery shows how to write it. On iPad the App Preview shows the
+  gallery too.
+- Previews (editor and gallery) also drop a widget's
+  `#Preview(as:) { … } timeline: { … }` whole.
+
 ## 2.2.2 — 2026-11-22
 
 - Widget extensions link with `-e _NSExtensionMain`, the entry point Xcode
