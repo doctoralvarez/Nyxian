@@ -21,8 +21,16 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.15.0
+ Fork doctoralvarez/Nyxian — version 1.15.1
  Changelog:
+  - 1.15.1 (2026-11-22): the exported app and its extensions carry the
+    Info.plist keys Xcode always writes and Nyxian did not:
+    CFBundlePackageType (APPL / XPC!), CFBundleInfoDictionaryVersion,
+    CFBundleSupportedPlatforms, CFBundleDevelopmentRegion, DTPlatformName,
+    DTPlatformVersion and DTSDKName (from the SDK in the Mach-O),
+    UIRequiredDeviceCapabilities; the extension also its
+    CFBundleDisplayName. A widget built into the .ipa did not show in the
+    widget gallery; these are what iOS may look for when it registers it.
   - 1.15.0 (2026-11-22): app extensions in the exported .ipa, like Xcode's
     embedded targets. The projects chosen in Export › Extensions (e.g. a
     widget project with its @main WidgetBundle) are built with the app and
@@ -471,6 +479,9 @@ final class NXBuilder: NSObject {
                     }
                     /* fork 1.15: its widget extensions, in PlugIns */
                     try self.forkEmbedExtensions()
+                    /* fork 1.15.1: the keys Xcode writes */
+                    ForkEmbeddedExtensions.addStandardKeys(infoURL: self.project.bundleURL.appendingPathComponent("Info.plist"),
+                                                          machO: self.project.machoURL, packageType: "APPL")
                     try self.package()
                 } else if self.project.projectConfig.signMachOWithNyxianEntitlements {
                     trust_nxt2_sign(self.project.machoURL.path, project.entitlementsConfig.dictionary as CFDictionary, false, nil)
@@ -764,6 +775,48 @@ enum ForkEmbeddedExtensions {
         return false
     }
 
+    /// fork 1.15.1: the Info.plist keys Xcode always writes (missing ones only)
+    static func addStandardKeys(infoURL: URL, machO: URL, packageType: String) {
+        guard let data = try? Data(contentsOf: infoURL),
+              var info = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else { return }
+        let sdk = sdkVersion(of: machO) ?? (info["MinimumOSVersion"] as? String) ?? "18.0"
+        let defaults: [String: Any] = [
+            "CFBundlePackageType": packageType,
+            "CFBundleInfoDictionaryVersion": "6.0",
+            "CFBundleSupportedPlatforms": ["iPhoneOS"],
+            "CFBundleDevelopmentRegion": "en",
+            "DTPlatformName": "iphoneos",
+            "DTPlatformVersion": sdk,
+            "DTSDKName": "iphoneos\(sdk)",
+            "UIRequiredDeviceCapabilities": ["arm64"]
+        ]
+        for (key, value) in defaults where info[key] == nil { info[key] = value }
+        if let out = try? PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0) {
+            try? out.write(to: infoURL, options: .atomic)
+        }
+    }
+
+    /// The SDK version in a Mach-O's LC_BUILD_VERSION ("27.0"), or nil
+    static func sdkVersion(of machO: URL) -> String? {
+        guard let data = try? Data(contentsOf: machO, options: .mappedIfSafe), data.count > 32 else { return nil }
+        return data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> String? in
+            func u32(_ at: Int) -> UInt32? {
+                guard at >= 0, at + 4 <= raw.count else { return nil }
+                return raw.loadUnaligned(fromByteOffset: at, as: UInt32.self)
+            }
+            guard u32(0) == 0xfeedfacf, let ncmds = u32(16) else { return nil }
+            var offset = 32
+            for _ in 0..<Int(ncmds) {
+                guard let cmd = u32(offset), let size = u32(offset + 4), size > 0 else { return nil }
+                if cmd == 0x32, let sdk = u32(offset + 16) {
+                    return "\(sdk >> 16).\((sdk >> 8) & 0xff)"
+                }
+                offset += Int(size)
+            }
+            return nil
+        }
+    }
+
     /// Info.plist keys of an app that an extension must not carry
     static let appOnlyInfoKeys: [String] = [
         "UIApplicationSceneManifest", "UILaunchScreen", "UILaunchStoryboardName", "UIMainStoryboardFile",
@@ -829,8 +882,10 @@ extension NXBuilder {
                 point["NSExtensionPointIdentifier"] = ForkEmbeddedExtensions.extensionPoint(of: ext) ?? ForkEmbeddedExtensions.widgetPoint
             }
             info["NSExtension"] = point
+            if info["CFBundleDisplayName"] == nil { info["CFBundleDisplayName"] = name }
             let infoData = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
             try infoData.write(to: infoURL, options: .atomic)
+            ForkEmbeddedExtensions.addStandardKeys(infoURL: infoURL, machO: destination.appendingPathComponent(executable), packageType: "XPC!")
 
             /* signed like the app: its own entitlements plus the app's App Groups */
             let machO = destination.appendingPathComponent(executable)

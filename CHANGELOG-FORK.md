@@ -4,6 +4,13 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.2.1 — 2026-11-22
+
+- Exported .ipa: the app and its widget extension carry the Info.plist keys
+  Xcode always writes (package type, supported platforms, DTPlatformName,
+  DTSDKName, …) and the extension its display name. A widget built into the
+  .ipa did not show in the widget gallery.
+
 ## 2.2.0 — 2026-11-22
 
 - Widgets in the exported .ipa, like an Xcode widget target. Make a project
