@@ -1,0 +1,54 @@
+# Fork doctoralvarez/Nyxian — version 1.0.0
+# Changelog:
+#  - 1.0.0 (2026-11-22): builds tools/fork/widget-probe (a tiny app + static
+#    widget) with Xcode, unsigned, as WidgetProbe-xcode.ipa, plus a report of
+#    what Xcode put in the widget extension (Info.plist, Mach-O header and load
+#    commands, files, link command) to compare with what Nyxian exports.
+name: Widget probe (Xcode reference)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xcode
+        run: |
+          NEWEST=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | grep -v -i beta | sort -V | tail -1 || true)
+          if [ -n "$NEWEST" ]; then sudo -n xcode-select -s "$NEWEST" || true; fi
+          xcodebuild -version
+      - name: Build
+        working-directory: tools/fork/widget-probe
+        run: |
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen generate
+          xcodebuild -project WidgetProbe.xcodeproj -scheme WidgetProbe -configuration Release -sdk iphoneos \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build | tee build.log | tail -20
+      - name: Package and report
+        working-directory: tools/fork/widget-probe
+        run: |
+          APP=$(find build/Build/Products -name "WidgetProbe.app" -maxdepth 3 | head -1)
+          APPEX="$APP/PlugIns/WidgetProbeWidget.appex"
+          mkdir -p out/Payload && cp -R "$APP" out/Payload/
+          (cd out && zip -qry ../WidgetProbe-xcode.ipa Payload)
+          {
+            echo "== files"; find "$APP" | sed "s|$APP||"
+            echo "== app Info.plist"; plutil -p "$APP/Info.plist"
+            echo "== appex Info.plist"; plutil -p "$APPEX/Info.plist"
+            echo "== appex header"; otool -hv "$APPEX/WidgetProbeWidget"
+            echo "== appex load commands"; otool -l "$APPEX/WidgetProbeWidget" | grep -A4 "cmd LC_MAIN\|cmd LC_BUILD_VERSION\|cmd LC_ENCRYPTION" ; otool -L "$APPEX/WidgetProbeWidget"
+            echo "== appex entry symbol"; nm -m "$APPEX/WidgetProbeWidget" | grep -i " _main\|NSExtensionMain" || true
+            echo "== link command (widget)"; grep -E "Ld .*WidgetProbeWidget|-application_extension|-e _NSExtensionMain|_NSExtensionMain" build.log | head -5
+            grep -A2 "Ld .*WidgetProbeWidget.appex" build.log | tail -2 | tr ' ' '\n' | grep -E "^-" | sort -u
+            echo "== swift flags (widget)"; grep -E "SwiftDriver.*WidgetProbeWidget|swift-frontend.*WidgetProbeWidget" build.log | head -1 | tr ' ' '\n' | grep -E "application-extension|^-target" | sort -u
+          } > report.txt 2>&1
+          cat report.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: widget-probe
+          path: |
+            tools/fork/widget-probe/WidgetProbe-xcode.ipa
+            tools/fork/widget-probe/report.txt
+            tools/fork/widget-probe/build.log
