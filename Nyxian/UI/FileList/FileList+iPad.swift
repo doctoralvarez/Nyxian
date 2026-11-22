@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.7.0
+ Fork doctoralvarez/Nyxian — version 1.7.1
  Changelog:
+  - 1.7.1 (2026-11-22): Run here too says when the app does not start or
+    closes within 15 s (ForkLaunchWatch).
   - 1.7.0 (2026-11-20): App Preview starts paused (opening a project
     builds nothing); ▶ in its bar loads it (or loads it again, ↻ while it
     shows). New ⏸ pauses it: a build it started is cancelled, the app is
@@ -393,6 +395,7 @@ class MainSplitViewController: UISplitViewController, UISplitViewControllerDeleg
                         
                         if project.projectConfig.schemeKind == .app {
                             processIdentifier = PEProcessManager.shared().spawnProcess(withBundleIdentifier: project.projectConfig.bundleid, withItems: ["PEFileTable":fileTable], withKernelSurfaceProcess: nil, doRestartIfRunning: true)
+                            ForkLaunchWatch.watch(processIdentifier, name: project.projectConfig.displayName ?? "App")
                         } else if project.projectConfig.schemeKind == .utility, let execPath = execPath {
                             guard let homePath: String = LDEApplicationWorkspace.shared().utilityHomePath() else {
                                 return

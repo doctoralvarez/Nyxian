@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.19.0
+ Fork doctoralvarez/Nyxian — version 1.20.0
  Changelog:
+  - 1.20.0 (2026-11-22): an app that does not start, or closes within 15 s
+    of Run, is no longer silent: a message says so, with the signal
+    (SIGSEGV, SIGABRT, SIGTRAP…) or exit code, and where its output is
+    (Console, Settings › Management › Kernel Log). ForkLaunchWatch.
   - 1.19.0 (2026-11-21): a Select button (checkmark.circle) left of Import in
     the top bar: it starts selection like the menu's Select (also kept), with
     "All" / "None" at the top right and the bottom bar.
@@ -632,6 +636,8 @@ class FileListViewController: NXUITableViewController, UIDocumentPickerDelegate 
                                 let pid = PEProcessManager.shared().spawnProcess(withBundleIdentifier: project.projectConfig.bundleid, withItems: ForkPhoneConsole.shared.itemsForNewRun(name: project.projectConfig.displayName ?? "App"), withKernelSurfaceProcess: nil, doRestartIfRunning: true)
                                 ForkPhoneConsole.shared.attach(processIdentifier: pid)
                                 ForkDebugSession.shared.start(processIdentifier: pid, project: project)
+                                /* fork 1.20: tell when it does not start or closes at once */
+                                ForkLaunchWatch.watch(pid, name: project.projectConfig.displayName ?? "App")
                             } else if project.projectConfig.schemeKind == .utility, let execPath = execPath {
                                 let terminalSession: NXWindowSessionTerminal = NXWindowSessionTerminal(utilityPath: execPath)
                                 NXWindowServer.shared().openWindow(with: terminalSession, withCompletion: nil)
@@ -4154,3 +4160,62 @@ extension FileListViewController: UITableViewDragDelegate, UITableViewDropDelega
     }
 }
 
+
+
+// MARK: - fork 1.20: an app that closes right after Run says so
+
+/// Watches a just-launched app for 15 s: if it could not start, or its process ends
+/// in that time, a message says how (signal or exit code) and where its output is.
+final class ForkLaunchWatch: NSObject, PEProcessObserver {
+    private static var watching: [pid_t: ForkLaunchWatch] = [:]
+    private let name: String
+    private let pid: pid_t
+    private let started = Date()
+
+    private init(pid: pid_t, name: String) {
+        self.pid = pid
+        self.name = name
+    }
+
+    static func watch(_ pid: pid_t, name: String) {
+        guard pid > 0, let process = PEProcessManager.shared().process(forProcessIdentifier: pid) else {
+            NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "\(name) could not be started. Settings › Management › Kernel Log says why.", withDelay: 0.0)
+            return
+        }
+        let watch = ForkLaunchWatch(pid: pid, name: name)
+        watching[pid] = watch
+        process.addObserver(watch)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 16) { watching.removeValue(forKey: pid) }
+    }
+
+    private static func signalName(_ signal: Int32) -> String {
+        switch signal {
+        case SIGSEGV: return "SIGSEGV (bad memory access)"
+        case SIGBUS: return "SIGBUS (bad memory access)"
+        case SIGABRT: return "SIGABRT (abort: an uncaught error or assertion)"
+        case SIGTRAP: return "SIGTRAP (a Swift runtime error: force unwrap of nil, index out of range, fatalError…)"
+        case SIGILL: return "SIGILL (illegal instruction)"
+        case SIGKILL: return "SIGKILL (killed: memory, the system, or Stop)"
+        case SIGTERM: return "SIGTERM (asked to quit)"
+        default: return "signal \(signal)"
+        }
+    }
+
+    func process(_ process: PEProcess!, didExitWithWait4Code code: Int32) {
+        let seconds = Date().timeIntervalSince(started)
+        let pid = self.pid
+        let name = self.name
+        DispatchQueue.main.async {
+            guard ForkLaunchWatch.watching.removeValue(forKey: pid) != nil, seconds < 15 else { return }
+            let signal = code & 0x7f
+            let how: String
+            if signal != 0 && signal != 0x7f {
+                how = "it stopped with \(ForkLaunchWatch.signalName(signal))"
+            } else {
+                let status = (code >> 8) & 0xff
+                how = status == 0 ? "it ended by itself (exit code 0) without staying open" : "it ended with exit code \(status)"
+            }
+            NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "\(name) closed \(String(format: "%.1f", seconds)) s after starting: \(how). Its output: Console (⋯ › Console) and Settings › Management › Kernel Log.", withDelay: 0.0)
+        }
+    }
+}

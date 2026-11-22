@@ -4,6 +4,12 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.1.2 — 2026-11-22
+
+- Run: an app that cannot start, or closes within 15 s, is no longer
+  silent. A message says so, with the signal (SIGSEGV, SIGABRT, SIGTRAP…)
+  or exit code, and where its output is (Console, Kernel Log).
+
 ## 2.1.1 — 2026-11-22
 
 - "Unknown error happened installing application": Nyxian now checks the
