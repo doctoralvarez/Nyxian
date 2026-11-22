@@ -4184,7 +4184,7 @@ final class ForkLaunchWatch: NSObject, PEProcessObserver {
         }
         let watch = ForkLaunchWatch(pid: pid, name: name)
         watching[pid] = watch
-        process.addObserver(watch)
+        process.add(watch)
         DispatchQueue.main.asyncAfter(deadline: .now() + 16) { watching.removeValue(forKey: pid) }
     }
 
