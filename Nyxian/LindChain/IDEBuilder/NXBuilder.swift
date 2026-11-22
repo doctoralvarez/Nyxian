@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.16.1
+ Fork doctoralvarez/Nyxian — version 1.16.2
  Changelog:
+  - 1.16.2 (2026-11-22): ▶ on a widget extension failed with "The file
+    'Resources' couldn't be opened": the gallery copy had no Resources folder
+    (empty folders were not copied). It gets one, and any app project
+    without Resources now builds.
   - 1.16.1 (2026-11-22): the widget gallery's names in your code carry no
     "Nyxian": extension WidgetGallery { static var items: [WidgetGalleryItem] }
     inside #if WIDGET_GALLERY.
@@ -272,6 +276,10 @@ final class NXBuilder: NSObject {
     func prepare() throws {
         if project.projectConfig.schemeKind == .app {
             try FileManager.default.createDirectory(at: self.project.payloadURL, withIntermediateDirectories: true)
+            /* fork 1.16.2: a project without a Resources folder (a copy, an import) builds too */
+            if !FileManager.default.fileExists(atPath: self.project.resourcesURL.path) {
+                try FileManager.default.createDirectory(at: self.project.resourcesURL, withIntermediateDirectories: true)
+            }
             try FileManager.default.copyItem(at: self.project.resourcesURL, to: self.project.bundleURL)
             /* fork: Metal shader sources travel inside the app, to be compiled at run time */
             NXBuilder.forkBundleMetalSources(projectURL: self.project.url, bundleURL: self.project.bundleURL)
@@ -969,6 +977,8 @@ enum ForkWidgetPreview {
         let source: URL = ext.url
         let destination = folder(ext)
         try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+        /* fork 1.16.2: the app's bundle starts as a copy of Resources (empty folders are not files) */
+        try fm.createDirectory(at: destination.appendingPathComponent("Resources"), withIntermediateDirectories: true)
 
         /* the sources, with no @main (the gallery is the app) and no #Preview blocks */
         var keep: Set<String> = ["Config/Project.plist", "Config/AppEntitlements.plist", generatedFileName]

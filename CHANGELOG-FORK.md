@@ -4,6 +4,13 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.3.3 — 2026-11-22
+
+- ▶ on a widget extension: fixed "The file 'Resources' couldn't be opened
+  because there is no such file". The gallery copy left out the empty
+  Resources folder; it gets one, and an app project with no Resources folder
+  builds too.
+
 ## 2.3.2 — 2026-11-22
 
 - `Info-extra.plist` at a project's root goes into the app's Info.plist on
