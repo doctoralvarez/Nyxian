@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.22.0
+ Fork doctoralvarez/Nyxian — version 1.22.1
  Changelog:
+  - 1.22.1 (2026-11-22): closing an app soon after Run (switcher, close
+    button, Stop) no longer shows "closed … s after starting: SIGKILL": an
+    app that showed its window and ends with SIGKILL/SIGTERM was closed by
+    you. Crashes (SIGSEGV, SIGABRT, SIGTRAP…) are still told.
   - 1.22.0 (2026-11-22): Run on a widget extension opens Nyxian's gallery of
     its widgets (ForkWidgetPreview) instead of an error.
   - 1.21.0 (2026-11-22): Export .ipa › Extensions: other projects (e.g. a
@@ -4218,10 +4222,24 @@ final class ForkLaunchWatch: NSObject, PEProcessObserver {
     private let name: String
     private let pid: pid_t
     private let started = Date()
+    /* fork 1.22.1: it showed its window, so it did start */
+    private var sawWindow = false
+    private var bundleID: String?
 
     private init(pid: pid_t, name: String) {
         self.pid = pid
         self.name = name
+    }
+
+    /// Looks for the app's window every 0.5 s while it is watched
+    private func lookForWindow() {
+        guard !sawWindow, ForkLaunchWatch.watching[pid] === self else { return }
+        if let bundleID, !bundleID.isEmpty,
+           NXWindowServer.shared().windowIdentifier(forBundleIdentifier: bundleID) != id_t(bitPattern: -1) {
+            sawWindow = true
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.lookForWindow() }
     }
 
     static func watch(_ pid: pid_t, name: String) {
@@ -4230,8 +4248,10 @@ final class ForkLaunchWatch: NSObject, PEProcessObserver {
             return
         }
         let watch = ForkLaunchWatch(pid: pid, name: name)
+        watch.bundleID = process.bundleIdentifier
         watching[pid] = watch
         process.add(watch)
+        DispatchQueue.main.async { watch.lookForWindow() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 16) { watching.removeValue(forKey: pid) }
     }
 
@@ -4255,6 +4275,8 @@ final class ForkLaunchWatch: NSObject, PEProcessObserver {
         DispatchQueue.main.async {
             guard ForkLaunchWatch.watching.removeValue(forKey: pid) != nil, seconds < 15 else { return }
             let signal = code & 0x7f
+            /* fork 1.22.1: closed by you (switcher, close button, Stop) after its window showed: nothing to tell */
+            if self.sawWindow && (signal == SIGKILL || signal == SIGTERM) { return }
             let how: String
             if signal != 0 && signal != 0x7f {
                 how = "it stopped with \(ForkLaunchWatch.signalName(signal))"

@@ -4,6 +4,13 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.3.4 — 2026-11-22
+
+- Closing an app within 15 s of Run (switcher, its close button, Stop) no
+  longer shows "closed … s after starting: it stopped with SIGKILL". When the
+  app had shown its window, SIGKILL/SIGTERM means you closed it. Crashes and
+  apps that never show a window are still reported.
+
 ## 2.3.3 — 2026-11-22
 
 - ▶ on a widget extension: fixed "The file 'Resources' couldn't be opened
