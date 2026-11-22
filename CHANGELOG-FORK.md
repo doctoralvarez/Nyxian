@@ -4,6 +4,13 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.3.1 — 2026-11-22
+
+- Widget gallery: the names that go in your code no longer say "Nyxian".
+  List the views as `extension WidgetGallery { static var items:
+  [WidgetGalleryItem] }` inside `#if WIDGET_GALLERY` (was
+  NyxianWidgetPreviews / NYXIAN_WIDGET_PREVIEW).
+
 ## 2.3.0 — 2026-11-22
 
 - ▶ on a widget extension project opens a gallery of its widgets instead of

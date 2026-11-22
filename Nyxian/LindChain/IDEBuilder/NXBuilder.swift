@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.16.0
+ Fork doctoralvarez/Nyxian — version 1.16.1
  Changelog:
+  - 1.16.1 (2026-11-22): the widget gallery's names in your code carry no
+    "Nyxian": extension WidgetGallery { static var items: [WidgetGalleryItem] }
+    inside #if WIDGET_GALLERY.
   - 1.16.0 (2026-11-22): ▶ on a widget extension opens a gallery of its
     widgets (ForkWidgetPreview): a copy of it built as an app, with the views
     listed in NyxianWidgetPreviews at each family's size, light or dark, and
@@ -913,11 +916,12 @@ extension NXBuilder {
 
 /// ▶ on an extension project (NXExtensionPoint) builds a copy of it as an app
 /// ("<Name> Widgets", bundle ID <its ID>.widgetpreview) whose only window is a
-/// gallery: every widget view the code lists in NyxianWidgetPreviews, at the
+/// gallery: every widget view the code lists in WidgetGallery.items (names with
+/// no "Nyxian" in them: they sit in the user's own code), at the
 /// size of its family, light or dark. The copy gets the App Groups of the apps
 /// that embed the extension, so it reads the same data the real widget would.
 enum ForkWidgetPreview {
-    static let flag = "NYXIAN_WIDGET_PREVIEW"
+    static let flag = "WIDGET_GALLERY"
     static let generatedFileName = "__NyxianWidgetGallery.swift"
 
     static func isExtension(_ project: NXProject) -> Bool {
@@ -977,7 +981,7 @@ enum ForkWidgetPreview {
                 var data = (try? Data(contentsOf: url)) ?? Data()
                 if url.pathExtension == "swift" {
                     let text = LiveEditorRegistry.editor(forPath: url.path)?.textView.text ?? String(data: data, encoding: .utf8) ?? ""
-                    if text.range(of: #"extension\s+NyxianWidgetPreviews\b"#, options: .regularExpression) != nil { listsPreviews = true }
+                    if text.range(of: #"extension\s+WidgetGallery\b"#, options: .regularExpression) != nil { listsPreviews = true }
                     var copy = text.replacingOccurrences(of: #"@main\b"#, with: "", options: .regularExpression)
                     copy = ForkSwiftUIPreview.strippingPreviews(copy)
                     data = Data(copy.utf8)
@@ -993,7 +997,7 @@ enum ForkWidgetPreview {
             }
         }
 
-        /* an app of its own: not an extension, its own bundle ID, -D NYXIAN_WIDGET_PREVIEW */
+        /* an app of its own: not an extension, its own bundle ID, -D WIDGET_GALLERY */
         let plistData = try Data(contentsOf: source.appendingPathComponent("Config/Project.plist"))
         guard var plist = try PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any] else { throw CocoaError(.fileReadCorruptFile) }
         let name = (plist["NXDisplayName"] as? String) ?? ext.projectConfig.displayName ?? "Widget"
@@ -1024,7 +1028,7 @@ enum ForkWidgetPreview {
 
         let gallery = galleryTemplate
             .replacingOccurrences(of: "__NAME__", with: name.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))
-            .replacingOccurrences(of: "__EMPTY_LIST__", with: listsPreviews ? "" : "extension NyxianWidgetPreviews {\n    static var all: [NyxianWidgetPreview] { [] }\n}\n")
+            .replacingOccurrences(of: "__EMPTY_LIST__", with: listsPreviews ? "" : "extension WidgetGallery {\n    static var items: [WidgetGalleryItem] { [] }\n}\n")
         try write(Data(gallery.utf8), to: destination.appendingPathComponent(generatedFileName))
 
         guard let project = NXProject(url: destination) else { throw CocoaError(.fileReadCorruptFile) }
@@ -1039,14 +1043,14 @@ enum ForkWidgetPreview {
 
     /// One widget view in Nyxian's gallery. List them in your extension, only for the gallery:
     ///
-    ///     #if NYXIAN_WIDGET_PREVIEW
-    ///     extension NyxianWidgetPreviews {
-    ///         static var all: [NyxianWidgetPreview] { [
-    ///             NyxianWidgetPreview("Example", family: .systemSmall) { MyWidgetView(entry: .example) },
+    ///     #if WIDGET_GALLERY
+    ///     extension WidgetGallery {
+    ///         static var items: [WidgetGalleryItem] { [
+    ///             WidgetGalleryItem("Example", family: .systemSmall) { MyWidgetView(entry: .example) },
     ///         ] }
     ///     }
     ///     #endif
-    struct NyxianWidgetPreview: Identifiable {
+    struct WidgetGalleryItem: Identifiable {
         let id: String
         let name: String
         let family: WidgetFamily
@@ -1059,7 +1063,7 @@ enum ForkWidgetPreview {
         }
     }
 
-    enum NyxianWidgetPreviews {}
+    enum WidgetGallery {}
 
     __EMPTY_LIST__
     @main
@@ -1121,8 +1125,8 @@ enum ForkWidgetPreview {
         @State private var refresh = 0
         private let timer = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
 
-        private var previews: [NyxianWidgetPreview] {
-            NyxianWidgetPreviews.all.filter { p in
+        private var previews: [WidgetGalleryItem] {
+            WidgetGallery.items.filter { p in
                 switch place {
                 case .all: return true
                 case .home: return !__isAccessory(p.family)
@@ -1134,7 +1138,7 @@ enum ForkWidgetPreview {
         var body: some View {
             NavigationStack {
                 Group {
-                    if NyxianWidgetPreviews.all.isEmpty {
+                    if WidgetGallery.items.isEmpty {
                         __HowTo()
                     } else {
                         ScrollView {
@@ -1174,7 +1178,7 @@ enum ForkWidgetPreview {
     }
 
     private struct __Card: View {
-        let preview: NyxianWidgetPreview
+        let preview: WidgetGalleryItem
         @Environment(\.colorScheme) private var scheme
 
         var body: some View {
@@ -1210,16 +1214,16 @@ enum ForkWidgetPreview {
 
     private struct __HowTo: View {
         private let sample = """
-        #if NYXIAN_WIDGET_PREVIEW
+        #if WIDGET_GALLERY
         import SwiftUI
         import WidgetKit
 
-        extension NyxianWidgetPreviews {
-            static var all: [NyxianWidgetPreview] { [
-                NyxianWidgetPreview("Example", family: .systemSmall) {
+        extension WidgetGallery {
+            static var items: [WidgetGalleryItem] { [
+                WidgetGalleryItem("Example", family: .systemSmall) {
                     MyWidgetView(entry: MyEntry(date: Date()))
                 },
-                NyxianWidgetPreview("Example", family: .systemMedium) {
+                WidgetGalleryItem("Example", family: .systemMedium) {
                     MyWidgetView(entry: MyEntry(date: Date()))
                 },
             ] }
@@ -1232,7 +1236,7 @@ enum ForkWidgetPreview {
                 VStack(alignment: .leading, spacing: 14) {
                     Label("No widget views listed yet", systemImage: "square.grid.2x2")
                         .font(.headline)
-                    Text("iOS draws a widget from the views your Widget's configuration returns, and only iOS can call it. For this gallery, add a Swift file to the extension that lists those views. It is compiled only here (NYXIAN_WIDGET_PREVIEW), never into the .ipa.")
+                    Text("iOS draws a widget from the views your Widget's configuration returns, and only iOS can call it. For this gallery, add a Swift file to the extension that lists those views. It is compiled only here (WIDGET_GALLERY), never into the .ipa.")
                     Text("@Environment(\\.widgetFamily) is always .systemSmall outside a real widget: give your view the family as a parameter for the other sizes.")
                         .foregroundStyle(.secondary)
                     Text(sample)
