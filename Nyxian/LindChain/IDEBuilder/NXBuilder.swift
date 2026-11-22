@@ -21,8 +21,16 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.14.1
+ Fork doctoralvarez/Nyxian — version 1.15.0
  Changelog:
+  - 1.15.0 (2026-11-22): app extensions in the exported .ipa, like Xcode's
+    embedded targets. The projects chosen in Export › Extensions (e.g. a
+    widget project with its @main WidgetBundle) are built with the app and
+    go into <App>.app/PlugIns/<Name>.appex: bundle ID <app id>.<Name>,
+    package type XPC!, NSExtension com.apple.widgetkit-extension, the app's
+    version and build, no app-only Info.plist keys, signed with their own
+    Config/AppEntitlements.plist plus the app's App Groups. A project used as
+    an extension does not Run on its own (it would only be a widget).
   - 1.14.1 (2026-11-22): "Unknown error happened installing application"
     now says why when Nyxian can tell before installing (the same checks
     the installer makes): the bundle ID has characters iOS does not allow
@@ -186,6 +194,11 @@ final class NXBuilder: NSObject {
             throw NSError(domain: "com.cr4zy.nyxian.builder.headsup", code: 1, userInfo: [NSLocalizedDescriptionKey:"Target \"\(self.project.projectConfig.displayName ?? "Unknown") (\(self.project.projectConfig.bundleid ?? "Unknown"))\" declares deployment target \(osVersionNeeded) which is not supported by this version of Nyxian. This version of Nyxian supports \(minimumOSVersion) up to \(maximumOSVersion)."])
         }
         
+        /* fork 1.15: a widget extension is built into its app (Export), it does not run by itself */
+        if buildType == .run, let point = ForkEmbeddedExtensions.extensionPoint(of: self.project) {
+            throw NSError(domain: "com.cr4zy.nyxian.builder.headsup", code: 1, userInfo: [NSLocalizedDescriptionKey: "\"\(self.project.projectConfig.displayName ?? "This project")\" is an app extension (\(point)): it goes into its app's .ipa (the app's Export › Extensions) and does not run by itself. To look at its widgets inside Nyxian, use a gallery app that shows its views."])
+        }
+
         // Project requirement check
         if osVersionNeeded > MDKOSVersion.host,
            buildType == .run {
@@ -456,6 +469,8 @@ final class NXBuilder: NSObject {
                             throw NSError(domain: "com.cr4zy.nyxian.builder.export", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not write the app's entitlements (Config/AppEntitlements.plist) into the app"])
                         }
                     }
+                    /* fork 1.15: its widget extensions, in PlugIns */
+                    try self.forkEmbedExtensions()
                     try self.package()
                 } else if self.project.projectConfig.signMachOWithNyxianEntitlements {
                     trust_nxt2_sign(self.project.machoURL.path, project.entitlementsConfig.dictionary as CFDictionary, false, nil)
@@ -653,6 +668,183 @@ func buildProjectWithArgumentUI(targetViewController: UIViewController,
                     completion(result, fastPath)
                 }
             }
+        }
+    }
+}
+
+// MARK: - fork 1.15: app extensions (widgets) inside the exported .ipa
+
+/// Which projects an app takes into its .ipa as extensions, and how.
+/// The app's Config/Project.plist lists them (NXEmbeddedExtensions: project
+/// folder names); each of those has NXExtensionPoint in its own Project.plist.
+enum ForkEmbeddedExtensions {
+    static let listKey = "NXEmbeddedExtensions"
+    static let pointKey = "NXExtensionPoint"
+    static let widgetPoint = "com.apple.widgetkit-extension"
+
+    static var projectsURL: URL { NXBootstrap.shared().rootURL.appendingPathComponent("Projects") }
+
+    private static func plistURL(_ project: NXProject) -> URL { project.url.appendingPathComponent("Config/Project.plist") }
+
+    static func plist(_ project: NXProject) -> [String: Any] {
+        guard let data = try? Data(contentsOf: plistURL(project)),
+              let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else { return [:] }
+        return plist
+    }
+
+    private static func write(_ plist: [String: Any], _ project: NXProject) {
+        if let data = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) {
+            try? data.write(to: plistURL(project), options: .atomic)
+        }
+        _ = project.reload()
+    }
+
+    static func extensionPoint(of project: NXProject) -> String? {
+        plist(project)[pointKey] as? String
+    }
+
+    /// The projects (folder names) the app embeds
+    static func names(in app: NXProject) -> [String] {
+        (plist(app)[listKey] as? [String]) ?? []
+    }
+
+    static func embedded(in app: NXProject) -> [NXProject] {
+        names(in: app).compactMap { name in
+            let url = projectsURL.appendingPathComponent(name)
+            guard FileManager.default.fileExists(atPath: url.appendingPathComponent("Config/Project.plist").path) else { return nil }
+            return NXProject(url: url)
+        }
+    }
+
+    /// Other app projects that could go into this app
+    static func candidates(for app: NXProject) -> [NXProject] {
+        let own = (app.url as URL).standardizedFileURL.lastPathComponent
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(at: projectsURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return [] }
+        return items.compactMap { url -> NXProject? in
+            guard url.lastPathComponent != own,
+                  fm.fileExists(atPath: url.appendingPathComponent("Config/Project.plist").path),
+                  let project = NXProject(url: url), project.projectConfig.schemeKind == .app else { return nil }
+            return project
+        }.sorted { ($0.projectConfig.displayName ?? "") < ($1.projectConfig.displayName ?? "") }
+    }
+
+    static func isEmbedded(_ ext: NXProject, in app: NXProject) -> Bool {
+        names(in: app).contains((ext.url as URL).lastPathComponent)
+    }
+
+    static func setEmbedded(_ ext: NXProject, in app: NXProject, on: Bool) {
+        let name = (ext.url as URL).lastPathComponent
+        var appPlist = plist(app)
+        var list = (appPlist[listKey] as? [String]) ?? []
+        list.removeAll { $0 == name }
+        if on { list.append(name) }
+        if list.isEmpty { appPlist.removeValue(forKey: listKey) } else { appPlist[listKey] = list }
+        write(appPlist, app)
+        var extPlist = plist(ext)
+        if on { extPlist[pointKey] = widgetPoint } else { extPlist.removeValue(forKey: pointKey) }
+        write(extPlist, ext)
+    }
+
+    /// The last part of the extension's bundle ID: its executable name, letters, digits and "-"
+    static func suffix(of ext: NXProject) -> String {
+        let raw = ext.projectConfig.executable ?? ext.projectConfig.displayName ?? "Widget"
+        let allowed = raw.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) && $0.isASCII || $0 == "-" }
+        let text = String(String.UnicodeScalarView(allowed))
+        return text.isEmpty ? "Widget" : text
+    }
+
+    static func usesWidgetKit(_ ext: NXProject) -> Bool {
+        for url in ProjectFileIndex.files(in: ext.url as URL) where url.pathExtension == "swift" {
+            if let text = try? String(contentsOf: url, encoding: .utf8),
+               text.contains("WidgetBundle") || (text.contains("@main") && text.contains(": Widget")) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Info.plist keys of an app that an extension must not carry
+    static let appOnlyInfoKeys: [String] = [
+        "UIApplicationSceneManifest", "UILaunchScreen", "UILaunchStoryboardName", "UIMainStoryboardFile",
+        "UISupportedInterfaceOrientations", "UISupportedInterfaceOrientations~ipad", "UIRequiresFullScreen",
+        "LSRequiresIPhoneOS", "UIApplicationSupportsIndirectInputEvents", "UIBackgroundModes",
+        "BGTaskSchedulerPermittedIdentifiers", "CFBundleIcons", "CFBundleIcons~ipad", "CFBundleURLTypes",
+        "UIFileSharingEnabled", "LSSupportsOpeningDocumentsInPlace", "CFBundleDocumentTypes",
+        "UIStatusBarHidden", "UIViewControllerBasedStatusBarAppearance", "NXApplicationGroups"
+    ]
+}
+
+extension NXBuilder {
+    /// fork 1.15: builds the app's chosen extensions and puts them in <App>.app/PlugIns
+    func forkEmbedExtensions() throws {
+        let extensions = ForkEmbeddedExtensions.embedded(in: self.project)
+        let fm = FileManager.default
+        let plugIns = self.project.bundleURL.appendingPathComponent("PlugIns")
+        try? fm.removeItem(at: plugIns)
+        guard !extensions.isEmpty else { return }
+        try fm.createDirectory(at: plugIns, withIntermediateDirectories: true)
+
+        let appBundleID = self.project.projectConfig.bundleid ?? "app"
+        let appInfo = self.project.projectConfig.infoDictionary ?? [:]
+        let appEntitlements = ForkAppEntitlements.read(self.project)
+        let appGroups = appEntitlements["com.apple.security.application-groups"] as? [String] ?? []
+
+        for ext in extensions {
+            let name = ext.projectConfig.displayName ?? ForkEmbeddedExtensions.suffix(of: ext)
+            if NXBuilder.forkCancelRequested { throw CancellationError() }
+            guard let builder = NXBuilder(project: ext) else {
+                throw NSError(domain: "com.cr4zy.nyxian.builder.export", code: 1, userInfo: [NSLocalizedDescriptionKey: "The extension \"\(name)\" could not be prepared for building"])
+            }
+            do {
+                try builder.headsup(buildType: .export)
+                try builder.clean()
+                try builder.prepare()
+                try builder.build()
+                builder.database.saveDatabase(toPath: ext.cacheURL.appendingPathComponent("debug.json").path)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                builder.database.saveDatabase(toPath: ext.cacheURL.appendingPathComponent("debug.json").path)
+                throw NSError(domain: "com.cr4zy.nyxian.builder.export", code: 1, userInfo: [NSLocalizedDescriptionKey: "The extension \"\(name)\" did not build: open that project and its Issue Navigator (\(error.localizedDescription))"])
+            }
+
+            let executable = ext.projectConfig.executable ?? ForkEmbeddedExtensions.suffix(of: ext)
+            let destination = plugIns.appendingPathComponent("\(ForkEmbeddedExtensions.suffix(of: ext)).appex")
+            try? fm.removeItem(at: destination)
+            try fm.copyItem(at: ext.bundleURL, to: destination)
+
+            /* its Info.plist as an extension of this app */
+            let infoURL = destination.appendingPathComponent("Info.plist")
+            var info = ((try? PropertyListSerialization.propertyList(from: Data(contentsOf: infoURL), format: nil)) as? [String: Any]) ?? [:]
+            for key in ForkEmbeddedExtensions.appOnlyInfoKeys { info.removeValue(forKey: key) }
+            let extensionID = "\(appBundleID).\(ForkEmbeddedExtensions.suffix(of: ext))"
+            info["CFBundleIdentifier"] = extensionID
+            info["CFBundlePackageType"] = "XPC!"
+            info["CFBundleExecutable"] = executable
+            if let version = appInfo["CFBundleShortVersionString"] { info["CFBundleShortVersionString"] = version }
+            if let build = appInfo["CFBundleVersion"] { info["CFBundleVersion"] = build }
+            var point = (info["NSExtension"] as? [String: Any]) ?? [:]
+            if point["NSExtensionPointIdentifier"] == nil {
+                point["NSExtensionPointIdentifier"] = ForkEmbeddedExtensions.extensionPoint(of: ext) ?? ForkEmbeddedExtensions.widgetPoint
+            }
+            info["NSExtension"] = point
+            let infoData = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            try infoData.write(to: infoURL, options: .atomic)
+
+            /* signed like the app: its own entitlements plus the app's App Groups */
+            let machO = destination.appendingPathComponent(executable)
+            _ = trust_remove_blob(machO.path)
+            var entitlements = ForkAppEntitlements.read(ext)
+            if !appGroups.isEmpty {
+                let own = entitlements["com.apple.security.application-groups"] as? [String] ?? []
+                entitlements["com.apple.security.application-groups"] = own + appGroups.filter { !own.contains($0) }
+            }
+            let xml = try PropertyListSerialization.data(fromPropertyList: entitlements, format: .xml, options: 0)
+            if !ZSigner.adhocSignMachO(atPath: machO.path, bundleId: extensionID, entitlementData: xml) {
+                throw NSError(domain: "com.cr4zy.nyxian.builder.export", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not sign the extension \"\(name)\""])
+            }
+            self.database.addMessage(message: "Included the extension \(name) as PlugIns/\(destination.lastPathComponent) (\(extensionID))", severity: .note)
         }
     }
 }

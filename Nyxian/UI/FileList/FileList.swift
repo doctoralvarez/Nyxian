@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.20.0
+ Fork doctoralvarez/Nyxian — version 1.21.0
  Changelog:
+  - 1.21.0 (2026-11-22): Export .ipa › Extensions: other projects (e.g. a
+    widget project with its @main WidgetBundle) switched on there are built
+    with the app and go into the .ipa as PlugIns/<Name>.appex, like Xcode's
+    widget target. Capabilities: App Groups (group.<bundle id>), which the
+    extensions get too.
   - 1.20.0 (2026-11-22): an app that does not start, or closes within 15 s
     of Run, is no longer silent: a message says so, with the signal
     (SIGSEGV, SIGABRT, SIGTRAP…) or exit code, and where its output is
@@ -2962,10 +2967,11 @@ final class GitHubCommitViewController: UIViewController {
 /// (exported into the app's signature, see NXBuilder)
 enum ForkAppEntitlements {
     enum Capability: CaseIterable {
-        case iCloud, increasedMemory, extendedAddressing
+        case iCloud, increasedMemory, extendedAddressing, appGroups
 
         var title: String {
             switch self {
+            case .appGroups: return "App Groups"
             case .iCloud: return "iCloud"
             case .increasedMemory: return "Increased Memory Limit"
             case .extendedAddressing: return "Extended Virtual Addressing"
@@ -2974,6 +2980,7 @@ enum ForkAppEntitlements {
 
         var detail: String {
             switch self {
+            case .appGroups: return "Data shared with its widgets (group.<bundle id>)"
             case .iCloud: return "CloudKit and iCloud Drive (container iCloud.<bundle id>)"
             case .increasedMemory: return "More memory before iOS ends the app"
             case .extendedAddressing: return "More address space (paid account)"
@@ -2982,6 +2989,7 @@ enum ForkAppEntitlements {
 
         var symbol: String {
             switch self {
+            case .appGroups: return "square.stack.3d.up"
             case .iCloud: return "icloud"
             case .increasedMemory: return "memorychip"
             case .extendedAddressing: return "arrow.up.left.and.arrow.down.right"
@@ -2991,6 +2999,7 @@ enum ForkAppEntitlements {
         /// The key that says whether it is on
         var markerKey: String {
             switch self {
+            case .appGroups: return "com.apple.security.application-groups"
             case .iCloud: return "com.apple.developer.icloud-container-identifiers"
             case .increasedMemory: return "com.apple.developer.kernel.increased-memory-limit"
             case .extendedAddressing: return "com.apple.developer.kernel.extended-virtual-addressing"
@@ -2999,6 +3008,8 @@ enum ForkAppEntitlements {
 
         func keys(bundleID: String) -> [String: Any] {
             switch self {
+            case .appGroups:
+                return ["com.apple.security.application-groups": ["group.\(bundleID)"]]
             case .iCloud:
                 let container = "iCloud.\(bundleID)"
                 return [
@@ -3206,23 +3217,29 @@ final class ForkExportAssistant: UITableViewController {
     
     // MARK: table
     
-    override func numberOfSections(in tableView: UITableView) -> Int { 4 }
+    override func numberOfSections(in tableView: UITableView) -> Int { 5 }
+    
+    /* fork 1.21: other projects that can go in as extensions */
+    private lazy var extensionCandidates: [NXProject] = ForkEmbeddedExtensions.candidates(for: project)
     
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        ["Version", "Checks", "Capabilities", nil][section]
+        ["Version", "Checks", "Capabilities", "Extensions (widgets)", nil][section]
     }
     
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
         switch section {
         case 0: return "Saved in the project. Raise the build number for every .ipa you install over an older one."
         case 2: return "Written to Config/AppEntitlements.plist and signed into the app, so the signer sees them. Each must also be on for the App ID (developer.apple.com or GetMoreRam); iCloud also needs the container (iCloud.<bundle id>) created and assigned to the App ID. iCloud and Extended Virtual Addressing need a paid account. Inside Nyxian the app runs with Nyxian's entitlements."
-        case 3: return "Nyxian builds the app and packs it as an .ipa that is not signed for distribution: sign it with your own certificate (or a signing service) to install it outside Nyxian. TestFlight / App Store uploads need Xcode or Transporter on a Mac."
+        case 3: return extensionCandidates.isEmpty
+            ? "To give the app a widget, make another project with the widget's code and its @main WidgetBundle; it shows up here to switch on."
+            : "Switched on, the project is built with the app and goes into the .ipa as PlugIns/<Name>.appex (bundle ID <this app's ID>.<Name>), like a widget target in Xcode. It gets this app's App Groups. Its bundle ID needs to be allowed by the signer's profile (a wildcard one, or sign with a tool that registers extensions)."
+        case 4: return "Nyxian builds the app and packs it as an .ipa that is not signed for distribution: sign it with your own certificate (or a signing service) to install it outside Nyxian. TestFlight / App Store uploads need Xcode or Transporter on a Mac."
         default: return nil
         }
     }
     
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        [2, checks.count, ForkAppEntitlements.Capability.allCases.count, 1][section]
+        [2, checks.count, ForkAppEntitlements.Capability.allCases.count, max(extensionCandidates.count, 1), 1][section]
     }
     
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -3260,6 +3277,28 @@ final class ForkExportAssistant: UITableViewController {
             }, for: .valueChanged)
             cell.accessoryView = toggle
             cell.selectionStyle = .none
+        case 3:
+            /* fork 1.21 */
+            if extensionCandidates.isEmpty {
+                content.text = "No other app projects"
+                content.textProperties.color = .secondaryLabel
+                cell.selectionStyle = .none
+            } else {
+                let ext = extensionCandidates[indexPath.row]
+                content.text = ext.projectConfig.displayName ?? "Project"
+                let widget = ForkEmbeddedExtensions.usesWidgetKit(ext)
+                content.secondaryText = (widget ? "Widget · " : "No WidgetBundle found · ") + "\(project.projectConfig.bundleid ?? "app").\(ForkEmbeddedExtensions.suffix(of: ext))"
+                content.secondaryTextProperties.color = widget ? .secondaryLabel : .systemOrange
+                content.image = UIImage(systemName: "puzzlepiece.extension")
+                let toggle = UISwitch()
+                toggle.isOn = ForkEmbeddedExtensions.isEmbedded(ext, in: project)
+                let app = self.project
+                toggle.addAction(UIAction { [weak toggle] _ in
+                    ForkEmbeddedExtensions.setEmbedded(ext, in: app, on: toggle?.isOn ?? false)
+                }, for: .valueChanged)
+                cell.accessoryView = toggle
+                cell.selectionStyle = .none
+            }
         default:
             content.text = "Export .ipa"
             content.textProperties.color = .tintColor
@@ -3295,7 +3334,7 @@ final class ForkExportAssistant: UITableViewController {
             present(alert, animated: true)
         case 1:
             checks[indexPath.row].fix?()
-        case 2:
+        case 2, 3:
             break
         default:
             export()

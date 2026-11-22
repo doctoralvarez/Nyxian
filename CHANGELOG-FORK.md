@@ -4,6 +4,19 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.2.0 — 2026-11-22
+
+- Widgets in the exported .ipa, like an Xcode widget target. Make a project
+  with the widget's code and its @main WidgetBundle; in the app's Export
+  .ipa › Extensions (widgets), switch it on. Export then builds it with the
+  app and puts it in <App>.app/PlugIns/<Name>.appex (bundle ID
+  <app ID>.<Name>, NSExtension com.apple.widgetkit-extension, the app's
+  version and build), signed with its own entitlements plus the app's App
+  Groups. Installed with that .ipa, the widget appears in the widget gallery.
+- Export › Capabilities: App Groups (group.<bundle id>).
+- A project used as an extension does not Run by itself (it would only be a
+  widget); Nyxian says so.
+
 ## 2.1.2 — 2026-11-22
 
 - Run: an app that cannot start, or closes within 15 s, is no longer
