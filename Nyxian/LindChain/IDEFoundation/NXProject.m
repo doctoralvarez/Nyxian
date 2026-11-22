@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.10.0
+ Fork doctoralvarez/Nyxian — version 1.11.0
  Changelog:
+  - 1.11.0 (2026-11-22): Info-extra.plist at the project's root goes into the
+    app's Info.plist (background modes, URL schemes, BGTask identifiers…);
+    lists are joined, the app's identity keys stay the project's.
   - 1.10.0 (2026-11-22): extension projects (NXExtensionPoint) link with
     -e _NSExtensionMain like Xcode; from the Swift @main the widget trapped
     in ExtensionFoundation and iOS listed no widget.
@@ -288,6 +291,39 @@ static NSArray<NSString*> *NXForkOverlayImports(NSString *sourceRoot)
                 }
             }
             if(groups.count > 0) mutableInfoDictionary[@"NXApplicationGroups"] = groups;
+        }
+        /*
+         * fork 1.11.0: Info-extra.plist at the project's root (the Info.plist
+         * keys a Swift Playgrounds app keeps aside: background modes, URL
+         * schemes, BGTask identifiers, usage descriptions…) goes into the app's
+         * Info.plist on Run and Export. Lists the project already has (e.g.
+         * UIBackgroundModes) are joined; the app's identity stays the project's.
+         */
+        NSString *infoExtraPath = [[[self.plistPath stringByDeletingLastPathComponent] stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"Info-extra.plist"];
+        NSDictionary *infoExtra = [NSDictionary dictionaryWithContentsOfFile:infoExtraPath];
+        if([infoExtra isKindOfClass:[NSDictionary class]])
+        {
+            NSSet<NSString*> *identityKeys = [NSSet setWithArray:@[
+                @"CFBundleExecutable", @"CFBundleIdentifier", @"CFBundleName", @"CFBundleVersion",
+                @"CFBundleShortVersionString", @"MinimumOSVersion", @"CFBundlePackageType",
+                @"NXApplicationGroups", @"NSExtension"
+            ]];
+            for(id key in infoExtra)
+            {
+                if(![key isKindOfClass:[NSString class]] || [identityKeys containsObject:key]) continue;
+                id value = infoExtra[key];
+                id existing = mutableInfoDictionary[key];
+                if([value isKindOfClass:[NSArray class]] && [existing isKindOfClass:[NSArray class]])
+                {
+                    NSMutableArray *joined = [(NSArray*)existing mutableCopy];
+                    for(id item in (NSArray*)value) if(![joined containsObject:item]) [joined addObject:item];
+                    mutableInfoDictionary[key] = joined;
+                }
+                else
+                {
+                    mutableInfoDictionary[key] = value;
+                }
+            }
         }
         _infoDictionary = mutableInfoDictionary;
         
