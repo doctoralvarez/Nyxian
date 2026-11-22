@@ -4,6 +4,13 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.2.2 — 2026-11-22
+
+- Widget extensions link with `-e _NSExtensionMain`, the entry point Xcode
+  gives every app extension. Started from the Swift @main, the widget
+  process trapped at launch (SIGTRAP in ExtensionFoundation) and iOS showed
+  no widget in the gallery.
+
 ## 2.2.1 — 2026-11-22
 
 - Exported .ipa: the app and its widget extension carry the Info.plist keys

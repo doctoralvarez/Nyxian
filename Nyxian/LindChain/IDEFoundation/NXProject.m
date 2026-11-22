@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.9.0
+ Fork doctoralvarez/Nyxian — version 1.10.0
  Changelog:
+  - 1.10.0 (2026-11-22): extension projects (NXExtensionPoint) link with
+    -e _NSExtensionMain like Xcode; from the Swift @main the widget trapped
+    in ExtensionFoundation and iOS listed no widget.
   - 1.9.0 (2026-11-21): the App Groups in Config/AppEntitlements.plist
     (com.apple.security.application-groups) go into the app's Info.plist as
     NXApplicationGroups: Nyxian gives those apps one shared group folder
@@ -306,6 +309,17 @@ static NSArray<NSString*> *NXForkOverlayImports(NSString *sourceRoot)
         
         /* MARK: linker flags */
         _linkerFlags = [self.dictionary arrayForKey:@"NXLinkerFlags" allowedTypes:[NSSet setWithArray:@[[NSString class]]]];
+        /*
+         * fork 1.10.0: an app extension (NXExtensionPoint, e.g. a widget) starts in
+         * Foundation's NSExtensionMain, like Xcode links it (-e _NSExtensionMain).
+         * Started from the Swift @main instead, ExtensionFoundation traps
+         * (SIGTRAP in _EXRunningExtension._shared) and iOS shows no widget.
+         */
+        id extPoint = self.dictionary[@"NXExtensionPoint"];
+        if([extPoint isKindOfClass:[NSString class]] && [extPoint length] > 0 && ![_linkerFlags containsObject:@"-e"])
+        {
+            _linkerFlags = [(_linkerFlags ?: @[]) arrayByAddingObjectsFromArray:@[@"-e", @"_NSExtensionMain"]];
+        }
         
         /* MARK: swift flags */
         _swiftFlags = [self.dictionary arrayForKey:@"NXSwiftFlags" allowedTypes:[NSSet setWithArray:@[[NSString class]]]];
