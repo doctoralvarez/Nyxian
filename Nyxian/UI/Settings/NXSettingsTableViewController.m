@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-22): App Store Connect row (ForkAppStoreConnectViewController):
+    API key, distribution signing and uploads to App Store Connect.
   - 1.0.0 (2026-11-07): the footer also shows the fork version
     (NXForkVersion in Info.plist, from NYXIAN_FORK_VERSION in Config.xcconfig).
 */
@@ -46,7 +48,7 @@
 
 - (CFIndex)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
 {
-    return NXApplicationState.extensionLessMode ? 3 : 4;
+    return NXApplicationState.extensionLessMode ? 4 : 5;
 }
 
 - (UITableViewCell*)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath
@@ -74,6 +76,10 @@
             cell.textLabel.text = @"Customization";
             break;
         case 3:
+            cell.imageView.image = [UIImage systemImageNamed:@"icloud.and.arrow.up.fill"];
+            cell.textLabel.text = @"App Store Connect";
+            break;
+        case 4:
             cell.imageView.image = [UIImage systemImageNamed:@"person.3.fill"];
             cell.textLabel.text = @"Credits";
             break;
@@ -112,6 +118,9 @@
             viewController = [[CustomizationViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
             break;
         case 3:
+            viewController = [[ForkAppStoreConnectViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
+            break;
+        case 4:
             viewController = [[CreditsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
             break;
         default:

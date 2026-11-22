@@ -4,6 +4,23 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.5.0 — 2026-11-22
+
+- Settings › App Store Connect: upload your apps to App Store Connect from
+  the device, with your own Apple Developer account.
+  - API Key: Issuer ID, Key ID and the AuthKey_<Key ID>.p8 from App Store
+    Connect › Users and Access › Integrations (role App Manager or Admin).
+    Requests are signed with an ES256 JWT (CryptoKit); Test Connection lists
+    your apps. The key stays in the Keychain.
+  - Distribution Signing: your Apple Distribution certificate (.p12 and its
+    password, in the Keychain) and App Store provisioning profiles. An .ipa is
+    re-signed for the App Store with zsign (entitlements from the profile, no
+    get-task-allow). Apps with extensions (widgets) are not signed here yet:
+    each extension needs its own profile.
+  - Upload: Apple's Build Uploads API (`buildUploads`, `buildUploadFiles`, the
+    parts to Apple's presigned URLs, commit), then the build upload's state
+    with Apple's errors and warnings, followed every 20 s.
+
 ## 2.4.0 — 2026-11-22
 
 - App Intents work in exported apps and their widgets. Export writes
