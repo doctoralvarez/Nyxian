@@ -4,6 +4,20 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.4.0 — 2026-11-22
+
+- App Intents work in exported apps and their widgets. Export writes
+  `Metadata.appintents` (`extract.actionsdata` + `version.json`) into the app
+  and into each embedded extension, the index Xcode's
+  appintentsmetadataprocessor writes and iOS needs to run an intent. Without
+  it a widget's `Button(intent:)` or a Live Activity's button showed but did
+  nothing. Nyxian reads the intents from the project's Swift sources:
+  top-level structs adopting `AppIntent`, `LiveActivityIntent` (runs in the
+  app's process) or `AudioRecordingIntent`, with a plain string `title` and
+  no `@Parameter` (make one intent per action). The Issue Navigator lists the
+  intents indexed and any left out, and warns when a name is not found in
+  the binary.
+
 ## 2.3.4 — 2026-11-22
 
 - Closing an app within 15 s of Run (switcher, its close button, Stop) no

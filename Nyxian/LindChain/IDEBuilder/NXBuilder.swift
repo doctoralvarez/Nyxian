@@ -21,8 +21,16 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.16.2
+ Fork doctoralvarez/Nyxian — version 1.17.0
  Changelog:
+  - 1.17.0 (2026-11-22): Export writes Metadata.appintents (extract.actionsdata +
+    version.json) into the app and each embedded extension, as Xcode's
+    appintentsmetadataprocessor does, from the App Intents in the project's
+    sources (ForkAppIntentsMetadata). Without it iOS ran no App Intent: a
+    widget's Button(intent:) or a Live Activity's button did nothing. Covers
+    top-level structs adopting AppIntent / LiveActivityIntent /
+    AudioRecordingIntent with a literal title and no @Parameter; the others
+    are left out and named in the Issue Navigator.
   - 1.16.2 (2026-11-22): ▶ on a widget extension failed with "The file
     'Resources' couldn't be opened": the gallery copy had no Resources folder
     (empty folders were not copied). It gets one, and any app project
@@ -495,6 +503,10 @@ final class NXBuilder: NSObject {
                     }
                     /* fork 1.15: its widget extensions, in PlugIns */
                     try self.forkEmbedExtensions()
+                    /* fork 1.17: the index of its App Intents, as Xcode writes it */
+                    for note in ForkAppIntentsMetadata.write(project: self.project, bundleURL: self.project.bundleURL) {
+                        self.database.addMessage(message: note, severity: note.contains("left out") || note.contains("may not") || note.contains("could not") ? .warning : .note)
+                    }
                     /* fork 1.15.1: the keys Xcode writes */
                     ForkEmbeddedExtensions.addStandardKeys(infoURL: self.project.bundleURL.appendingPathComponent("Info.plist"),
                                                           machO: self.project.machoURL, packageType: "APPL")
@@ -902,6 +914,10 @@ extension NXBuilder {
             let infoData = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
             try infoData.write(to: infoURL, options: .atomic)
             ForkEmbeddedExtensions.addStandardKeys(infoURL: infoURL, machO: destination.appendingPathComponent(executable), packageType: "XPC!")
+            /* fork 1.17: the index of the extension's App Intents (Button(intent:) in widgets) */
+            for note in ForkAppIntentsMetadata.write(project: ext, bundleURL: destination) {
+                self.database.addMessage(message: note, severity: note.contains("left out") || note.contains("may not") || note.contains("could not") ? .warning : .note)
+            }
 
             /* signed like the app: its own entitlements plus the app's App Groups */
             let machO = destination.appendingPathComponent(executable)
@@ -1698,3 +1714,354 @@ final class ForkBuildTimer {
     }
 }
 
+
+// MARK: - fork 1.17: App Intents metadata (Metadata.appintents) in the exported bundles
+
+/// Xcode runs appintentsmetadataprocessor after linking (macOS only) and iOS finds an
+/// app's App Intents only through the index it writes: <bundle>/Metadata.appintents/
+/// extract.actionsdata + version.json. Without it a widget's Button(intent:) or a Live
+/// Activity's button shows but does nothing ("There is no metadata for <Intent>").
+/// Nyxian writes that index itself, in the format of Xcode 26.6 (tools 17F113), from the
+/// project's Swift sources: top-level structs that adopt AppIntent / LiveActivityIntent /
+/// AudioRecordingIntent with a literal title and no @Parameter. Anything else is left out
+/// of the index (and said so in the Issue Navigator) rather than written wrong.
+enum ForkAppIntentsMetadata {
+    static let toolsVersion = "17F113"
+
+    /// Conformances to the identifiers Xcode writes; these make iOS run the intent in the app's process
+    static let systemProtocols: [String: String] = [
+        "LiveActivityIntent": "com.apple.link.systemProtocol.SessionStarting",
+        "AudioRecordingIntent": "com.apple.link.systemProtocol.AudioRecording"
+    ]
+    /// App Intents protocols this index does not cover yet (the intent is left out)
+    static let unsupportedProtocols: Set<String> = [
+        "WidgetConfigurationIntent", "ControlConfigurationIntent", "SetValueIntent", "AudioPlaybackIntent",
+        "ForegroundContinuableIntent", "ProgressReportingIntent", "URLRepresentableIntent", "OpenIntent",
+        "DeleteIntent", "ShowInAppSearchResultsIntent", "AppShortcutsProvider", "CameraCaptureIntent",
+        "PushToTalkTransmissionIntent", "SnippetIntent", "UndoableIntent", "SystemIntent"
+    ]
+
+    struct Intent {
+        var name: String
+        var title: String
+        var description: String?
+        var opensApp: Bool
+        var discoverable: Bool
+        var protocols: [String]
+        var outputFlags: Int
+    }
+
+    // MARK: Swift mangling of a top-level struct: <module><name>V (with word substitutions)
+
+    private struct Mangler {
+        var buffer: [UInt8] = []
+        var words: [(start: Int, length: Int)] = []
+
+        private static func isUpper(_ c: UInt8) -> Bool { c >= 65 && c <= 90 }
+        private static func isDigit(_ c: UInt8) -> Bool { c >= 48 && c <= 57 }
+        private static func isWordStart(_ c: UInt8) -> Bool { c != 0 && !isDigit(c) && c != 95 }
+        private static func isWordEnd(_ c: UInt8, _ prev: UInt8) -> Bool {
+            c == 95 || c == 0 || (!isUpper(prev) && isUpper(c))
+        }
+
+        /// Port of swift::Mangle::mangleIdentifier (include/swift/Demangling/ManglingUtils.h)
+        mutating func append(_ text: String) {
+            let ident = Array(text.utf8)
+            let wordsInBuffer = words.count
+            var subst: [(pos: Int, word: Int)] = []
+            var wordStart = -1
+            for pos in 0...ident.count {
+                let ch: UInt8 = pos < ident.count ? ident[pos] : 0
+                if wordStart >= 0 && Mangler.isWordEnd(ch, ident[pos - 1]) {
+                    let word = Array(ident[wordStart..<pos])
+                    var found = -1
+                    for i in 0..<wordsInBuffer where Array(buffer[words[i].start..<(words[i].start + words[i].length)]) == word {
+                        found = i; break
+                    }
+                    if found < 0 {
+                        for i in wordsInBuffer..<words.count where Array(ident[words[i].start..<(words[i].start + words[i].length)]) == word {
+                            found = i; break
+                        }
+                    }
+                    if found >= 0 {
+                        subst.append((wordStart, found))
+                    } else if word.count >= 2 && words.count < 26 {
+                        words.append((wordStart, word.count))
+                    }
+                    wordStart = -1
+                }
+                if wordStart < 0 && Mangler.isWordStart(ch) { wordStart = pos }
+            }
+            if !subst.isEmpty { buffer.append(48) }
+            subst.append((ident.count, -1))
+            var pos = 0
+            var nextNew = wordsInBuffer
+            for (index, repl) in subst.enumerated() {
+                if pos < repl.pos {
+                    buffer.append(contentsOf: Array(String(repl.pos - pos).utf8))
+                    var first = true
+                    repeat {
+                        if nextNew < words.count && words[nextNew].start == pos {
+                            words[nextNew].start = buffer.count
+                            nextNew += 1
+                        }
+                        buffer.append(first && Mangler.isDigit(ident[pos]) ? 88 : ident[pos])
+                        pos += 1
+                        first = false
+                    } while pos < repl.pos
+                }
+                if repl.word >= 0 {
+                    pos += words[repl.word].length
+                    if index < subst.count - 2 {
+                        buffer.append(UInt8(97 + repl.word))
+                    } else {
+                        buffer.append(UInt8(65 + repl.word))
+                        if pos == ident.count { buffer.append(48) }
+                    }
+                }
+            }
+        }
+    }
+
+    static func mangledStructName(module: String, type: String) -> String {
+        var m = Mangler()
+        m.append(module)
+        m.append(type)
+        return (String(bytes: m.buffer, encoding: .ascii) ?? "") + "V"
+    }
+
+    // MARK: reading the intents from the sources
+
+    /// The source without comments; string literals are kept
+    private static func stripComments(_ s: String) -> String {
+        let c = Array(s.unicodeScalars)
+        var out = String.UnicodeScalarView()
+        var i = 0
+        while i < c.count {
+            if c[i] == "/" && i + 1 < c.count && c[i + 1] == "/" {
+                while i < c.count && c[i] != "\n" { i += 1 }
+                continue
+            }
+            if c[i] == "/" && i + 1 < c.count && c[i + 1] == "*" {
+                i += 2
+                while i + 1 < c.count && !(c[i] == "*" && c[i + 1] == "/") { i += 1 }
+                i += 2
+                continue
+            }
+            if c[i] == "\"" {
+                out.append(c[i]); i += 1
+                while i < c.count && c[i] != "\"" && c[i] != "\n" {
+                    if c[i] == "\\" && i + 1 < c.count { out.append(c[i]); i += 1 }
+                    out.append(c[i]); i += 1
+                }
+                if i < c.count { out.append(c[i]); i += 1 }
+                continue
+            }
+            out.append(c[i]); i += 1
+        }
+        return String(out)
+    }
+
+    /// Top-level `struct Name: A, B {` declarations with their bodies
+    private static func topLevelStructs(_ src: String) -> [(name: String, conformances: [String], body: String)] {
+        let c = Array(src.unicodeScalars)
+        var result: [(name: String, conformances: [String], body: String)] = []
+        var depth = 0
+        var i = 0
+        func isIdent(_ u: Unicode.Scalar) -> Bool { CharacterSet.alphanumerics.contains(u) || u == "_" }
+        while i < c.count {
+            let u = c[i]
+            if u == "\"" {
+                i += 1
+                while i < c.count && c[i] != "\"" { if c[i] == "\\" { i += 1 }; i += 1 }
+                i += 1
+                continue
+            }
+            if u == "{" { depth += 1; i += 1; continue }
+            if u == "}" { depth = max(0, depth - 1); i += 1; continue }
+            if depth == 0 && u == "s" && (i == 0 || !isIdent(c[i - 1])) && i + 6 < c.count
+                && String(String.UnicodeScalarView(c[i..<(i + 6)])) == "struct" && !isIdent(c[i + 6]) {
+                var j = i + 6
+                guard let open = c[j...].firstIndex(of: "{") else { break }
+                let header = String(String.UnicodeScalarView(c[j..<open]))
+                j = open + 1
+                var d = 1
+                var k = j
+                while k < c.count && d > 0 {
+                    if c[k] == "\"" {
+                        k += 1
+                        while k < c.count && c[k] != "\"" { if c[k] == "\\" { k += 1 }; k += 1 }
+                    } else if c[k] == "{" { d += 1 } else if c[k] == "}" { d -= 1 }
+                    k += 1
+                }
+                let body = String(String.UnicodeScalarView(c[j..<max(j, k - 1)]))
+                var head = header
+                if let w = head.range(of: " where ") { head = String(head[..<w.lowerBound]) }
+                let parts = head.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                let name = parts.first ?? ""
+                let conformances = parts.count > 1
+                    ? parts[1].split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "AppIntents.", with: "") }
+                    : []
+                if !name.isEmpty && !name.contains("<") { result.append((name, conformances, body)) }
+                i = k
+                continue
+            }
+            i += 1
+        }
+        return result
+    }
+
+    /// The first string literal assigned to (or returned by) `static var/let <name>`
+    private static func literal(_ body: String, _ name: String) -> (found: Bool, value: String?) {
+        let pattern = "static\\s+(?:var|let)\\s+\(name)\\b[^=\\{\\n]*(?:=|\\{)\\s*(?:[A-Za-z]+\\s*\\(\\s*)?(\"(?:[^\"\\\\]|\\\\.)*\"|true|false)"
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return (false, nil) }
+        let ns = body as NSString
+        if let m = re.firstMatch(in: body, range: NSRange(location: 0, length: ns.length)) {
+            var v = ns.substring(with: m.range(at: 1))
+            if v.hasPrefix("\"") { v = String(v.dropFirst().dropLast()) }
+            return (true, v)
+        }
+        let mentioned = body.range(of: "static\\s+(?:var|let)\\s+\(name)\\b", options: .regularExpression) != nil
+        return (mentioned, nil)
+    }
+
+    static func scan(_ projectURL: URL) -> (intents: [Intent], notes: [String]) {
+        var intents: [Intent] = []
+        var notes: [String] = []
+        let fm = FileManager.default
+        guard let e = fm.enumerator(at: projectURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return ([], []) }
+        for case let url as URL in e where url.pathExtension == "swift" {
+            guard let text = try? String(contentsOf: url, encoding: .utf8), text.contains("Intent") else { continue }
+            /* the widget gallery file is never in the .ipa */
+            if text.contains("#if WIDGET_GALLERY") && text.contains("extension WidgetGallery") { continue }
+            for s in topLevelStructs(stripComments(text)) {
+                let known = s.conformances.filter { $0 == "AppIntent" || systemProtocols[$0] != nil }
+                guard !known.isEmpty else { continue }
+                if let other = s.conformances.first(where: { unsupportedProtocols.contains($0) }) {
+                    notes.append("App Intents: \(s.name) was left out of the index (\(other) is not supported yet)")
+                    continue
+                }
+                if s.body.contains("@Parameter") {
+                    notes.append("App Intents: \(s.name) was left out of the index (intents with @Parameter are not supported yet: make one intent per action)")
+                    continue
+                }
+                let title = literal(s.body, "title")
+                guard let titleText = title.value, !titleText.contains("\\(") else {
+                    notes.append("App Intents: \(s.name) was left out of the index (its title must be a plain string literal)")
+                    continue
+                }
+                let description = literal(s.body, "description").value
+                let opens = literal(s.body, "openAppWhenRun").value == "true"
+                let discoverable = literal(s.body, "isDiscoverable").value != "false"
+                var flags = 0
+                if let r = s.body.range(of: "func\\s+perform\\s*\\(\\s*\\)[^\\{]*", options: .regularExpression) {
+                    let signature = String(s.body[r])
+                    for extra in ["ReturnsValue", "OpensIntent", "ShowsSnippetView", "ShowsSnippetIntent"] where signature.contains(extra) {
+                        notes.append("App Intents: \(s.name) returns \(extra), which the index does not cover yet; listed as returning IntentResult")
+                    }
+                    if signature.contains("ProvidesDialog") { flags |= 4 }
+                }
+                let protocols = Array(Set(s.conformances.compactMap { systemProtocols[$0] })).sorted()
+                intents.append(Intent(name: s.name, title: titleText, description: description,
+                                      opensApp: opens, discoverable: discoverable,
+                                      protocols: protocols, outputFlags: flags))
+            }
+        }
+        return (intents.sorted { $0.name < $1.name }, notes)
+    }
+
+    // MARK: writing the index
+
+    static func index(_ intents: [Intent], module: String) -> [String: Any] {
+        var actions: [String: Any] = [:]
+        for intent in intents {
+            let mangled = mangledStructName(module: module, type: intent.name)
+            let protocolMetadata: [Any] = intent.protocols.flatMap { [$0, ["empty": [String: Any]()]] as [Any] }
+            var action: [String: Any] = [
+                "assistantDefinedSchemaTraits": [Any](),
+                "assistantDefinedSchemas": [Any](),
+                "authenticationPolicy": 0,
+                "availabilityAnnotations": ["LNPlatformNameWildcard": ["introducedVersion": "*"]],
+                "effectiveBundleIdentifiers": [Any](),
+                "fullyQualifiedTypeName": "\(module).\(intent.name)",
+                "identifier": intent.name,
+                "isAuthPolExplicit": false,
+                "isDiscoverable": intent.discoverable,
+                "mangledTypeName": mangled,
+                "mangledTypeNameByBundleIdentifier": [String: Any](),
+                "mangledTypeNameByBundleIdentifierV2": [String: Any](),
+                "mangledTypeNameV2": mangled,
+                "openAppWhenRun": intent.opensApp,
+                "outputFlags": intent.outputFlags,
+                "parameters": [Any](),
+                "presentationStyle": 0,
+                "requiredCapabilities": [Any](),
+                "supportedModes": intent.opensApp ? 2 : 1,
+                "systemProtocolMetadata": protocolMetadata,
+                "systemProtocolMetadataV2": protocolMetadata,
+                "systemProtocols": intent.protocols,
+                "title": ["alternatives": [Any](), "key": intent.title],
+                "typeSpecificMetadata": [Any](),
+                "visibilityMetadata": ["assistantOnly": false, "isDiscoverable": intent.discoverable]
+            ]
+            if let d = intent.description {
+                action["descriptionMetadata"] = ["descriptionText": ["alternatives": [Any](), "key": d], "searchKeywords": [Any]()]
+            }
+            actions[intent.name] = action
+        }
+        return [
+            "actions": actions,
+            "assistantEntities": [Any](),
+            "assistantIntentNegativePhrases": [Any](),
+            "assistantIntents": [Any](),
+            "autoShortcuts": [Any](),
+            "entities": [String: Any](),
+            "enums": [Any](),
+            "generator": ["name": "xcode-tools", "version": toolsVersion],
+            "negativePhrases": [Any](),
+            "queries": [String: Any](),
+            "shortcutTileColor": 14,
+            "version": 1
+        ]
+    }
+
+    /// Writes <bundle>/Metadata.appintents for the project's intents; returns what to tell
+    @discardableResult
+    static func write(project: NXProject, bundleURL: URL) -> [String] {
+        let folder = bundleURL.appendingPathComponent("Metadata.appintents")
+        try? FileManager.default.removeItem(at: folder)
+        let found = scan(project.url as URL)
+        guard !found.intents.isEmpty else { return found.notes }
+        /* the module name the build uses (-module-name): the display name, spaces as "_" */
+        let module = (project.projectConfig.displayName ?? project.projectConfig.executable ?? "App")
+            .components(separatedBy: .whitespacesAndNewlines).joined(separator: "_")
+        var notes = found.notes
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let json = try JSONSerialization.data(withJSONObject: index(found.intents, module: module),
+                                                  options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+            try json.write(to: folder.appendingPathComponent("extract.actionsdata"), options: .atomic)
+            let version = "{\n  \"version\" : \"3.0\",\n  \"toolsVersion\" : \"\(toolsVersion)\"\n}\n"
+            try Data(version.utf8).write(to: folder.appendingPathComponent("version.json"), options: .atomic)
+        } catch {
+            return notes + ["App Intents: could not write Metadata.appintents (\(error.localizedDescription))"]
+        }
+        /* check each name against the binary: its type descriptor symbol is $s<mangled>Mn */
+        let executable = project.projectConfig.executable ?? module
+        let binary = (try? Data(contentsOf: bundleURL.appendingPathComponent(executable), options: .mappedIfSafe)) ?? Data()
+        var missing: [String] = []
+        for intent in found.intents {
+            let mangled = mangledStructName(module: module, type: intent.name)
+            if !binary.isEmpty && binary.range(of: Data(mangled.utf8)) == nil
+                && binary.range(of: Data(("$s" + mangled + "Mn").utf8)) == nil {
+                missing.append(intent.name)
+            }
+        }
+        let names = found.intents.map { $0.name }.joined(separator: ", ")
+        notes.append("App Intents: indexed \(names) in \(bundleURL.lastPathComponent)/Metadata.appintents (module \(module))")
+        if !missing.isEmpty {
+            notes.append("App Intents: \(missing.joined(separator: ", ")) not found by that name in the binary; their buttons may not respond")
+        }
+        return notes
+    }
+}
