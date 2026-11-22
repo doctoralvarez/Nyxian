@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.1.1 — 2026-11-22
+
+- "Unknown error happened installing application": Nyxian now checks the
+  app the way the installer does and says what is wrong (a bundle ID with
+  spaces or "_", no executable or bundle ID in Info.plist, a missing
+  executable, a MinimumOSVersion newer than the device). Otherwise the
+  message says to build again or restart Nyxian.
+- App Groups: preferences look up only "group." domains.
+
 ## 2.1.0 — 2026-11-21
 
 - App Groups shared between apps, like iOS: an App Group in a project's

@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.0.1
  Changelog:
+  - 1.0.1 (2026-11-22): only "group." domains are looked up (an App Group
+    ID always starts with it), so opening any other preferences does nothing
+    more than before.
   - 1.0.0 (2026-11-21): UserDefaults(suiteName:) of an App Group the app
     declares (NXApplicationGroups) keeps its plist in the shared group folder
     (<root>/Data/AppGroup/<group>/Library/Preferences), so the apps of that
@@ -135,7 +138,8 @@ void NUDGuestHooksInit(void)
     }
     
     /* fork: a declared App Group's suite lives in the shared group folder */
-    NSURL *group = NXForkSharedAppGroupURL((__bridge NSString*)domain);
+    /* (only group.* domains: nothing else is touched while preferences open) */
+    NSURL *group = (domain != NULL && CFStringHasPrefix(domain, CFSTR("group."))) ? NXForkSharedAppGroupURL((__bridge NSString*)domain) : nil;
     if(group != nil)
     {
         return [self hook_initWithDomain:domain user:user byHost:host containerPath:(__bridge CFStringRef)group.path containingPreferences:arg5];

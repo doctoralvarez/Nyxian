@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.14.0
+ Fork doctoralvarez/Nyxian — version 1.14.1
  Changelog:
+  - 1.14.1 (2026-11-22): "Unknown error happened installing application"
+    now says why when Nyxian can tell before installing (the same checks
+    the installer makes): the bundle ID has characters iOS does not allow
+    (spaces, "_"…), the Info.plist has no executable / bundle ID, the
+    executable is missing, or MinimumOSVersion is newer than this device.
   - 1.14.0 (2026-11-20): builds go on when you leave Nyxian (without closing
     it): ForkBackgroundBuild asks iOS for background time (iOS 26+: a
     continued processing task, with its progress in the system's banner;
@@ -364,8 +369,14 @@ final class NXBuilder: NSObject {
                         return
                     }
                     
+                    /* fork 1.14.1: say why the installer would refuse it */
+                    if let reason = Self.forkInstallProblem(bundleURL: project.bundleURL) {
+                        nsError = NSError(domain: "com.cr4zy.nyxian.builder.install", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
+                        semaphore.signal()
+                        return
+                    }
                     guard LDEApplicationWorkspace.shared().installApplication(atBundlePath: project.bundleURL.path) else {
-                        nsError = NSError(domain: "com.cr4zy.nyxian.builder.install", code: 1, userInfo: [NSLocalizedDescriptionKey:"Unknown error happened installing application"]) // TODO: implement NSError pipeline
+                        nsError = NSError(domain: "com.cr4zy.nyxian.builder.install", code: 1, userInfo: [NSLocalizedDescriptionKey:"Unknown error happened installing application (the installer refused it or did not answer; build again, and if it keeps failing, restart Nyxian)"]) // TODO: implement NSError pipeline
                         semaphore.signal()
                         return
                     }
@@ -643,6 +654,41 @@ func buildProjectWithArgumentUI(targetViewController: UIViewController,
                 }
             }
         }
+    }
+}
+
+// MARK: - fork: why an app would not install
+
+extension NXBuilder {
+    /// The installer's own checks (bootstrapd doWeTrustThatBundle), with a reason; nil when they pass.
+    static func forkInstallProblem(bundleURL: URL) -> String? {
+        let infoURL = bundleURL.appendingPathComponent("Info.plist")
+        guard let data = try? Data(contentsOf: infoURL),
+              let info = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else {
+            return "Cannot install: the app has no readable Info.plist (\(bundleURL.lastPathComponent))"
+        }
+        guard let executable = info["CFBundleExecutable"] as? String, !executable.isEmpty else {
+            return "Cannot install: Info.plist has no CFBundleExecutable"
+        }
+        guard let identifier = info["CFBundleIdentifier"] as? String, !identifier.isEmpty else {
+            return "Cannot install: Info.plist has no CFBundleIdentifier (the project's bundle ID)"
+        }
+        if identifier.range(of: "^[a-zA-Z][a-zA-Z0-9-]*(\\.[a-zA-Z0-9-]+)*$", options: .regularExpression) == nil {
+            return "Cannot install: the bundle ID \"\(identifier)\" is not valid. Use letters, numbers, \"-\" and \".\" only (no spaces or \"_\"), starting with a letter, e.g. com.mioftalmologo.PubMed2RSS. Change it in the project's settings."
+        }
+        if !FileManager.default.isReadableFile(atPath: bundleURL.appendingPathComponent(executable).path) {
+            return "Cannot install: the executable \(executable) is not in the app"
+        }
+        if let minimum = info["MinimumOSVersion"] as? String {
+            let parts = minimum.split(separator: ".").map { Int($0) ?? 0 }
+            let required = OperatingSystemVersion(majorVersion: parts.count > 0 ? parts[0] : 0,
+                                                  minorVersion: parts.count > 1 ? parts[1] : 0,
+                                                  patchVersion: parts.count > 2 ? parts[2] : 0)
+            if !ProcessInfo.processInfo.isOperatingSystemAtLeast(required) {
+                return "Cannot install: the app needs iOS \(minimum) (MinimumOSVersion) and this device has \(UIDevice.current.systemVersion)"
+            }
+        }
+        return nil
     }
 }
 
