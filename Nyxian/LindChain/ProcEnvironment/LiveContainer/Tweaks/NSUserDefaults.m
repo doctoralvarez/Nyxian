@@ -20,6 +20,15 @@
  along with Nyxian. If not, see <https://www.gnu.org/licenses/>.
 */
 
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-21): UserDefaults(suiteName:) of an App Group the app
+    declares (NXApplicationGroups) keeps its plist in the shared group folder
+    (<root>/Data/AppGroup/<group>/Library/Preferences), so the apps of that
+    group read the same values; other suites stay in the app's container.
+*/
+
 #import <LindChain/Private/FoundationPrivate.h>
 #import <LindChain/ProcEnvironment/LiveContainer/LCMachOUtils.h>
 #import <LindChain/ProcEnvironment/LiveContainer/utils.h>
@@ -123,6 +132,13 @@ void NUDGuestHooksInit(void)
     if(user == kCFPreferencesAnyUser)
     {
         user = kCFPreferencesCurrentUser;
+    }
+    
+    /* fork: a declared App Group's suite lives in the shared group folder */
+    NSURL *group = NXForkSharedAppGroupURL((__bridge NSString*)domain);
+    if(group != nil)
+    {
+        return [self hook_initWithDomain:domain user:user byHost:host containerPath:(__bridge CFStringRef)group.path containingPreferences:arg5];
     }
     
     return [self hook_initWithDomain:domain user:user byHost:host containerPath:(__bridge CFStringRef)appContainerPath containingPreferences:arg5];

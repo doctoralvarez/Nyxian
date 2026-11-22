@@ -4,6 +4,18 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.1.0 — 2026-11-21
+
+- App Groups shared between apps, like iOS: an App Group in a project's
+  Config/AppEntitlements.plist (com.apple.security.application-groups) is
+  one folder for every app that declares it (<root>/Data/AppGroup/<group>):
+  FileManager.containerURL(forSecurityApplicationGroupIdentifier:) and
+  UserDefaults(suiteName:) both use it. With it an app and a second app that
+  shows its widgets see the same data. Before, each app got a private copy
+  (in a "(null)" folder). Groups not declared keep the old private folder.
+  With sandboxed file systems, the app gets access to its groups' folders
+  only.
+
 ## 2.0.0 — 2026-11-21
 
 - Projects list › hold a project › "Rename…" (next to Export and Set App

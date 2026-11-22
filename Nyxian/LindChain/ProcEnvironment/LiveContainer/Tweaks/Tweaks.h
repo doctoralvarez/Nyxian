@@ -28,6 +28,11 @@
 void NUDGuestHooksInit(void);
 void DyldHooksInit(void);
 void NSFMGuestHooksInit(void);
+#ifdef __OBJC__
+/* fork (2026-11-21): the shared folder of an App Group the app declares (NXApplicationGroups), or nil */
+@class NSURL, NSString;
+NSURL *NXForkSharedAppGroupURL(NSString *groupIdentifier);
+#endif
 
 @interface NSBundle(LiveContainer)
 - (instancetype)initWithPathForMainBundle:(NSString *)path;

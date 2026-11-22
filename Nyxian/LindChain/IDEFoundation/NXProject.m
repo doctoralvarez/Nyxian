@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.8.0
+ Fork doctoralvarez/Nyxian — version 1.9.0
  Changelog:
+  - 1.9.0 (2026-11-21): the App Groups in Config/AppEntitlements.plist
+    (com.apple.security.application-groups) go into the app's Info.plist as
+    NXApplicationGroups: Nyxian gives those apps one shared group folder
+    (and UserDefaults(suiteName:)), like iOS does for an app and its widget.
   - 1.8.0 (2026-11-16): a SwiftUI overlay is also found when the SDK has it
     as a framework (System/Library/Frameworks/_PhotosUI_SwiftUI.framework,
     …), not only in usr/lib/swift. The iOS 27 SDK has all of them as
@@ -264,6 +268,23 @@ static NSArray<NSString*> *NXForkOverlayImports(NSString *sourceRoot)
                     @"UIInterfaceOrientationLandscapeRight"
                 ]
             }];
+        }
+        /* fork 1.9: App Groups the app declares (Config/AppEntitlements.plist) */
+        NSString *appEntitlementsPath = [[self.plistPath stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"AppEntitlements.plist"];
+        NSDictionary *appEntitlements = [NSDictionary dictionaryWithContentsOfFile:appEntitlementsPath];
+        id declaredGroups = appEntitlements[@"com.apple.security.application-groups"];
+        if([declaredGroups isKindOfClass:[NSArray class]])
+        {
+            NSMutableArray<NSString*> *groups = [NSMutableArray array];
+            for(id group in (NSArray*)declaredGroups)
+            {
+                if([group isKindOfClass:[NSString class]] && [(NSString*)group length] > 0 &&
+                   ![(NSString*)group containsString:@"/"] && ![(NSString*)group hasPrefix:@"."])
+                {
+                    [groups addObject:group];
+                }
+            }
+            if(groups.count > 0) mutableInfoDictionary[@"NXApplicationGroups"] = groups;
         }
         _infoDictionary = mutableInfoDictionary;
         

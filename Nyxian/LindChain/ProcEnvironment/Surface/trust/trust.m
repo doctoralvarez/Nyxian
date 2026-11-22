@@ -22,8 +22,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-21): with sandboxed file systems, an app also gets
+    read-write access to the shared folders of the App Groups it declares
+    (Info.plist NXApplicationGroups: <root>/Data/AppGroup/<group>), like an
+    iOS group container; nothing else of the other apps.
   - 1.3.0 (2026-11-17): "<container>/*" no longer lists SystemData. It is
     the system's folder in the app container: iOS never lets an app hand out
     access to it, so every program with host access logged
@@ -508,6 +512,27 @@ LIBKERN_DEFINE_PATCHABLE(CFArrayRef, trust_identity_give_file_permissions, (CFSt
         /* fork: folders added in Management → Permissions */
         trust_identity_append_file_permissions_for_paths(filePermissions, extraRead, vars, kFSMountPermissionRead, true, entitlements);
         trust_identity_append_file_permissions_for_paths(filePermissions, extraReadWrite, vars, kFSMountPermissionReadWrite, true, entitlements);
+        
+        /* fork: the shared folders of the App Groups the app declares (like iOS's group containers) */
+        if(applicationObject.bundlePath != nil && applicationObject.containerPath != nil)
+        {
+            NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:[applicationObject.bundlePath stringByAppendingPathComponent:@"Info.plist"]];
+            NSArray *groups = info[@"NXApplicationGroups"];
+            NSString *groupsRoot = [[[applicationObject.containerPath stringByDeletingLastPathComponent] stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"AppGroup"];
+            if([groups isKindOfClass:[NSArray class]] && [[[applicationObject.containerPath stringByDeletingLastPathComponent] stringByDeletingLastPathComponent].lastPathComponent isEqualToString:@"Data"])
+            {
+                NSMutableArray<NSString*> *groupPaths = [NSMutableArray array];
+                for(id group in groups)
+                {
+                    if(![group isKindOfClass:[NSString class]] || [(NSString*)group length] == 0 ||
+                       [(NSString*)group containsString:@"/"] || [(NSString*)group hasPrefix:@"."]) continue;
+                    NSString *path = [groupsRoot stringByAppendingPathComponent:group];
+                    [[NSFileManager defaultManager] createDirectoryAtPath:path withIntermediateDirectories:YES attributes:nil error:nil];
+                    [groupPaths addObject:path];
+                }
+                trust_identity_append_file_permissions_for_paths(filePermissions, groupPaths, vars, kFSMountPermissionReadWrite, true, entitlements);
+            }
+        }
         
         /* append extra file permissions that are on by default */
         trust_identity_append_file_permissions_for_paths(filePermissions, @[
