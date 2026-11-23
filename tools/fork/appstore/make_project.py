@@ -43,14 +43,35 @@ def safe_name(text, fallback):
     return name
 
 
+# Nyxian's own variables, as Xcode's build settings
+VARIABLES = {
+    "$(NXExecutable)": "$(PRODUCT_MODULE_NAME)", "$(NXDisplayName)": "$(PRODUCT_NAME)",
+    "$(NXBundleIdentifier)": "$(PRODUCT_BUNDLE_IDENTIFIER)", "$(NXBundleVersion)": "$(CURRENT_PROJECT_VERSION)",
+    "$(NXBundleShortVersion)": "$(MARKETING_VERSION)", "$(NXDeploymentTarget)": "$(IPHONEOS_DEPLOYMENT_TARGET)",
+}
+
+
+def translate(value):
+    """Nyxian's $(NX…) as Xcode's settings; a string with another unknown $(NX…) goes (None)"""
+    if isinstance(value, str):
+        for a, b in VARIABLES.items():
+            value = value.replace(a, b)
+        return None if "$(NX" in value or "$(LDE" in value else value
+    if isinstance(value, list):
+        return [v for v in (translate(x) for x in value) if v is not None]
+    if isinstance(value, dict):
+        return {k: v for k, v in ((k, translate(x)) for k, x in value.items()) if v is not None}
+    return value
+
+
 def clean_info(info):
     out = {}
     for key, value in (info or {}).items():
         if key in IDENTITY_KEYS or key.startswith("NX") or key.startswith("DT") or key.startswith("LDE"):
             continue
-        if isinstance(value, str) and "$(" in value:
-            continue
-        out[key] = value
+        value = translate(value)
+        if value is not None:
+            out[key] = value
     return out
 
 

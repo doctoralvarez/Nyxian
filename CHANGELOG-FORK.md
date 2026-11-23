@@ -4,6 +4,34 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.7.0 — 2026-11-22
+
+- Settings › App Store Connect › **Xcode on Mac (recommended)**: tap an app,
+  Preflight checks it, then its project and the widgets its Export embeds go
+  to Apple's Xcode on your Mac (GitHub's when yours is off or asleep), which
+  builds, signs (automatic, your API key) and uploads it to App Store
+  Connect; Nyxian follows the build until Apple says it is ready. The build is
+  Xcode's own: DTXcode, DTSDKBuild, Assets.car, Metadata.appintents and the
+  privacy report are real, nothing written in their place. "Xcode Check"
+  only archives, without signing or uploading. The projects, the log and the
+  result only go through the private repository; the log ends up in
+  Files › Nyxian › AppStoreConnect. One-time setup: the repository secrets
+  ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 (and APPLE_TEAM_ID, or Team ID here),
+  and "Contents: Read and write" on the private repository for the token.
+- **Preflight**, before a build number is spent, for a project and for an
+  .ipa: what Apple would answer, with its ITMS code. It fixes in the project
+  what it can: PrivacyInfo.xcprivacy with the required-reason APIs the code
+  uses (ITMS-91053), the four iPad orientations (ITMS-90474) and an empty
+  UILaunchScreen (ITMS-90475) in Info-extra.plist, ITSAppUsesNonExemptEncryption
+  = NO after you confirm, and a build number above App Store Connect's last
+  one (ITMS-90189). It also checks the app record, the icon (1024×1024, no
+  alpha), purpose strings (ITMS-90683), widgets, and in an .ipa the SDK
+  (ITMS-90725), architectures (ITMS-90087), private frameworks (ITMS-90338)
+  and versions of the extensions (ITMS-90473).
+- An .ipa exported by Nyxian gets no DTXcode / DTXcodeBuild / DTSDKBuild:
+  they would claim an Xcode that did not build it. Its Preflight says
+  ITMS-90534 and points to Xcode on Mac.
+
 ## Tools — App Store (Xcode) workflow
 
 - `.github/workflows/appstore-xcode.yml` and `tools/fork/appstore/make_project.py`:

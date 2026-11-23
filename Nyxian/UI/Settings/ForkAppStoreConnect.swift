@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-22): "Xcode on Mac (recommended)": Preflight of each app
+    project (ForkAppStorePreflight.swift) with fixes, then the projects go to
+    Xcode on your Mac (GitHub's when it is off), which builds, signs and
+    uploads the app; the build's processing is followed. The .ipa upload has
+    a Preflight too (Preflight .ipa, and a report before each upload).
   - 1.1.0 (2026-11-22): automatic signing with the API key: the bundle IDs of the
     app and of each extension are registered, App Groups turned on, and one App
     Store profile made per bundle ID with the distribution certificate (imported
@@ -818,18 +823,22 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
     private var iconBusy: String?
 
     /// Sections
-    private let sAccount = 0, sSigning = 1, sIcon = 2, sUpload = 3, sStatus = 4
+    private let sAccount = 0, sSigning = 1, sIcon = 2, sXcode = 3, sUpload = 4, sStatus = 5
+    private var xcodeApps: [NXProject] = []
+    private var preflightOnly = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "App Store Connect"
         tableView.keyboardDismissMode = .onDrag
         icons = ForkASCIconCompiler.projects()
+        xcodeApps = ForkXcodeOnMac.apps()
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         icons = ForkASCIconCompiler.projects()
+        xcodeApps = ForkXcodeOnMac.apps()
         tableView.reloadData()
     }
 
@@ -840,20 +849,21 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
 
     // MARK: table
 
-    override func numberOfSections(in tableView: UITableView) -> Int { 5 }
+    override func numberOfSections(in tableView: UITableView) -> Int { 6 }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch section {
         case sAccount: return 4
         case sSigning: return 4 + ForkASCProfile.all().count
         case sIcon: return max(icons.count, 1)
-        case sUpload: return 1
+        case sXcode: return 1 + max(xcodeApps.count, 1)
+        case sUpload: return 2
         default: return 2 + statusMessages.count
         }
     }
 
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        ["API Key", "Distribution Signing", "App Icon (Assets.car)", "Upload", "Last Upload"][section]
+        ["API Key", "Distribution Signing", "App Icon (Assets.car)", "Xcode on Mac (recommended)", "Upload .ipa Directly", "Last Upload"][section]
     }
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
@@ -864,8 +874,10 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
             return "Automatic: with the API key Nyxian registers the bundle IDs (the app and each widget), turns on App Groups and makes one App Store profile per bundle ID with your distribution certificate, each time you upload. Import your Apple Distribution .p12, or create a certificate here (its private key is made on this device and stays in the Keychain). App Groups themselves are created once at developer.apple.com; Nyxian says when a profile lacks one. Imported profiles are used when you choose to."
         case sIcon:
             return "The App Store wants the icon in an asset catalog, which only Apple's actool writes, on a Mac. Nyxian sends the project's Config/AppIcon.png to the iOS Asset Catalog workflow (your Mac, or GitHub's) and keeps Assets.car in Config/AssetCatalog; every Export then puts it in the app. Needs the GitHub token of Settings › Toolchain › iOS Builds with \"Contents: Read and write\" too. The PNG is on the fork's public release for a few minutes, then removed."
+        case sXcode:
+            return "Tap an app: Preflight checks what would go to Apple and fixes what it can, then its project and the widgets its Export embeds go to Apple's Xcode on your Mac (GitHub's when yours is off), which builds, signs (automatic, with your API key) and uploads it. The build is Xcode's own, nothing written in its place. Once, in the repository's Settings › Secrets › Actions: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 (the .p8 text) and APPLE_TEAM_ID if Team ID is empty. The GitHub token needs \"Contents: Read and write\" on \(ForkXcodeOnMac.privateRepository): the projects only go through that private repository."
         case sUpload:
-            return "Pick an .ipa (an Export from Nyxian, saved to Files). Nyxian signs it for the App Store, the app and each widget with its own profile, then uploads it with Apple's Build Uploads API. The build shows in App Store Connect and TestFlight after Apple processes it (minutes)."
+            return "An .ipa built by Nyxian has no DTXcode / DTSDKBuild (ITMS-90534): Apple asks for apps built with Xcode, so this upload is for builds made elsewhere, or to try. Preflight .ipa shows what Apple will likely answer. Pick an .ipa (an Export from Nyxian, saved to Files). Nyxian signs it for the App Store, the app and each widget with its own profile, then uploads it with Apple's Build Uploads API. The build shows in App Store Connect and TestFlight after Apple processes it (minutes)."
         default:
             return nil
         }
@@ -949,7 +961,26 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
             let c = valueCell(item.name, state, symbol: item.compiled ? "checkmark.seal.fill" : "app.badge", accessory: false)
             c.detailTextLabel?.textColor = item.compiled ? .systemGreen : .systemBlue
             return c
+        case sXcode:
+            if row == 0 { return fieldCell("Team ID (10 characters)", text: ForkXcodeOnMac.teamID, tag: 4) }
+            guard !xcodeApps.isEmpty else {
+                let c = valueCell("No app projects", "", symbol: "app.dashed", accessory: false)
+                c.textLabel?.textColor = .secondaryLabel
+                c.selectionStyle = .none
+                return c
+            }
+            let p = xcodeApps[row - 1]
+            let (version, build) = ForkPreflight.versions(p)
+            let widgets = ForkEmbeddedExtensions.embedded(in: p).count
+            let c = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+            c.textLabel?.text = p.projectConfig.displayName ?? (p.url as URL).lastPathComponent
+            c.detailTextLabel?.text = "\(p.projectConfig.bundleid ?? "") · \(version) (\(build))\(widgets > 0 ? " · \(widgets) widget\(widgets == 1 ? "" : "s")" : "")"
+            c.detailTextLabel?.textColor = .secondaryLabel
+            c.imageView?.image = UIImage(systemName: "hammer.circle.fill")
+            c.accessoryType = .disclosureIndicator
+            return c
         case sUpload:
+            if row == 1 { return actionCell("Preflight .ipa (no upload)", symbol: "checklist", enabled: !busy) }
             return actionCell(busy ? "Working…" : "Upload .ipa to App Store Connect", symbol: "icloud.and.arrow.up.fill", enabled: !busy)
         default:
             switch row {
@@ -995,7 +1026,10 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
             if row == 3 { pick(.profile) }
         case sIcon:
             if !icons.isEmpty && iconBusy == nil { compileIcon(icons[row]) }
+        case sXcode:
+            if row > 0 && row <= xcodeApps.count && !busy { xcodeMenu(xcodeApps[row - 1], at: indexPath) }
         case sUpload:
+            preflightOnly = row == 1
             if !busy { pick(.ipa) }
         default:
             if row == 1, let id = lastUploadID { follow(id, once: true) }
@@ -1008,6 +1042,7 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
         case 1: ForkASCAccount.issuerID = text; ForkASCAuth.reset()
         case 2: ForkASCAccount.keyID = text; ForkASCAuth.reset()
         case 3: ForkASCAccount.p12Password = text
+        case 4: ForkXcodeOnMac.teamID = text
         default: break
         }
     }
@@ -1096,7 +1131,9 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
             try? FileManager.default.createDirectory(at: ForkASCPipeline.workRoot(), withIntermediateDirectories: true)
             try? FileManager.default.removeItem(at: copy)
             try? FileManager.default.copyItem(at: url, to: copy)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.prepareUpload(copy) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                if self.preflightOnly { self.preflightIPA(copy) } else { self.prepareUpload(copy) }
+            }
         }
     }
 
@@ -1175,6 +1212,9 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
         if !hasCar { lines.append("No Assets.car: the App Store will likely refuse the icon (App Icon section above, then Export again).") }
         if ForkASCAccount.p12 == nil { lines.append("No distribution certificate yet: import a .p12 or create one.") }
         let imported = ForkASCPipeline.importedProfiles(info)
+        let findings = ForkPreflight.check(ipa: info)
+        let errorCount = findings.filter { $0.level == .error }.count
+        lines.insert("Preflight: \(errorCount) error\(errorCount == 1 ? "" : "s"), \(findings.filter { $0.level == .warning }.count) warning(s)\(findings.contains { $0.code == "ITMS-90534" } ? " (not built by Xcode: ITMS-90534; Xcode on Mac is the way)" : "").", at: 0)
 
         let sheet = UIAlertController(title: "\(info.name) \(info.version) (\(info.build))",
                                       message: lines.joined(separator: "\n\n"), preferredStyle: .actionSheet)
@@ -1185,6 +1225,9 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
             }
         }
         sheet.addAction(UIAlertAction(title: "Upload As Is (already signed)", style: .default) { _ in self.run(info, mode: .asIs) })
+        sheet.addAction(UIAlertAction(title: "Preflight Report", style: .default) { _ in
+            self.showPreflight(title: "Preflight · \(info.name)", note: "What Apple will likely answer for this .ipa. Apple runs more checks when it processes the build.", findings: findings)
+        })
         sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         if let pop = sheet.popoverPresentationController {
             pop.sourceView = tableView
@@ -1230,6 +1273,104 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
                 setStatus("Upload failed: \(error.localizedDescription)", messages: notes)
             }
             try? FileManager.default.removeItem(at: info.workFolder)
+        }
+    }
+
+    // MARK: Preflight and Xcode on Mac
+
+    private func showPreflight(title: String, note: String, findings: [ForkPreflightFinding],
+                               recheck: (() async -> [ForkPreflightFinding])? = nil,
+                               action: (title: String, run: () -> Void)? = nil) {
+        let vc = ForkPreflightViewController(title: title, note: note, findings: findings, recheck: recheck, action: action)
+        present(UINavigationController(rootViewController: vc), animated: true)
+    }
+
+    private func preflightIPA(_ ipa: URL) {
+        let info: ForkASCIPAInfo
+        do { info = try ForkASCPipeline.inspect(ipa) } catch {
+            alert("Cannot read the .ipa", error.localizedDescription)
+            return
+        }
+        showPreflight(title: "Preflight · \(info.name)", note: "\(info.bundleID) \(info.version) (\(info.build)). Nothing was uploaded.", findings: ForkPreflight.check(ipa: info))
+        try? FileManager.default.removeItem(at: info.workFolder)
+    }
+
+    private func xcodeMenu(_ app: NXProject, at indexPath: IndexPath) {
+        let name = app.projectConfig.displayName ?? (app.url as URL).lastPathComponent
+        let sheet = UIAlertController(title: name, message: "Preflight first; Xcode on the Mac does the build.", preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "Preflight", style: .default) { _ in self.preflightProject(app, then: nil) })
+        sheet.addAction(UIAlertAction(title: "Preflight, then Xcode → App Store Connect", style: .default) { _ in self.preflightProject(app, then: .upload) })
+        sheet.addAction(UIAlertAction(title: "Preflight, then Xcode Check (no upload)", style: .default) { _ in self.preflightProject(app, then: .check) })
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        if let pop = sheet.popoverPresentationController {
+            pop.sourceView = tableView
+            pop.sourceRect = tableView.rectForRow(at: indexPath)
+        }
+        present(sheet, animated: true)
+    }
+
+    private func preflightProject(_ app: NXProject, then mode: ForkXcodeOnMac.Mode?) {
+        let name = app.projectConfig.displayName ?? (app.url as URL).lastPathComponent
+        setStatus("Preflight of \(name)…", messages: [])
+        Task { @MainActor in
+            let findings = await ForkPreflight.check(project: app, forXcode: true)
+            self.setStatus("Preflight of \(name): \(findings.filter { $0.level == .error }.count) error(s).", messages: [])
+            var action: (title: String, run: () -> Void)?
+            if let mode {
+                action = (mode == .upload ? "Xcode → App Store Connect" : "Xcode Check (no upload)", { self.sendToXcode(app, mode: mode) })
+            }
+            self.showPreflight(title: "Preflight · \(name)",
+                               note: "The app and the widgets its Export embeds, as Xcode on the Mac will get them. Tap a finding with ⓘ to fix it in the project.",
+                               findings: findings,
+                               recheck: { await ForkPreflight.check(project: NXProject(url: app.url) ?? app, forXcode: true) },
+                               action: action)
+        }
+    }
+
+    private func sendToXcode(_ app: NXProject, mode: ForkXcodeOnMac.Mode) {
+        let fresh = NXProject(url: app.url) ?? app
+        let name = fresh.projectConfig.displayName ?? (fresh.url as URL).lastPathComponent
+        let (version, build) = ForkPreflight.versions(fresh)
+        busy = true
+        pollTask?.cancel()
+        setStatus("\(name): starting…", messages: [])
+        pollTask = Task { @MainActor in
+            do {
+                let result = try await ForkXcodeOnMac.send(fresh, mode: mode) { text in
+                    Task { @MainActor in self.setStatus("\(name): \(text)") }
+                }
+                self.busy = false
+                var messages = result.issues
+                if !result.xcode.isEmpty { messages.insert(result.xcode, at: 0) }
+                if let log = result.log { messages.append("Full Xcode log: \(log.lastPathComponent) (Files › On My iPad › Nyxian › AppStoreConnect)") }
+                guard result.ok else {
+                    self.setStatus("\(name): Xcode stopped at \(result.stage).", messages: messages)
+                    return
+                }
+                if mode == .check {
+                    self.setStatus("\(name): Xcode built the archive (not signed, not uploaded).", messages: messages)
+                    return
+                }
+                self.setStatus("\(name) \(version) (\(build)): uploaded by Xcode. Apple is processing it…", messages: messages)
+                let deadline = Date().addingTimeInterval(45 * 60)
+                while !Task.isCancelled && Date() < deadline {
+                    try? await Task.sleep(nanoseconds: 30_000_000_000)
+                    guard let state = try? await ForkXcodeOnMac.processingState(bundleID: fresh.projectConfig.bundleid ?? "", version: version, build: build) else { continue }
+                    switch state {
+                    case "VALID":
+                        self.setStatus("\(name) \(version) (\(build)) is ready in App Store Connect and TestFlight.", messages: messages)
+                        return
+                    case "INVALID", "FAILED":
+                        self.setStatus("\(name) \(version) (\(build)): Apple marked the build \(state). Its e-mail says why.", messages: messages)
+                        return
+                    default:
+                        self.setStatus("\(name) \(version) (\(build)): Apple's state \(state)…", messages: messages)
+                    }
+                }
+            } catch {
+                self.busy = false
+                self.setStatus("\(name): \(error.localizedDescription)", messages: [])
+            }
         }
     }
 
