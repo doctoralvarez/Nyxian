@@ -4,6 +4,20 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.7.3 — 2026-11-22
+
+- Swift Playgrounds export and the Playgrounds sync take Preflight's fixes
+  along, so an app without widgets can be uploaded from Swift Playgrounds
+  with them. Info-extra.plist goes to the package's root and Package.swift
+  points to it (`additionalInfoPlistContentFilePath`): its keys
+  (ITSAppUsesNonExemptEncryption, background modes, URL schemes, purpose
+  strings Package.swift cannot hold…) reach the app's Info.plist; what
+  Package.swift sets itself (orientations, launch screen, identity, purpose
+  strings it already has as capabilities) stays out of it.
+  PrivacyInfo.xcprivacy goes in as a resource of the app target, as Apple
+  asks for packages. Importing such a package keeps Info-extra.plist at the
+  project's root. Version and build already went over.
+
 ## 2.7.2 — 2026-11-22
 
 - Increased Memory Limit and Extended Virtual Addressing (Export ›

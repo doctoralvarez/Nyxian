@@ -21,8 +21,15 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.50.0
+ Fork doctoralvarez/Nyxian — version 1.51.0
  Changelog:
+  - 1.51.0 (2026-11-22): Swift Playgrounds export (and the Playgrounds sync)
+    takes Preflight's fixes along. Info-extra.plist goes to the package's root
+    and Package.swift points to it (additionalInfoPlistContentFilePath), so its
+    keys (ITSAppUsesNonExemptEncryption, background modes, URL schemes, purpose
+    strings…) reach the app's Info.plist; the keys Package.swift sets itself
+    (orientations, launch screen, identity) stay out of it. PrivacyInfo.xcprivacy
+    goes in as a resource of the app target, as Apple asks for packages.
   - 1.50.0 (2026-11-21): projects list › hold a project › "Rename…": the new
     name goes into Config/Project.plist (NXDisplayName, and the app's
     CFBundleDisplayName / CFBundleName when they held the old name), shows
@@ -1632,6 +1639,7 @@ enum SwiftPlaygroundsImporter {
         /* collect sources and resources */
         var swiftFiles: [(source: URL, relative: String)] = []
         var resourceFiles: [(source: URL, relative: String)] = []
+        var rootFiles: [(source: URL, relative: String)] = []
         var assetCatalogs: [URL] = []
         var usesBundleModule = false
         
@@ -1660,6 +1668,9 @@ enum SwiftPlaygroundsImporter {
                        text.contains("Bundle.module") {
                         usesBundleModule = true
                     }
+                } else if relative == "Info-extra.plist" {
+                    /* fork 1.51: Package.swift's additional Info.plist stays at the project's root, where NXProject reads it */
+                    rootFiles.append((source: url, relative: relative))
                 } else {
                     /* everything that is not code ships in the app bundle; a leading "Resources/" folder is flattened */
                     var resourceRelative = relative
@@ -1695,7 +1706,7 @@ enum SwiftPlaygroundsImporter {
                 try? fm.removeItem(at: templateFile)
             }
             
-            for file in swiftFiles {
+            for file in swiftFiles + rootFiles {
                 try copy(file.source, to: project.url.appendingPathComponent(file.relative))
             }
             
@@ -1943,6 +1954,7 @@ enum SwiftPlaygroundsExporter {
         var resourceCount = 0
         var skippedCFamily = 0
         var hasAppLifecycle = false
+        var privacyManifest = false
         var images: [(source: URL, set: String, scale: String)] = []
         
         let keys: [URLResourceKey] = [.isDirectoryKey]
@@ -1963,6 +1975,13 @@ enum SwiftPlaygroundsExporter {
                 }
                 
                 let ext = url.pathExtension.lowercased()
+                /* fork 1.51: Info-extra.plist becomes Package.swift's additional Info.plist (below) */
+                if relative == "Info-extra.plist" { continue }
+                if url.lastPathComponent == "PrivacyInfo.xcprivacy" {
+                    try copy(url, to: package.appendingPathComponent("Resources/PrivacyInfo.xcprivacy"))
+                    privacyManifest = true
+                    continue
+                }
                 if ext == "swift" {
                     try copy(url, to: package.appendingPathComponent(relative))
                     swiftCount += 1
@@ -2034,8 +2053,28 @@ enum SwiftPlaygroundsExporter {
             }
         }
         
+        /* fork 1.51: the Info.plist keys of Info-extra.plist, minus what Package.swift sets itself */
+        var extraInfo = false
+        let extraURL = root.appendingPathComponent("Info-extra.plist")
+        if let data = try? Data(contentsOf: extraURL),
+           var extra = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] {
+            let managed: Set<String> = [
+                "CFBundleIdentifier", "CFBundleExecutable", "CFBundleName", "CFBundleDisplayName", "CFBundleVersion",
+                "CFBundleShortVersionString", "CFBundlePackageType", "MinimumOSVersion", "UIDeviceFamily",
+                "UISupportedInterfaceOrientations", "UISupportedInterfaceOrientations~ipad", "UISupportedInterfaceOrientations~iphone",
+                "UILaunchScreen", "UILaunchStoryboardName", "UIRequiresFullScreen", "CFBundleIcons", "CFBundleIconName",
+                "NSAccentColorName", "UIApplicationSceneManifest"
+            ]
+            for key in extra.keys where managed.contains(key) || key.hasPrefix("NX") { extra.removeValue(forKey: key) }
+            if !extra.isEmpty {
+                let out = try PropertyListSerialization.data(fromPropertyList: extra, format: .xml, options: 0)
+                try out.write(to: package.appendingPathComponent("Info-extra.plist"))
+                extraInfo = true
+            }
+        }
+
         /* manifest; icon and accent color come from the original package when there was one */
-        let hasResources = resourceCount > 0
+        let hasResources = resourceCount > 0 || privacyManifest
         let original = (try? String(contentsOf: root.appendingPathComponent("Config/\(originalManifestName)"), encoding: .utf8)) ?? ""
         var appIcon = firstMatch(in: original, pattern: #"\.placeholder\s*\(\s*icon\s*:\s*\.[A-Za-z]+\s*\)"#) ?? ".placeholder(icon: .leaf)"
         if let placeholder = ForkAppIcon.placeholderExpression(of: project) {
@@ -2047,6 +2086,22 @@ enum SwiftPlaygroundsExporter {
         }
         let info = project.projectConfig.infoDictionary ?? [:]
         let capabilities = ForkCapabilities.capabilitiesBlock(original: original, info: info)
+        /* fork 1.51: purpose strings Package.swift already has as capabilities stay out of Info-extra.plist */
+        if extraInfo {
+            let extraCopy = package.appendingPathComponent("Info-extra.plist")
+            if let data = try? Data(contentsOf: extraCopy),
+               var extra = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] {
+                for key in extra.keys where key.hasSuffix("UsageDescription") && !capabilities.unmapped.contains(key) {
+                    extra.removeValue(forKey: key)
+                }
+                if extra.isEmpty {
+                    try? fm.removeItem(at: extraCopy)
+                    extraInfo = false
+                } else {
+                    try PropertyListSerialization.data(fromPropertyList: extra, format: .xml, options: 0).write(to: extraCopy)
+                }
+            }
+        }
         let accentColor = firstMatch(in: original, pattern: #"\.presetColor\s*\(\s*\.[A-Za-z]+\s*\)"#) ?? ".presetColor(.blue)"
         try manifest(name: displayName,
                      bundleIdentifier: config.bundleid ?? "com.example.\(packageName)",
@@ -2055,7 +2110,8 @@ enum SwiftPlaygroundsExporter {
                      appIcon: appIcon,
                      accentColor: accentColor,
                      capabilities: capabilities.block,
-                     resources: hasResources)
+                     resources: hasResources,
+                     extraInfoPlist: extraInfo)
             .write(to: package.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
         
         /* what Swift Playgrounds will not take as is */
@@ -2065,7 +2121,7 @@ enum SwiftPlaygroundsExporter {
         if !hasAppLifecycle {
             warnings.append("No SwiftUI \"@main struct …: App\" was found. Swift Playgrounds apps start from a SwiftUI App, so a UIKit app delegate needs a small SwiftUI wrapper.")
         }
-        if hasResources {
+        if resourceCount > 0 {
             warnings.append("\(resourceCount) non-image resource(s) are in Resources/. In a Swift package they are read with Bundle.module instead of Bundle.main.")
         }
         if !capabilities.unmapped.isEmpty {
@@ -2098,8 +2154,9 @@ enum SwiftPlaygroundsExporter {
         return String(text[range])
     }
     
-    private static func manifest(name: String, bundleIdentifier: String, displayVersion: String, bundleVersion: String, appIcon: String, accentColor: String, capabilities: String?, resources: Bool) -> String {
-        let capabilitiesLine = capabilities.map { ",\n                    capabilities: " + $0 } ?? ""
+    private static func manifest(name: String, bundleIdentifier: String, displayVersion: String, bundleVersion: String, appIcon: String, accentColor: String, capabilities: String?, resources: Bool, extraInfoPlist: Bool = false) -> String {
+        var capabilitiesLine = capabilities.map { ",\n                    capabilities: " + $0 } ?? ""
+        if extraInfoPlist { capabilitiesLine += ",\n                    additionalInfoPlistContentFilePath: \"Info-extra.plist\"" }
         let resourcesLine = resources ? ",\n            resources: [\n                .process(\"Resources\")\n            ]" : ""
         return """
         // swift-tools-version: 5.9
