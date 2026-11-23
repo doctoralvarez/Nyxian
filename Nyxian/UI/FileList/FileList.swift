@@ -24,6 +24,7 @@
  Fork doctoralvarez/Nyxian — version 1.23.0
  Changelog:
   - 1.23.0 (2026-11-22): Export › Capabilities: Push Notifications
+    (Increased Memory Limit / Extended Virtual Addressing: Xcode on Mac).
     (aps-environment). With iCloud and App Groups, Settings › App Store Connect
     turns them on at Apple only for the projects that have them on here.
   - 1.22.1 (2026-11-22): closing an app soon after Run (switcher, close
@@ -3251,7 +3252,7 @@ final class ForkExportAssistant: UITableViewController {
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
         switch section {
         case 0: return "Saved in the project. Raise the build number for every .ipa you install over an older one."
-        case 2: return "Written to Config/AppEntitlements.plist and signed into the app, so the signer sees them. Each must also be on for the App ID: Settings › App Store Connect turns on iCloud, Push Notifications and App Groups at Apple for this project only when they are on here (for a widget, in the widget's own project); otherwise developer.apple.com or GetMoreRam. iCloud also needs the container (iCloud.<bundle id>) created and assigned to the App ID. iCloud and Extended Virtual Addressing need a paid account. Inside Nyxian the app runs with Nyxian's entitlements."
+        case 2: return "Written to Config/AppEntitlements.plist and signed into the app, so the signer sees them. Each must also be on for the App ID: Settings › App Store Connect turns on iCloud, Push Notifications and App Groups at Apple for this project only when they are on here (for a widget, in the widget's own project); Increased Memory Limit and Extended Virtual Addressing are turned on by Xcode on Mac when it signs (Apple's API refuses them); otherwise developer.apple.com or GetMoreRam. iCloud also needs the container (iCloud.<bundle id>) created and assigned to the App ID. iCloud and Extended Virtual Addressing need a paid account. Inside Nyxian the app runs with Nyxian's entitlements."
         case 3: return extensionCandidates.isEmpty
             ? "To give the app a widget, make another project with the widget's code and its @main WidgetBundle; it shows up here to switch on."
             : "Switched on, the project is built with the app and goes into the .ipa as PlugIns/<Name>.appex (bundle ID <this app's ID>.<Name>), like a widget target in Xcode. It gets this app's App Groups. Its bundle ID needs to be allowed by the signer's profile (a wildcard one, or sign with a tool that registers extensions)."

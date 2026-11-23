@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.1.1
  Changelog:
+  - 1.1.1 (2026-11-22): Increased Memory Limit and Extended Virtual Addressing
+    in Preflight: asked for per project; Xcode on Mac's signing turns them on.
   - 1.1.0 (2026-11-22): iCloud and Push Notifications only where asked for:
     Preflight lists what each project (app or widget) asks for in Export ›
     Capabilities and whether its App ID has it at Apple; Xcode on Mac turns
@@ -342,6 +344,11 @@ enum ForkPreflight {
             let id = isApp ? bundleID : "\(bundleID).\(ForkEmbeddedExtensions.suffix(of: project))"
             let asked = ForkASCProvisioning.requested(ForkAppEntitlements.read(project))
             let names = (asked.iCloud ? ["iCloud"] : []) + (asked.push ? ["Push Notifications"] : [])
+            let memoryNames = (asked.memory ? ["Increased Memory Limit"] : []) + (asked.addressing ? ["Extended Virtual Addressing"] : [])
+            if !memoryNames.isEmpty {
+                out.append(.init(level: .info, code: nil, title: "\(label): \(memoryNames.joined(separator: " and "))",
+                                 detail: "Asked for in Export › Capabilities. Apple's App Store Connect API cannot turn these on; Xcode on Mac's automatic signing does, for \(id). With the .ipa upload, turn it on once for the App ID at developer.apple.com (or GetMoreRam).\(isApp ? "" : " A widget runs with iOS's widget memory budget regardless.")"))
+            }
             guard !names.isEmpty else { continue }
             var atApple = "Xcode on Mac turns it on for \(id) before signing."
             if ForkASCAccount.isConfigured, let have = try? await ForkPreflight.capabilities(of: id) {

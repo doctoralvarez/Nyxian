@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.7.2 — 2026-11-22
+
+- Increased Memory Limit and Extended Virtual Addressing (Export ›
+  Capabilities, per app or widget) now go to the App Store too: Xcode on Mac's
+  automatic signing turns them on for exactly those App IDs. Apple's App Store
+  Connect API refuses these two, so Nyxian does not pretend: Preflight says so,
+  and the .ipa upload says when a profile lacks them (turn them on once at
+  developer.apple.com or with GetMoreRam).
+
 ## 2.7.1 — 2026-11-22
 
 - iCloud and Push Notifications through your Apple Developer account, only

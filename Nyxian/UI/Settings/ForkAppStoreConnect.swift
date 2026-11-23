@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.3.1
  Changelog:
+  - 1.3.1 (2026-11-22): Increased Memory Limit and Extended Virtual Addressing
+    for the apps and widgets that ask for them: Xcode on Mac's automatic
+    signing turns them on for the App ID (Apple's App Store Connect API refuses
+    them), and the .ipa upload says when a profile lacks them.
   - 1.3.0 (2026-11-22): iCloud and Push Notifications through your Apple
     Developer account, only for the app and widgets that ask for them (Export ›
     Capabilities of each project): Nyxian turns ICLOUD / PUSH_NOTIFICATIONS on
@@ -620,7 +624,14 @@ enum ForkASCProvisioning {
         var containers: [String] = []
         var push = false
         var groups: [String] = []
+        var memory = false
+        var addressing = false
         var names: [String] {
+            (iCloud ? ["iCloud"] : []) + (push ? ["Push Notifications"] : []) + (groups.isEmpty ? [] : ["App Groups"])
+                + (memory ? ["Increased Memory Limit"] : []) + (addressing ? ["Extended Virtual Addressing"] : [])
+        }
+        /// the ones Apple's API turns on (the memory ones only Xcode's signing does)
+        var byAPI: [String] {
             (iCloud ? ["iCloud"] : []) + (push ? ["Push Notifications"] : []) + (groups.isEmpty ? [] : ["App Groups"])
         }
     }
@@ -631,6 +642,8 @@ enum ForkASCProvisioning {
         r.iCloud = !r.containers.isEmpty || entitlements["com.apple.developer.icloud-services"] != nil || entitlements["com.apple.developer.ubiquity-kvstore-identifier"] != nil
         r.push = entitlements["aps-environment"] != nil
         r.groups = entitlements["com.apple.security.application-groups"] as? [String] ?? []
+        r.memory = entitlements["com.apple.developer.kernel.increased-memory-limit"] != nil
+        r.addressing = entitlements["com.apple.developer.kernel.extended-virtual-addressing"] != nil
         return r
     }
 
@@ -666,6 +679,11 @@ enum ForkASCProvisioning {
     static func missingInProfile(_ identifier: String, _ r: Requested, profile: Data) -> [String] {
         let ent = (ForkASCProfile.plist(from: profile)?["Entitlements"] as? [String: Any]) ?? [:]
         var notes: [String] = []
+        let memoryNames = (r.memory && ent["com.apple.developer.kernel.increased-memory-limit"] == nil ? ["Increased Memory Limit"] : [])
+            + (r.addressing && ent["com.apple.developer.kernel.extended-virtual-addressing"] == nil ? ["Extended Virtual Addressing"] : [])
+        if !memoryNames.isEmpty {
+            notes.append("\(identifier): the profile has no \(memoryNames.joined(separator: " / ")). Apple's App Store Connect API cannot turn these on (it refuses them): Xcode on Mac does it when it signs, or turn it on once for the App ID at developer.apple.com (or with GetMoreRam), then Upload again.")
+        }
         if r.push && ent["aps-environment"] == nil {
             notes.append("\(identifier): the profile has no Push Notifications yet; tap Upload again in a minute (Apple turns it on for the App ID first).")
         }
@@ -690,11 +708,16 @@ enum ForkASCProvisioning {
         for b in all {
             let r = requested(b.entitlements)
             if r.names.isEmpty { continue }
-            progress("Turning on \(r.names.joined(separator: ", ")) for \(b.id)…")
+            if r.memory || r.addressing {
+                let kinds = (r.memory ? ["Increased Memory Limit"] : []) + (r.addressing ? ["Extended Virtual Addressing"] : [])
+                notes.append("\(b.id): \(kinds.joined(separator: " and ")) — Xcode's automatic signing turns it on for the App ID (Apple's API cannot).")
+            }
+            if r.byAPI.isEmpty { continue }
+            progress("Turning on \(r.byAPI.joined(separator: ", ")) for \(b.id)…")
             do {
                 let resource = try await bundleIDResource(b.id, name: b.name)
                 notes += await enableRequested(resource, r)
-                notes.append("\(b.id): \(r.names.joined(separator: ", ")) on at Apple.")
+                notes.append("\(b.id): \(r.byAPI.joined(separator: ", ")) on at Apple.")
                 if r.iCloud && !r.containers.isEmpty {
                     notes.append("\(b.id): iCloud container \(r.containers.joined(separator: ", ")) — if it does not exist yet, create it at developer.apple.com › Identifiers › iCloud Containers (the API cannot); Xcode assigns it.")
                 }
@@ -760,8 +783,8 @@ enum ForkASCProvisioning {
                let mach = ForkMachO(url: bundle.appendingPathComponent(exe)) {
                 asked = requested(mach.entitlements)
                 asked.groups = []
-                if !asked.names.isEmpty {
-                    progress("Turning on \(asked.names.joined(separator: ", ")) for \(identifier)…")
+                if !asked.byAPI.isEmpty {
+                    progress("Turning on \(asked.byAPI.joined(separator: ", ")) for \(identifier)…")
                     notes += await enableRequested(resource, asked)
                 }
             }
