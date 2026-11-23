@@ -4,6 +4,11 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.7.6 — 2026-11-22
+
+- Xcode on Mac: the log in Files › Nyxian › AppStoreConnect is named after the
+  app (Xcode-Fix AH-log.txt) instead of its project folder's ID.
+
 ## 2.7.5 — 2026-11-22
 
 - Preflight's "No app … in App Store Connect" has a fix (ⓘ): Nyxian registers

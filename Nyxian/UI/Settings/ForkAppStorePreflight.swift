@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.2.1
  Changelog:
+  - 1.2.1 (2026-11-22): the Xcode log in Files › Nyxian › AppStoreConnect is
+    named after the app (Xcode-<App>-log.txt), not its project folder's ID.
   - 1.2.0 (2026-11-22): "No app … in App Store Connect" has a fix: Nyxian
     registers the bundle ID at Apple (the API can do that, not the app record),
     copies it and opens App Store Connect's Apps page, where + › New App takes
@@ -843,7 +845,10 @@ enum ForkXcodeOnMac {
                     /* Documents is what Files shows (On My iPad › Nyxian) */
                     let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("AppStoreConnect", isDirectory: true)
                     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                    let url = folder.appendingPathComponent("Xcode-\(appFolder)-log.txt")
+                    /* 1.2.1: named after the app (Xcode-Fix AH-log.txt), not its project folder's ID */
+                    let appName = (app.projectConfig.displayName ?? appFolder)
+                        .components(separatedBy: CharacterSet(charactersIn: "/\\:?*\"<>|")).joined(separator: "-")
+                    let url = folder.appendingPathComponent("Xcode-\(appName.isEmpty ? appFolder : appName)-log.txt")
                     try? ld.write(to: url)
                     logURL = url
                 }
