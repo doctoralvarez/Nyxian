@@ -17,6 +17,9 @@
 #    (<request>-log.txt, <request>-result.json) go there too, and this log
 #    only says which step ran.
 #
+#    A request ID starting with "selftest-" builds tools/fork/widget-probe (generic
+#    code in this repository) in mode check and prints its result here instead.
+#
 #    Secrets (Settings › Secrets and variables › Actions of this repository):
 #      SDK_REPO_TOKEN      the private repository (already there for builds)
 #      ASC_KEY_ID          App Store Connect API key ID
@@ -118,13 +121,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: nyxian
-          sparse-checkout: tools/fork/appstore
+          sparse-checkout: |
+            tools/fork/appstore
+            tools/fork/widget-probe
 
       - name: Get the projects (private repository)
         run: |
           WORK="$RUNNER_TEMP/appstore-$REQUEST"
           echo "WORK=$WORK" >> "$GITHUB_ENV"
           rm -rf "$WORK"; mkdir -p "$WORK/request" "$WORK/xcode" "$WORK/out"
+          case "$REQUEST" in selftest-*)
+            mkdir -p "$WORK/request/ProbeApp/Config" "$WORK/request/ProbeWidget/Config"
+            cp nyxian/tools/fork/widget-probe/App/*.swift "$WORK/request/ProbeApp/"
+            cp nyxian/tools/fork/widget-probe/Widget/*.swift "$WORK/request/ProbeWidget/"
+            cp nyxian/tools/fork/appstore/selftest-manifest.json "$WORK/request/manifest.json"
+            echo "MODE=check" >> "$GITHUB_ENV"
+            echo "Self-test request"; exit 0 ;;
+          esac
           gh release download "$RELEASE" -R "$SDK_REPO" -p "$REQUEST.zip" -D "$WORK" >/dev/null
           ditto -x -k "$WORK/$REQUEST.zip" "$WORK/request"
           test -f "$WORK/request/manifest.json"
@@ -219,6 +232,12 @@ jobs:
           json.dump(result, open(os.path.join(out, "result.json"), "w"), indent=1)
           open(os.path.join(out, "log.txt"), "w").write(log)
           PY
+          case "$REQUEST" in selftest-*)
+            cat "$WORK/out/result.json"; tail -n 80 "$WORK/out/log.txt"; exit 0 ;;
+          esac
+          gh release view "$RELEASE" -R "$SDK_REPO" >/dev/null 2>&1 || \
+            gh release create "$RELEASE" -R "$SDK_REPO" --prerelease --title "App Store requests" \
+              --notes "Temporary files of Nyxian's Settings › App Store Connect › Xcode on Mac. Private." >/dev/null
           cp "$WORK/out/result.json" "$WORK/$REQUEST-result.json"
           cp "$WORK/out/log.txt" "$WORK/$REQUEST-log.txt"
           gh release upload "$RELEASE" -R "$SDK_REPO" "$WORK/$REQUEST-result.json" "$WORK/$REQUEST-log.txt" --clobber >/dev/null
@@ -227,6 +246,6 @@ jobs:
       - name: Clean up
         if: always()
         run: |
-          gh release delete-asset "$RELEASE" "$REQUEST.zip" -R "$SDK_REPO" -y >/dev/null 2>&1 || true
+          case "$REQUEST" in selftest-*) ;; *) gh release delete-asset "$RELEASE" "$REQUEST.zip" -R "$SDK_REPO" -y >/dev/null 2>&1 || true ;; esac
           [ -n "$WORK" ] && rm -rf "$WORK"
           echo "Cleaned"
