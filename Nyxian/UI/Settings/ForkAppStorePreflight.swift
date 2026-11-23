@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.1
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-22): "No app … in App Store Connect" has a fix: Nyxian
+    registers the bundle ID at Apple (the API can do that, not the app record),
+    copies it and opens App Store Connect's Apps page, where + › New App takes
+    it from the list. Apple's API cannot create the app record itself.
   - 1.1.1 (2026-11-22): Increased Memory Limit and Extended Virtual Addressing
     in Preflight: asked for per project; Xcode on Mac's signing turns them on.
   - 1.1.0 (2026-11-22): iCloud and Push Notifications only where asked for:
@@ -72,6 +76,8 @@ enum ForkPreflightFix {
     case privacyManifest(project: URL, categories: [String: [String]])
     /// Config/Project.plist NXBundleVersion
     case build(project: URL, value: String)
+    /// registers the bundle ID, copies it and opens App Store Connect › Apps (the record itself is made there)
+    case appRecord(bundleID: String, name: String)
 
     var label: String {
         switch self {
@@ -79,6 +85,7 @@ enum ForkPreflightFix {
         case .encryptionExempt: return "Declare standard encryption only"
         case .privacyManifest: return "Add to PrivacyInfo.xcprivacy"
         case .build(_, let value): return "Set the build to \(value)"
+        case .appRecord: return "Register the bundle ID, copy it and open App Store Connect › Apps"
         }
     }
 }
@@ -248,7 +255,8 @@ enum ForkPreflight {
                     }
                 } else {
                     out.append(.init(level: .error, code: nil, title: "No app \(bundleID) in App Store Connect",
-                                     detail: "Create it once: App Store Connect › Apps › + › New App, with this bundle ID (register it at developer.apple.com › Identifiers if it is not in the list)."))
+                                     detail: "Create it once: App Store Connect › Apps › + › New App. Apple's API cannot make the app record; ⓘ registers the bundle ID so it is in New App's list, copies it and opens that page.",
+                                     fix: .appRecord(bundleID: bundleID, name: name)))
                 }
             } catch {
                 out.append(.init(level: .warning, code: nil, title: "App Store Connect not checked", detail: error.localizedDescription))
@@ -523,6 +531,8 @@ enum ForkPreflight {
             if plist["NSPrivacyTrackingDomains"] == nil { plist["NSPrivacyTrackingDomains"] = [String]() }
             if plist["NSPrivacyCollectedDataTypes"] == nil { plist["NSPrivacyCollectedDataTypes"] = [[String: Any]]() }
             try writePlist(plist, to: url)
+        case .appRecord:
+            break   // async: ForkPreflightViewController does it
         case .build(let project, let value):
             let url = project.appendingPathComponent("Config/Project.plist")
             var plist = readPlist(url)
@@ -941,6 +951,22 @@ final class ForkPreflightViewController: UITableViewController {
             return
         }
         guard let fix = findings[indexPath.row].fix else { return }
+        if case .appRecord(let bundleID, let name) = fix {
+            Task { @MainActor in
+                var note = "\(bundleID) is registered and copied. In App Store Connect: + › New App › iOS, Name, Language, Bundle ID (pick \(bundleID) in the list), SKU (paste it), Full Access › Create. Then Preflight again."
+                do { _ = try await ForkASCProvisioning.bundleIDResource(bundleID, name: name) } catch {
+                    note = "Could not register \(bundleID): \(error.localizedDescription)\nIt is copied anyway; register it at developer.apple.com › Identifiers if New App does not list it."
+                }
+                UIPasteboard.general.string = bundleID
+                let done = UIAlertController(title: "App Store Connect", message: note, preferredStyle: .alert)
+                done.addAction(UIAlertAction(title: "Open Apps", style: .default) { _ in
+                    if let url = URL(string: "https://appstoreconnect.apple.com/apps") { UIApplication.shared.open(url) }
+                })
+                done.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+                self.present(done, animated: true)
+            }
+            return
+        }
         if case .encryptionExempt = fix {
             let ask = UIAlertController(title: "Standard encryption only?",
                                         message: "Choose this only if the app uses no encryption of its own: HTTPS, Apple's frameworks (CryptoKit, Keychain, Data Protection) count as exempt. Nyxian writes ITSAppUsesNonExemptEncryption = NO in Info-extra.plist; it is your declaration to Apple.",

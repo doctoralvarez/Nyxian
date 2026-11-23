@@ -4,6 +4,13 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.7.5 — 2026-11-22
+
+- Preflight's "No app … in App Store Connect" has a fix (ⓘ): Nyxian registers
+  the bundle ID at Apple, copies it and opens App Store Connect › Apps, where
+  + › New App lists it (SKU: paste). Apple's API cannot create the app record
+  itself, so that one tap stays yours, once per app.
+
 ## 2.7.4 — 2026-11-22
 
 - App Icon (Assets.car) failed with "GitHub 403 … Resource not accessible by
