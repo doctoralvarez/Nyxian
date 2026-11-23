@@ -21,8 +21,10 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.1
+ Fork doctoralvarez/Nyxian — version 1.2.2
  Changelog:
+  - 1.2.2 (2026-11-23): the answer from the Mac carries Xcode's result lines
+    (** ARCHIVE SUCCEEDED ** …) for Last Upload.
   - 1.2.1 (2026-11-22): the Xcode log in Files › Nyxian › AppStoreConnect is
     named after the app (Xcode-<App>-log.txt), not its project folder's ID.
   - 1.2.0 (2026-11-22): "No app … in App Store Connect" has a fix: Nyxian
@@ -656,6 +658,8 @@ enum ForkXcodeOnMac {
         let xcode: String
         let issues: [String]
         let log: URL?
+        /// Xcode's own result lines: ** ARCHIVE SUCCEEDED **, ** EXPORT FAILED **, Upload succeeded…
+        var summary: [String] = []
     }
 
     /// The app projects that can go to the App Store (not the extensions)
@@ -859,7 +863,8 @@ enum ForkXcodeOnMac {
                           stage: result["stage"] as? String ?? "",
                           xcode: result["xcode"] as? String ?? "",
                           issues: notes + (result["issues"] as? [String] ?? []),
-                          log: logURL)
+                          log: logURL,
+                          summary: result["summary"] as? [String] ?? [])
         }
         throw ForkASCError.message("No answer from the Mac in 75 minutes: see the App Store (Xcode) workflow on GitHub.")
     }

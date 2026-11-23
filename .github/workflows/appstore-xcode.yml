@@ -1,5 +1,8 @@
-# fork doctoralvarez/Nyxian — version 1.0.0
+# fork doctoralvarez/Nyxian — version 1.1.0
 # Changelog:
+#  - 1.1.0 (2026-11-23): the result carries Xcode's own lines on how it went
+#    (** ARCHIVE SUCCEEDED **, ** EXPORT FAILED **, Upload succeeded…) as
+#    "summary", shown in Nyxian's Last Upload.
 #  - 1.0.0 (2026-11-22): the last step to the App Store, done by Apple's Xcode
 #    on a Mac: your own Mac when it is online, GitHub's otherwise (the same
 #    choice as "Build iOS App"). Nyxian (Settings › App Store Connect › Xcode
@@ -225,6 +228,13 @@ jobs:
                   if s not in issues:
                       issues.append(s[:400])
           result["issues"] = issues[:60]
+          # Xcode's own words on how it went, for Nyxian's Last Upload
+          summary = []
+          for line in log.splitlines():
+              s = line.strip()
+              if re.search(r"^\*\* (ARCHIVE|EXPORT|BUILD) (SUCCEEDED|FAILED) \*\*|^(Upload|Export) (succeeded|failed)|Uploaded package is processing", s, re.I) and s not in summary:
+                  summary.append(s[:200])
+          result["summary"] = summary
           info = os.path.join(work, "App.xcarchive", "Info.plist")
           if os.path.exists(info):
               a = plistlib.load(open(info, "rb")).get("ApplicationProperties", {})

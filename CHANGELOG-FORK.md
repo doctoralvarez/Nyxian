@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.7.7 — 2026-11-23
+
+- Xcode on Mac: Settings › App Store Connect scrolls down to Last Upload when
+  it starts and follows it while it works, so you watch each step live.
+  When Xcode answers, Last Upload says plainly how it went with Xcode's own
+  lines: ✅ ** ARCHIVE SUCCEEDED ** (and the upload when it uploads), or ❌ the
+  step where it stopped (** ARCHIVE FAILED ** …) and where its log is
+  (Files › On My iPad › Nyxian › AppStoreConnect).
+
 ## 2.7.6 — 2026-11-22
 
 - Xcode on Mac: the log in Files › Nyxian › AppStoreConnect is named after the

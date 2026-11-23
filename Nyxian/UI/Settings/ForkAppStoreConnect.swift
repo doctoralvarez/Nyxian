@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.2
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-23): Xcode on Mac scrolls down to Last Upload and stays
+    there while it works, so you see each step as it happens; at the end it
+    says plainly how it went: ✅ ** ARCHIVE SUCCEEDED ** (and the upload), or
+    ❌ where Xcode stopped and where its log is.
   - 1.3.2 (2026-11-22): App Icon (Assets.car) goes through the private
     repository, like Xcode on Mac: the icon is no longer on the public fork's
     release, and the token needs the same permissions for both ("Contents:
@@ -1203,10 +1207,20 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
 
     // MARK: status
 
-    private func setStatus(_ text: String, messages: [String]? = nil) {
+    private func setStatus(_ text: String, messages: [String]? = nil, follow: Bool = false) {
         status = text
         if let messages { statusMessages = messages }
         tableView.reloadData()
+        if follow { scrollToStatus() }
+    }
+
+    /// Last Upload, at the bottom: what Xcode on Mac is doing right now
+    private func scrollToStatus() {
+        DispatchQueue.main.async {
+            let rows = self.tableView.numberOfRows(inSection: self.sStatus)
+            guard rows > 0 else { return }
+            self.tableView.scrollToRow(at: IndexPath(row: rows - 1, section: self.sStatus), at: .bottom, animated: true)
+        }
     }
 
     private func alert(_ title: String, _ message: String) {
@@ -1482,35 +1496,46 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
         let (version, build) = ForkPreflight.versions(fresh)
         busy = true
         pollTask?.cancel()
-        setStatus("\(name): starting…", messages: [])
+        setStatus("\(name): starting…", messages: [], follow: true)
         pollTask = Task { @MainActor in
             do {
                 let result = try await ForkXcodeOnMac.send(fresh, mode: mode) { text in
-                    Task { @MainActor in self.setStatus("\(name): \(text)") }
+                    Task { @MainActor in self.setStatus("\(name): \(text)", follow: true) }
                 }
                 self.busy = false
-                var messages = result.issues
-                if !result.xcode.isEmpty { messages.insert(result.xcode, at: 0) }
-                if let log = result.log { messages.append("Full Xcode log: \(log.lastPathComponent) (Files › On My iPad › Nyxian › AppStoreConnect)") }
+                var messages: [String] = []
+                if !result.xcode.isEmpty { messages.append(result.xcode) }
+                /* 1.4.0: how it went, in Xcode's own words when the log has them */
+                let where_ = result.log.map { "Files › On My iPad › Nyxian › AppStoreConnect › \($0.lastPathComponent)" } ?? "the App Store (Xcode) workflow on GitHub"
+                if result.ok {
+                    messages += result.summary.isEmpty ? (mode == .check ? ["✅ ** ARCHIVE SUCCEEDED **"] : ["✅ ** ARCHIVE SUCCEEDED **", "✅ Upload succeeded"]) : result.summary.map { "✅ " + $0 }
+                } else {
+                    let failed = result.summary.filter { $0.contains("FAILED") || $0.localizedCaseInsensitiveContains("failed") }
+                    let stage = ["project": "making the Xcode project", "archive": "the archive (build)", "upload": "signing and uploading", "start": "getting the projects"][result.stage] ?? result.stage
+                    messages.append(failed.isEmpty ? "❌ Error in \(stage)" : failed.map { "❌ " + $0 }.joined(separator: "\n"))
+                    messages.append("See the log: \(where_)")
+                }
+                messages += result.issues
+                if result.ok && result.log != nil { messages.append("Full Xcode log: \(where_)") }
                 guard result.ok else {
-                    self.setStatus("\(name): Xcode stopped at \(result.stage).", messages: messages)
+                    self.setStatus("\(name): ❌ Xcode stopped in \(["project": "the Xcode project", "archive": "the build", "upload": "signing / upload", "start": "the start"][result.stage] ?? result.stage).", messages: messages, follow: true)
                     return
                 }
                 if mode == .check {
-                    self.setStatus("\(name): Xcode built the archive (not signed, not uploaded).", messages: messages)
+                    self.setStatus("\(name): ✅ Xcode built the archive (not signed, not uploaded).", messages: messages, follow: true)
                     return
                 }
-                self.setStatus("\(name) \(version) (\(build)): uploaded by Xcode. Apple is processing it…", messages: messages)
+                self.setStatus("\(name) \(version) (\(build)): ✅ uploaded by Xcode. Apple is processing it…", messages: messages, follow: true)
                 let deadline = Date().addingTimeInterval(45 * 60)
                 while !Task.isCancelled && Date() < deadline {
                     try? await Task.sleep(nanoseconds: 30_000_000_000)
                     guard let state = try? await ForkXcodeOnMac.processingState(bundleID: fresh.projectConfig.bundleid ?? "", version: version, build: build) else { continue }
                     switch state {
                     case "VALID":
-                        self.setStatus("\(name) \(version) (\(build)) is ready in App Store Connect and TestFlight.", messages: messages)
+                        self.setStatus("\(name) \(version) (\(build)): ✅ ready in App Store Connect and TestFlight.", messages: messages, follow: true)
                         return
                     case "INVALID", "FAILED":
-                        self.setStatus("\(name) \(version) (\(build)): Apple marked the build \(state). Its e-mail says why.", messages: messages)
+                        self.setStatus("\(name) \(version) (\(build)): ❌ Apple marked the build \(state). Its e-mail says why.", messages: messages, follow: true)
                         return
                     default:
                         self.setStatus("\(name) \(version) (\(build)): Apple's state \(state)…", messages: messages)
