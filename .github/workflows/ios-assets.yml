@@ -1,5 +1,9 @@
-# fork doctoralvarez/Nyxian — version 1.0.0
+# fork doctoralvarez/Nyxian — version 1.1.0
 # Changelog:
+#  - 1.1.0 (2026-11-22): the icon and the answer go through the private
+#    repository (doctoralvarez/nyxian-sdk, SDK_REPO_TOKEN), like App Store
+#    (Xcode): the PNG is no longer on this public repository's release, and
+#    Nyxian's token needs no Contents permission here. Nyxian 2.7.4 or later.
 #  - 1.0.0 (2026-11-22): compiles an app icon into Assets.car with Apple's own
 #    actool, which only exists on a Mac. Nyxian (Settings › App Store Connect ›
 #    App Icon) uploads Config/AppIcon.png as <request>.png to the
@@ -33,7 +37,9 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 20
     env:
-      GH_TOKEN: ${{ github.token }}
+      # the icon and the result go through the private repository (since Nyxian 2.7.4)
+      GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+      STORE: doctoralvarez/nyxian-sdk
       REQUEST: ${{ github.event.inputs.request }}
       MINIMUM: ${{ github.event.inputs.minimum }}
     steps:
@@ -49,7 +55,7 @@ jobs:
       - name: Download the icon
         run: |
           mkdir -p work/Assets.xcassets/AppIcon.appiconset out
-          gh release download asset-catalog -R "$GITHUB_REPOSITORY" -p "$REQUEST.png" -D work
+          gh release download asset-catalog -R "$STORE" -p "$REQUEST.png" -D work
           mv "work/$REQUEST.png" work/Assets.xcassets/AppIcon.appiconset/AppIcon.png
           sips -g pixelWidth -g pixelHeight work/Assets.xcassets/AppIcon.appiconset/AppIcon.png
 
@@ -87,9 +93,9 @@ jobs:
       - name: Return the result
         run: |
           (cd out && zip -q -r "../$REQUEST.zip" .)
-          gh release upload asset-catalog -R "$GITHUB_REPOSITORY" "$REQUEST.zip" --clobber
+          gh release upload asset-catalog -R "$STORE" "$REQUEST.zip" --clobber >/dev/null
 
       - name: Remove the icon from the release
         if: always()
         run: |
-          gh release delete-asset asset-catalog "$REQUEST.png" -R "$GITHUB_REPOSITORY" -y || true
+          gh release delete-asset asset-catalog "$REQUEST.png" -R "$STORE" -y || true

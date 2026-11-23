@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.1
+ Fork doctoralvarez/Nyxian — version 1.3.2
  Changelog:
+  - 1.3.2 (2026-11-22): App Icon (Assets.car) goes through the private
+    repository, like Xcode on Mac: the icon is no longer on the public fork's
+    release, and the token needs the same permissions for both ("Contents:
+    Read and write" on the private repository, "Actions: Read and write" on
+    the fork). Before it asked for Contents on the public fork (GitHub 403).
   - 1.3.1 (2026-11-22): Increased Memory Limit and Extended Virtual Addressing
     for the apps and widgets that ask for them: Xcode on Mac's automatic
     signing turns them on for the App ID (Apple's App Store Connect API refuses
@@ -807,6 +812,8 @@ enum ForkASCProvisioning {
 
 enum ForkASCIconCompiler {
     static let releaseTag = "asset-catalog"
+    /* 1.3.2: the icon and Assets.car go through the private repository; only the workflow runs in the public one */
+    static var storage: String { ForkAboutViewController.backupRepository }
     static let workflow = "ios-assets.yml"
     /* the workflow file is on the fork's main branch once merged; until then on this branch */
     static let refs: [String] = [ForkWheelBuilder.branch, "app-intents-2.4.0"]
@@ -829,16 +836,16 @@ enum ForkASCIconCompiler {
         }.sorted { $0.name < $1.name }
     }
 
-    private static func github(_ urlText: String, method: String = "GET", body: Data? = nil, contentType: String = "application/json") async throws -> (Data, Int) {
+    private static func github(_ urlText: String, method: String = "GET", body: Data? = nil, contentType: String = "application/json", accept: String = "application/vnd.github+json") async throws -> (Data, Int) {
         guard let token = ForkWheelBuilder.token else {
-            throw ForkASCError.message("Add your GitHub token in Settings › Toolchain › iOS Builds (it also needs \"Contents: Read and write\" on \(ForkWheelBuilder.repository)).")
+            throw ForkASCError.message("Add your GitHub token in Settings › Toolchain › iOS Builds (it needs \"Contents: Read and write\" on \(storage) and \"Actions: Read and write\" on \(ForkWheelBuilder.repository)).")
         }
         guard let url = URL(string: urlText) else { throw ForkASCError.message("Bad URL") }
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.timeoutInterval = 120
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue(accept, forHTTPHeaderField: "Accept")
         req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         if let body {
             req.httpBody = body
@@ -855,13 +862,13 @@ enum ForkASCIconCompiler {
     private static func explain(_ status: Int, _ data: Data, _ what: String) -> ForkASCError {
         var text = "\(what) (GitHub \(status))"
         if status == 401 { text += ": the token is not valid (or expired)." }
-        if status == 403 || status == 404 { text += ": the token needs \"Contents: Read and write\" and \"Actions: Read and write\" on \(ForkWheelBuilder.repository)." }
+        if status == 403 || status == 404 { text += ": the token needs \"Contents: Read and write\" on \(storage) and \"Actions: Read and write\" on \(ForkWheelBuilder.repository)." }
         if let m = json(data)["message"] as? String { text += "\n\(m)" }
         return ForkASCError.message(text)
     }
 
     private static func releaseID() async throws -> Int {
-        let api = "https://api.github.com/repos/\(ForkWheelBuilder.repository)/releases"
+        let api = "https://api.github.com/repos/\(storage)/releases"
         let (data, status) = try await github("\(api)/tags/\(releaseTag)")
         if status == 200, let id = json(data)["id"] as? Int { return id }
         let body = try JSONSerialization.data(withJSONObject: [
@@ -884,7 +891,7 @@ enum ForkASCIconCompiler {
         let request = UUID().uuidString
         progress("Uploading the icon…")
         let release = try await releaseID()
-        let upload = "https://uploads.github.com/repos/\(ForkWheelBuilder.repository)/releases/\(release)/assets?name=\(request).png"
+        let upload = "https://uploads.github.com/repos/\(storage)/releases/\(release)/assets?name=\(request).png"
         let (upData, upStatus) = try await github(upload, method: "POST", body: png, contentType: "image/png")
         guard upStatus == 201 else { throw explain(upStatus, upData, "Could not upload the icon") }
 
@@ -912,20 +919,20 @@ enum ForkASCIconCompiler {
         while download == nil && Date() < deadline {
             try await Task.sleep(nanoseconds: 15_000_000_000)
             progress("Waiting for actool on the Mac…")
-            let (d, st) = try await github("https://api.github.com/repos/\(ForkWheelBuilder.repository)/releases/\(release)/assets?per_page=100")
+            let (d, st) = try await github("https://api.github.com/repos/\(storage)/releases/\(release)/assets?per_page=100")
             guard st == 200, let assets = try? JSONSerialization.jsonObject(with: d) as? [[String: Any]] else { continue }
-            if let a = assets.first(where: { ($0["name"] as? String) == "\(request).zip" }),
-               let u = a["browser_download_url"] as? String {
-                download = URL(string: u)
-                assetID = a["id"] as? Int
+            if let a = assets.first(where: { ($0["name"] as? String) == "\(request).zip" }), let id = a["id"] as? Int {
+                /* a private repository's asset comes through the API with the token */
+                download = URL(string: "https://api.github.com/repos/\(storage)/releases/assets/\(id)")
+                assetID = id
             }
         }
         guard let download else {
             throw ForkASCError.message("actool did not answer in 20 minutes: see the iOS Asset Catalog workflow on GitHub.")
         }
         progress("Downloading Assets.car…")
-        let (zipData, zipResponse) = try await URLSession.shared.data(from: download)
-        guard (zipResponse as? HTTPURLResponse)?.statusCode == 200 else { throw ForkASCError.message("Could not download the compiled catalog.") }
+        let (zipData, zipStatus) = try await github(download.absoluteString, accept: "application/octet-stream")
+        guard zipStatus == 200 else { throw ForkASCError.message("Could not download the compiled catalog (GitHub \(zipStatus)).") }
         let fm = FileManager.default
         let tmp = ForkASCPipeline.workRoot().appendingPathComponent("icon-\(request)", isDirectory: true)
         try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -943,7 +950,7 @@ enum ForkASCIconCompiler {
         try Data((hash + "\n").utf8).write(to: dest.appendingPathComponent("source.sha256"))
         try? fm.removeItem(at: tmp)
         if let assetID {
-            _ = try? await github("https://api.github.com/repos/\(ForkWheelBuilder.repository)/releases/assets/\(assetID)", method: "DELETE")
+            _ = try? await github("https://api.github.com/repos/\(storage)/releases/assets/\(assetID)", method: "DELETE")
         }
     }
 }
@@ -1015,7 +1022,7 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
         case sSigning:
             return "Automatic: with the API key Nyxian registers the bundle IDs (the app and each widget), turns on App Groups and makes one App Store profile per bundle ID with your distribution certificate, each time you upload. Import your Apple Distribution .p12, or create a certificate here (its private key is made on this device and stays in the Keychain). App Groups themselves are created once at developer.apple.com; Nyxian says when a profile lacks one. Imported profiles are used when you choose to."
         case sIcon:
-            return "The App Store wants the icon in an asset catalog, which only Apple's actool writes, on a Mac. Nyxian sends the project's Config/AppIcon.png to the iOS Asset Catalog workflow (your Mac, or GitHub's) and keeps Assets.car in Config/AssetCatalog; every Export then puts it in the app. Needs the GitHub token of Settings › Toolchain › iOS Builds with \"Contents: Read and write\" too. The PNG is on the fork's public release for a few minutes, then removed."
+            return "The App Store wants the icon in an asset catalog, which only Apple's actool writes, on a Mac. Nyxian sends the project's Config/AppIcon.png to the iOS Asset Catalog workflow (your Mac, or GitHub's) and keeps Assets.car in Config/AssetCatalog; every Export then puts it in the app. Needs the GitHub token of Settings › Toolchain › iOS Builds with \"Contents: Read and write\" on \(ForkASCIconCompiler.storage), like Xcode on Mac. The PNG only goes through that private repository and is removed after."
         case sXcode:
             return "Tap an app: Preflight checks what would go to Apple and fixes what it can, then its project and the widgets its Export embeds go to Apple's Xcode on your Mac (GitHub's when yours is off), which builds, signs (automatic, with your API key) and uploads it. The build is Xcode's own, nothing written in its place. Once, in the repository's Settings › Secrets › Actions: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 (the .p8 text) and APPLE_TEAM_ID if Team ID is empty. The GitHub token needs \"Contents: Read and write\" on \(ForkXcodeOnMac.privateRepository): the projects only go through that private repository."
         case sUpload:

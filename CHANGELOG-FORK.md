@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.7.4 — 2026-11-22
+
+- App Icon (Assets.car) failed with "GitHub 403 … Resource not accessible by
+  personal access token": it put the icon on a release of the public fork,
+  which needed "Contents: Read and write" there. The icon and Assets.car now
+  go through the private repository, like Xcode on Mac, so one token with
+  "Contents: Read and write" on nyxian-sdk and "Actions: Read and write" on
+  Nyxian serves both, and the icon is never public.
+
 ## 2.7.3 — 2026-11-22
 
 - Swift Playgrounds export and the Playgrounds sync take Preflight's fixes
