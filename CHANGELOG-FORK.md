@@ -4,6 +4,17 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.8.0 — 2026-11-23
+
+- Export compliance everywhere: Settings › App Store Connect, Preflight and
+  Xcode on Mac declare ITSAppUsesNonExemptEncryption = NO in Info-extra.plist
+  of every app project that says nothing (a YES you wrote stays), so builds
+  are not held in "Missing Compliance".
+- TestFlight by itself: after Xcode on Mac uploads, Nyxian makes sure the app
+  has the internal group "Yo" with automatic distribution and you (the
+  Account Holder) in it. Each new build then reaches your TestFlight app by
+  itself; a new app still sends one invitation e-mail to accept (Apple's rule).
+
 ## Tools — App Store (Xcode) workflow 1.2.0 (2026-11-23)
 
 - Fixed "exportArchive: The archive contains nothing that can be signed":

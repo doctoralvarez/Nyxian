@@ -21,8 +21,15 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.2
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-23): your rule for all your apps: export compliance is
+    declared ITSAppUsesNonExemptEncryption = NO (Info-extra.plist) wherever an
+    app project lacks it (a YES you wrote stays). TestFlight: after Xcode on
+    Mac uploads, Nyxian makes sure the app has the internal group "Yo" with
+    automatic distribution and you in it (ForkTestFlight), so each new build
+    reaches the TestFlight app by itself (each new app still sends its one
+    invitation e-mail to accept).
   - 1.2.2 (2026-11-23): the answer from the Mac carries Xcode's result lines
     (** ARCHIVE SUCCEEDED ** …) for Last Upload.
   - 1.2.1 (2026-11-22): the Xcode log in Files › Nyxian › AppStoreConnect is
@@ -307,11 +314,18 @@ enum ForkPreflight {
                              fix: .infoExtra(project: root, keys: ["UILaunchScreen": [String: Any]()], label: "Add an empty UILaunchScreen")))
         }
 
-        // export compliance
+        // export compliance: your rule, NO in every app that does not say otherwise
         if info["ITSAppUsesNonExemptEncryption"] == nil {
-            out.append(.init(level: .warning, code: nil, title: "Export compliance not declared",
-                             detail: "Without ITSAppUsesNonExemptEncryption, App Store Connect asks about encryption for every build. An app that only uses HTTPS and Apple's own encryption declares NO.",
-                             fix: .encryptionExempt(project: root)))
+            if ensureEncryptionExempt(app) {
+                out.append(.init(level: .ok, code: nil, title: "Export compliance: NO",
+                                 detail: "ITSAppUsesNonExemptEncryption = NO written to Info-extra.plist (standard encryption only, as you set for all your apps). Change it there if an app ever has encryption of its own."))
+            } else {
+                out.append(.init(level: .warning, code: nil, title: "Export compliance not declared",
+                                 detail: "Without ITSAppUsesNonExemptEncryption, App Store Connect asks about encryption for every build.",
+                                 fix: .encryptionExempt(project: root)))
+            }
+        } else if (info["ITSAppUsesNonExemptEncryption"] as? Bool) == false {
+            out.append(.init(level: .ok, code: nil, title: "Export compliance: NO", detail: "ITSAppUsesNonExemptEncryption = NO."))
         }
 
         // privacy manifest and purpose strings, for the app and each extension
@@ -399,6 +413,17 @@ enum ForkPreflight {
                              detail: "An .ipa exported by Nyxian has no DTXcode / DTSDKBuild: Nyxian does not write them, because they would claim an Xcode that did not build it. Apple asks for Xcode 26 or later: send the project with Xcode on Mac."))
         }
         return out.sorted { $0.level.rawValue < $1.level.rawValue }
+    }
+
+    /// Writes ITSAppUsesNonExemptEncryption = NO to Info-extra.plist when the app declares nothing (a YES stays); true when written
+    @discardableResult
+    static func ensureEncryptionExempt(_ app: NXProject) -> Bool {
+        let root = app.url as URL
+        guard app.projectConfig.schemeKind == .app, ForkEmbeddedExtensions.extensionPoint(of: app) == nil else { return false }
+        if info(of: app)["ITSAppUsesNonExemptEncryption"] != nil { return false }
+        var plist = readPlist(infoExtraURL(root))
+        plist["ITSAppUsesNonExemptEncryption"] = false
+        return (try? writePlist(plist, to: infoExtraURL(root))) != nil
     }
 
     // MARK: .ipa (the direct upload)
@@ -777,6 +802,7 @@ enum ForkXcodeOnMac {
         let staging = work.appendingPathComponent("request", isDirectory: true)
         defer { try? fm.removeItem(at: staging) }
         progress("Packing the projects…")
+        ForkPreflight.ensureEncryptionExempt(app)
         let appFolder = (app.url as URL).lastPathComponent
         try copyProject(app.url as URL, to: staging.appendingPathComponent(appFolder))
         var extensions: [[String: Any]] = []
@@ -876,6 +902,68 @@ enum ForkXcodeOnMac {
         let b = build.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? build
         let json = try await ForkASCAPI.request("GET", "/v1/builds?filter[app]=\(app.id)&filter[preReleaseVersion.version]=\(v)&filter[version]=\(b)&fields[builds]=processingState,version")
         return ((json["data"] as? [[String: Any]])?.first?["attributes"] as? [String: Any])?["processingState"] as? String
+    }
+}
+
+// MARK: - TestFlight
+
+/// Internal group "Yo" with automatic distribution and you in it: each new build reaches TestFlight by itself
+enum ForkTestFlight {
+    static let groupName = "Yo"
+
+    static func ensureInternalGroup(bundleID: String) async -> [String] {
+        var notes: [String] = []
+        do {
+            guard let app = try await ForkASCAPI.app(bundleID: bundleID) else { return ["TestFlight: no app \(bundleID) in App Store Connect yet."] }
+            /* the group */
+            let groups = try await ForkASCAPI.request("GET", "/v1/apps/\(app.id)/betaGroups?fields[betaGroups]=name,isInternalGroup,hasAccessToAllBuilds&limit=200")
+            var groupID: String?
+            for g in groups["data"] as? [[String: Any]] ?? [] {
+                let a = g["attributes"] as? [String: Any] ?? [:]
+                if a["isInternalGroup"] as? Bool == true && a["name"] as? String == groupName { groupID = g["id"] as? String }
+            }
+            if groupID == nil {
+                let created = try await ForkASCAPI.request("POST", "/v1/betaGroups", body: [
+                    "data": [
+                        "type": "betaGroups",
+                        "attributes": ["name": groupName, "isInternalGroup": true, "hasAccessToAllBuilds": true],
+                        "relationships": ["app": ["data": ["type": "apps", "id": app.id]]]
+                    ]
+                ])
+                groupID = (created["data"] as? [String: Any])?["id"] as? String
+                notes.append("TestFlight: internal group \"\(groupName)\" made, with automatic distribution.")
+            }
+            guard let groupID else { return notes + ["TestFlight: could not make the group \"\(groupName)\"."] }
+
+            /* you: the Account Holder (or the only Admin) of App Store Connect */
+            let users = try await ForkASCAPI.request("GET", "/v1/users?fields[users]=username,firstName,lastName,roles&limit=200")
+            let list = (users["data"] as? [[String: Any]] ?? []).compactMap { $0["attributes"] as? [String: Any] }
+            guard let me = list.first(where: { ($0["roles"] as? [String] ?? []).contains("ACCOUNT_HOLDER") }) ?? (list.count == 1 ? list.first : nil),
+                  let email = me["username"] as? String else {
+                return notes + ["TestFlight: add yourself to \"\(groupName)\" once in App Store Connect › TestFlight (several users, none is the Account Holder)."]
+            }
+            let q = email.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? email
+            let inGroup = try await ForkASCAPI.request("GET", "/v1/betaGroups/\(groupID)/betaTesters?fields[betaTesters]=email&limit=200")
+            if (inGroup["data"] as? [[String: Any]] ?? []).contains(where: { (($0["attributes"] as? [String: Any])?["email"] as? String)?.caseInsensitiveCompare(email) == .orderedSame }) {
+                return notes.isEmpty ? ["TestFlight: \(email) is in \"\(groupName)\": new builds reach your TestFlight app by themselves."] : notes
+            }
+            let existing = try await ForkASCAPI.request("GET", "/v1/betaTesters?filter[email]=\(q)&fields[betaTesters]=email&limit=5")
+            if let testerID = (existing["data"] as? [[String: Any]])?.first?["id"] as? String {
+                _ = try await ForkASCAPI.request("POST", "/v1/betaGroups/\(groupID)/relationships/betaTesters", body: ["data": [["type": "betaTesters", "id": testerID]]])
+            } else {
+                _ = try await ForkASCAPI.request("POST", "/v1/betaTesters", body: [
+                    "data": [
+                        "type": "betaTesters",
+                        "attributes": ["email": email, "firstName": me["firstName"] as? String ?? "", "lastName": me["lastName"] as? String ?? ""],
+                        "relationships": ["betaGroups": ["data": [["type": "betaGroups", "id": groupID]]]]
+                    ]
+                ])
+            }
+            notes.append("TestFlight: \(email) added to \"\(groupName)\". For a new app, accept its invitation e-mail once; after that each build appears in TestFlight by itself.")
+        } catch {
+            notes.append("TestFlight: \(error.localizedDescription)")
+        }
+        return notes
     }
 }
 

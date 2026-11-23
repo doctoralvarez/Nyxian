@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.0
+ Fork doctoralvarez/Nyxian — version 1.5.0
  Changelog:
+  - 1.5.0 (2026-11-23): opening App Store Connect declares
+    ITSAppUsesNonExemptEncryption = NO in every app project that lacks it (your
+    rule); after Xcode on Mac uploads, the app gets the internal TestFlight
+    group "Yo" with automatic distribution and you in it.
   - 1.4.0 (2026-11-23): Xcode on Mac scrolls down to Last Upload and stays
     there while it works, so you see each step as it happens; at the end it
     says plainly how it went: ✅ ** ARCHIVE SUCCEEDED ** (and the upload), or
@@ -986,12 +990,16 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
         tableView.keyboardDismissMode = .onDrag
         icons = ForkASCIconCompiler.projects()
         xcodeApps = ForkXcodeOnMac.apps()
+        /* 1.5.0: export compliance NO in every app that says nothing (your rule for all your apps) */
+        xcodeApps.forEach { ForkPreflight.ensureEncryptionExempt($0) }
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         icons = ForkASCIconCompiler.projects()
         xcodeApps = ForkXcodeOnMac.apps()
+        /* 1.5.0: export compliance NO in every app that says nothing (your rule for all your apps) */
+        xcodeApps.forEach { ForkPreflight.ensureEncryptionExempt($0) }
         tableView.reloadData()
     }
 
@@ -1525,6 +1533,9 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
                     self.setStatus("\(name): ✅ Xcode built the archive (not signed, not uploaded).", messages: messages, follow: true)
                     return
                 }
+                self.setStatus("\(name) \(version) (\(build)): ✅ uploaded by Xcode. Apple is processing it…", messages: messages, follow: true)
+                /* 1.5.0: TestFlight group "Yo" with automatic distribution, you in it */
+                messages += await ForkTestFlight.ensureInternalGroup(bundleID: fresh.projectConfig.bundleid ?? "")
                 self.setStatus("\(name) \(version) (\(build)): ✅ uploaded by Xcode. Apple is processing it…", messages: messages, follow: true)
                 let deadline = Date().addingTimeInterval(45 * 60)
                 while !Task.isCancelled && Date() < deadline {
