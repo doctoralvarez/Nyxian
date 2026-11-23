@@ -1,0 +1,232 @@
+# fork doctoralvarez/Nyxian — version 1.0.0
+# Changelog:
+#  - 1.0.0 (2026-11-22): the last step to the App Store, done by Apple's Xcode
+#    on a Mac: your own Mac when it is online, GitHub's otherwise (the same
+#    choice as "Build iOS App"). Nyxian (Settings › App Store Connect › Xcode
+#    on Mac) puts <request>.zip — the app's project, the projects of the
+#    extensions its Export embeds and manifest.json — on the private
+#    repository's "appstore-requests" release and starts this workflow.
+#    XcodeGen makes an Xcode project of them, xcodebuild archives it with
+#    automatic signing and your App Store Connect API key, and exportArchive
+#    uploads it to App Store Connect (mode "upload"), or only archives it
+#    without signing (mode "check"). The build is Xcode's own: its DTXcode /
+#    DTSDKBuild, Assets.car, Metadata.appintents and privacy report are real.
+#
+#    Your app's code never shows here: it comes from and goes back to the
+#    private repository, the log of xcodebuild and the result
+#    (<request>-log.txt, <request>-result.json) go there too, and this log
+#    only says which step ran.
+#
+#    Secrets (Settings › Secrets and variables › Actions of this repository):
+#      SDK_REPO_TOKEN      the private repository (already there for builds)
+#      ASC_KEY_ID          App Store Connect API key ID
+#      ASC_ISSUER_ID       its Issuer ID
+#      ASC_KEY_P8          the text of AuthKey_<Key ID>.p8 (role Admin)
+#      APPLE_TEAM_ID       your Team ID (10 characters), if Nyxian does not send it
+
+name: App Store (Xcode)
+
+on:
+  workflow_dispatch:
+    inputs:
+      request:
+        description: "Request ID (<request>.zip on the private appstore-requests release)"
+        required: true
+      mode:
+        description: "upload (archive, sign, upload) or check (archive without signing)"
+        required: false
+        default: "upload"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: appstore-xcode-${{ github.event.inputs.request }}
+
+jobs:
+  pick-runner:
+    name: Pick the Mac
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      runs_on: ${{ steps.pick.outputs.runs_on }}
+    steps:
+      - id: pick
+        env:
+          WANT: ${{ vars.NYXIAN_RUNNER }}
+          STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          github_mac='"xcode-27"'
+          if [ "$WANT" = "macos-latest" ]; then github_mac='"macos-latest"'; fi
+          own_mac='["self-hosted","macOS","ARM64"]'
+          choice="$github_mac"
+          if [ "$WANT" = "self-hosted" ]; then
+            if [ -z "$STATUS_TOKEN" ]; then
+              echo "No RUNNER_STATUS_TOKEN: using your Mac (waits if it is off)"
+              choice="$own_mac"
+            else
+              for attempt in 1 2 3; do
+                online=$(curl -fsS -H "Authorization: Bearer $STATUS_TOKEN" -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/repos/$REPO/actions/runners?per_page=100" \
+                  | jq '[.runners[] | select(.status == "online" or .busy == true) | select([.labels[].name] | index("self-hosted"))] | length' || echo "error")
+                if [ "$online" = "error" ] || [ "$online" -gt 0 ]; then break; fi
+                sleep 10
+              done
+              if [ "$online" != "error" ] && [ "$online" -eq 0 ]; then
+                busy=0
+                for id in $(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/$REPO/actions/runs?status=in_progress&per_page=20" | jq -r '.workflow_runs[].id' 2>/dev/null); do
+                  n=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/$REPO/actions/runs/$id/jobs" | jq '[.jobs[] | select(.status == "in_progress") | select(.labels | index("self-hosted"))] | length' 2>/dev/null || echo 0)
+                  busy=$((busy + n))
+                done
+                if [ "$busy" -gt 0 ]; then echo "Your Mac is busy with another job: this one waits for it"; online=1; fi
+              fi
+              if [ "$online" = "error" ]; then
+                echo "::warning::Could not read your runners (check RUNNER_STATUS_TOKEN): using your Mac"
+                choice="$own_mac"
+              elif [ "$online" -gt 0 ]; then
+                echo "Your Mac is online: it builds"
+                choice="$own_mac"
+              else
+                echo "::notice::Your Mac is off or asleep: GitHub's Mac builds this one"
+              fi
+            fi
+          fi
+          echo "runs_on=$choice" >> "$GITHUB_OUTPUT"
+          echo "Builds on: $choice"
+
+  xcode:
+    name: Xcode
+    needs: pick-runner
+    runs-on: ${{ fromJSON(needs.pick-runner.outputs.runs_on) }}
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+      SDK_REPO: doctoralvarez/nyxian-sdk
+      RELEASE: appstore-requests
+      REQUEST: ${{ github.event.inputs.request }}
+      MODE: ${{ github.event.inputs.mode }}
+    steps:
+      - name: Check the request
+        run: |
+          if ! printf '%s' "$REQUEST" | grep -Eq '^[A-Za-z0-9-]{8,64}$'; then echo "::error::Bad request ID"; exit 1; fi
+          case "$MODE" in upload|check) ;; *) echo "::error::Mode must be upload or check"; exit 1 ;; esac
+          if [ -z "$GH_TOKEN" ]; then echo "::error::The secret SDK_REPO_TOKEN is missing"; exit 1; fi
+
+      - uses: actions/checkout@v4
+        with:
+          path: nyxian
+          sparse-checkout: tools/fork/appstore
+
+      - name: Get the projects (private repository)
+        run: |
+          WORK="$RUNNER_TEMP/appstore-$REQUEST"
+          echo "WORK=$WORK" >> "$GITHUB_ENV"
+          rm -rf "$WORK"; mkdir -p "$WORK/request" "$WORK/xcode" "$WORK/out"
+          gh release download "$RELEASE" -R "$SDK_REPO" -p "$REQUEST.zip" -D "$WORK" >/dev/null
+          ditto -x -k "$WORK/$REQUEST.zip" "$WORK/request"
+          test -f "$WORK/request/manifest.json"
+          echo "Request unpacked"
+
+      - name: Make the Xcode project
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -o pipefail
+          printf '{"ok":false,"stage":"project"}' > "$WORK/out/result.json"
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen >/dev/null 2>&1
+          python3 nyxian/tools/fork/appstore/make_project.py "$WORK/request" "$WORK/xcode" > "$WORK/scheme.txt" 2> "$WORK/out/log.txt"
+          (cd "$WORK/xcode" && xcodegen generate --spec project.yml) >> "$WORK/out/log.txt" 2>&1
+          echo "Xcode project ready"
+
+      - name: Archive
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          printf '{"ok":false,"stage":"archive"}' > "$WORK/out/result.json"
+          SCHEME=$(cat "$WORK/scheme.txt")
+          cd "$WORK/xcode"
+          xcodebuild -version > "$WORK/out/xcode-version.txt"
+          ARGS=(-project "$SCHEME.xcodeproj" -scheme "$SCHEME" -configuration Release -destination "generic/platform=iOS" -archivePath "$WORK/App.xcarchive")
+          if [ "$MODE" = "check" ]; then
+            xcodebuild archive "${ARGS[@]}" CODE_SIGNING_ALLOWED=NO >> "$WORK/out/log.txt" 2>&1
+          else
+            if [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ] || [ -z "$ASC_KEY_P8" ]; then
+              echo "Missing secrets ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8" >> "$WORK/out/log.txt"; exit 1
+            fi
+            mkdir -p "$WORK/key"; chmod 700 "$WORK/key"
+            printf '%s\n' "$ASC_KEY_P8" > "$WORK/key/AuthKey_$ASC_KEY_ID.p8"
+            xcodebuild archive "${ARGS[@]}" -allowProvisioningUpdates \
+              -authenticationKeyPath "$WORK/key/AuthKey_$ASC_KEY_ID.p8" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+              >> "$WORK/out/log.txt" 2>&1
+          fi
+          echo "Archived"
+
+      - name: Upload to App Store Connect
+        if: github.event.inputs.mode != 'check'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          printf '{"ok":false,"stage":"upload"}' > "$WORK/out/result.json"
+          xcodebuild -exportArchive -archivePath "$WORK/App.xcarchive" -exportPath "$WORK/export" \
+            -exportOptionsPlist "$WORK/xcode/ExportOptions-upload.plist" -allowProvisioningUpdates \
+            -authenticationKeyPath "$WORK/key/AuthKey_$ASC_KEY_ID.p8" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            >> "$WORK/out/log.txt" 2>&1
+          echo "Uploaded"
+
+      - name: Report (private repository)
+        if: always()
+        run: |
+          [ -n "$WORK" ] || exit 0
+          mkdir -p "$WORK/out"
+          python3 - "$WORK" "$MODE" "${{ job.status }}" <<'PY'
+          import json, os, plistlib, re, sys
+          work, mode, status = sys.argv[1], sys.argv[2], sys.argv[3]
+          out = os.path.join(work, "out")
+          try:
+              result = json.load(open(os.path.join(out, "result.json")))
+          except Exception:
+              result = {"ok": False, "stage": "start"}
+          log = open(os.path.join(out, "log.txt"), errors="replace").read() if os.path.exists(os.path.join(out, "log.txt")) else ""
+          ok = status == "success"
+          result["ok"] = ok
+          if ok:
+              result["stage"] = "uploaded" if mode == "upload" else "archived"
+          result["mode"] = mode
+          try:
+              result["xcode"] = " ".join(open(os.path.join(out, "xcode-version.txt")).read().split())
+          except Exception:
+              pass
+          request = os.path.join(work, "request")
+          for root in (os.path.join(work, "request"), os.path.join(work, "xcode")):
+              log = log.replace(root + "/", "")
+          issues = []
+          for line in log.splitlines():
+              s = line.strip()
+              if re.search(r"(error:|warning:|ITMS-\d+|Validation failed|Upload failed|\*\* ARCHIVE FAILED|\*\* EXPORT FAILED|Signing for .* requires|No profiles for|Provisioning profile)", s):
+                  if s not in issues:
+                      issues.append(s[:400])
+          result["issues"] = issues[:60]
+          info = os.path.join(work, "App.xcarchive", "Info.plist")
+          if os.path.exists(info):
+              a = plistlib.load(open(info, "rb")).get("ApplicationProperties", {})
+              result["archived"] = {k: a.get(k) for k in ("CFBundleIdentifier", "CFBundleShortVersionString", "CFBundleVersion", "SigningIdentity", "Team")}
+          json.dump(result, open(os.path.join(out, "result.json"), "w"), indent=1)
+          open(os.path.join(out, "log.txt"), "w").write(log)
+          PY
+          cp "$WORK/out/result.json" "$WORK/$REQUEST-result.json"
+          cp "$WORK/out/log.txt" "$WORK/$REQUEST-log.txt"
+          gh release upload "$RELEASE" -R "$SDK_REPO" "$WORK/$REQUEST-result.json" "$WORK/$REQUEST-log.txt" --clobber >/dev/null
+          echo "Result sent to the private repository"
+
+      - name: Clean up
+        if: always()
+        run: |
+          gh release delete-asset "$RELEASE" "$REQUEST.zip" -R "$SDK_REPO" -y >/dev/null 2>&1 || true
+          [ -n "$WORK" ] && rm -rf "$WORK"
+          echo "Cleaned"

@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## Tools — App Store (Xcode) workflow
+
+- `.github/workflows/appstore-xcode.yml` and `tools/fork/appstore/make_project.py`:
+  the last step to the App Store done by Apple's Xcode on a Mac (yours when
+  online, GitHub's otherwise). Nyxian's projects (the app and the extensions
+  its Export embeds) become an Xcode project (XcodeGen); xcodebuild archives,
+  signs (automatic, your API key) and uploads it. The project, the log and the
+  result only go through the private repository.
+
 ## 2.6.0 — 2026-11-22
 
 - App Store signing for apps with widgets. Settings › App Store Connect signs
