@@ -1,3 +1,8 @@
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-22): App Store signing (zsignAppStore, zsignMakeCSR, zsignMakeP12).
+*/
 #include "zsign.hpp"
 #include "common/common.h"
 #include "common/json.h"
@@ -472,4 +477,153 @@ int checkCert(NSData *prov,
     return 1;
 }
 
+}
+
+// MARK: - fork doctoralvarez/Nyxian: App Store signing
+
+#include <openssl/evp.h>
+#include <openssl/pkcs12.h>
+#include <openssl/rsa.h>
+
+void zsignAppStore(NSString *appPath,
+                   NSDictionary<NSString *, NSData *> *profiles,
+                   NSData *key,
+                   NSString *pass,
+                   NSProgress *progress,
+                   void(^completionHandler)(BOOL success, NSError *error))
+{
+    ZLog::logs.clear();
+    NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:[appPath stringByAppendingPathComponent:@"Info.plist"]];
+    NSString *mainID = info[@"CFBundleIdentifier"];
+    NSData *mainProfile = mainID ? profiles[mainID] : nil;
+    if (mainProfile == nil) {
+        completionHandler(NO, [NSError errorWithDomain:@"Failed to Sign" code:-1 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"No App Store profile for %@", mainID ?: @"the app"]}]);
+        return;
+    }
+    string strPassword = [pass cStringUsingEncoding:NSUTF8StringEncoding] ?: "";
+
+    ZSignAsset mainAsset;
+    if (!mainAsset.InitSimple([key bytes], (int)[key length], [mainProfile bytes], (int)[mainProfile length], strPassword)) {
+        completionHandler(NO, makeErrorFromLog(ZLog::logs));
+        ZLog::logs.clear();
+        return;
+    }
+
+    std::vector<ZSignAsset *> owned;
+    std::map<string, ZSignAsset *> assets;
+    assets[[mainID UTF8String]] = &mainAsset;
+    for (NSString *bundleID in profiles) {
+        if ([bundleID isEqualToString:mainID]) continue;
+        NSData *prov = profiles[bundleID];
+        ZSignAsset *asset = new ZSignAsset();
+        owned.push_back(asset);
+        if (!asset->InitSimple([key bytes], (int)[key length], [prov bytes], (int)[prov length], strPassword)) {
+            for (ZSignAsset *a : owned) delete a;
+            completionHandler(NO, makeErrorFromLog(ZLog::logs));
+            ZLog::logs.clear();
+            return;
+        }
+        assets[[bundleID UTF8String]] = asset;
+    }
+
+    ZBundle bundle;
+    bundle.m_bAppStore = true;
+    bundle.m_mapAssets = assets;
+    string strDyLibFile;
+    bool configured = bundle.ConfigureFolderSign(&mainAsset, [appPath UTF8String], "", "", "", strDyLibFile, true, false, false, false);
+    if (!configured) {
+        for (ZSignAsset *a : owned) delete a;
+        completionHandler(NO, makeErrorFromLog(ZLog::logs));
+        ZLog::logs.clear();
+        return;
+    }
+    [progress setTotalUnitCount:bundle.GetSignCount()];
+    bundle.progressHandler = [&progress] {
+        [progress setCompletedUnitCount:progress.completedUnitCount + 1];
+    };
+    bool ok = bundle.StartSign(false);
+    for (ZSignAsset *a : owned) delete a;
+    if (!ok || !bundle.signFailedFiles.empty()) {
+        NSString *failed = [NSString stringWithUTF8String:bundle.signFailedFiles.c_str()];
+        NSError *error = ok ? [NSError errorWithDomain:@"Failed to Sign" code:-1 userInfo:@{NSLocalizedDescriptionKey: [@"Not signed:\n" stringByAppendingString:failed]}]
+                            : makeErrorFromLog(ZLog::logs);
+        completionHandler(NO, error);
+    } else {
+        completionHandler(YES, nil);
+    }
+    ZLog::logs.clear();
+}
+
+static NSData *zsignBIOData(BIO *bio)
+{
+    char *bytes = NULL;
+    long length = BIO_get_mem_data(bio, &bytes);
+    return (length > 0 && bytes != NULL) ? [NSData dataWithBytes:bytes length:(NSUInteger)length] : nil;
+}
+
+NSDictionary *zsignMakeCSR(NSString *commonName)
+{
+    EVP_PKEY *pkey = NULL;
+    EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, NULL);
+    if (ctx == NULL) return nil;
+    if (EVP_PKEY_keygen_init(ctx) <= 0 || EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 2048) <= 0 || EVP_PKEY_keygen(ctx, &pkey) <= 0) {
+        EVP_PKEY_CTX_free(ctx);
+        return nil;
+    }
+    EVP_PKEY_CTX_free(ctx);
+
+    X509_REQ *req = X509_REQ_new();
+    X509_REQ_set_version(req, 0);
+    X509_NAME *name = X509_REQ_get_subject_name(req);
+    const char *cn = [commonName UTF8String] ?: "Apple Distribution";
+    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_UTF8, (const unsigned char *)cn, -1, -1, 0);
+    X509_REQ_set_pubkey(req, pkey);
+    if (X509_REQ_sign(req, pkey, EVP_sha256()) <= 0) {
+        X509_REQ_free(req);
+        EVP_PKEY_free(pkey);
+        return nil;
+    }
+
+    BIO *csrBio = BIO_new(BIO_s_mem());
+    i2d_X509_REQ_bio(csrBio, req);
+    NSData *csrDER = zsignBIOData(csrBio);
+    BIO_free(csrBio);
+
+    BIO *keyBio = BIO_new(BIO_s_mem());
+    PEM_write_bio_PrivateKey(keyBio, pkey, NULL, NULL, 0, NULL, NULL);
+    NSData *keyPEM = zsignBIOData(keyBio);
+    BIO_free(keyBio);
+
+    X509_REQ_free(req);
+    EVP_PKEY_free(pkey);
+    if (csrDER == nil || keyPEM == nil) return nil;
+    return @{@"csr": [csrDER base64EncodedStringWithOptions:0], @"key": keyPEM};
+}
+
+NSData *zsignMakeP12(NSData *certificateDER, NSData *privateKeyPEM, NSString *password, NSString *name)
+{
+    const unsigned char *certBytes = (const unsigned char *)[certificateDER bytes];
+    X509 *cert = d2i_X509(NULL, &certBytes, (long)[certificateDER length]);
+    if (cert == NULL) return nil;
+    BIO *keyBio = BIO_new_mem_buf([privateKeyPEM bytes], (int)[privateKeyPEM length]);
+    EVP_PKEY *pkey = PEM_read_bio_PrivateKey(keyBio, NULL, NULL, NULL);
+    BIO_free(keyBio);
+    if (pkey == NULL) {
+        X509_free(cert);
+        return nil;
+    }
+    PKCS12 *p12 = PKCS12_create([password UTF8String] ?: "", [name UTF8String] ?: "Apple Distribution", pkey, cert, NULL,
+                                NID_pbe_WithSHA1And3_Key_TripleDES_CBC, NID_pbe_WithSHA1And3_Key_TripleDES_CBC,
+                                PKCS12_DEFAULT_ITER, 1, 0);
+    NSData *result = nil;
+    if (p12 != NULL) {
+        BIO *out = BIO_new(BIO_s_mem());
+        i2d_PKCS12_bio(out, p12);
+        result = zsignBIOData(out);
+        BIO_free(out);
+        PKCS12_free(p12);
+    }
+    EVP_PKEY_free(pkey);
+    X509_free(cert);
+    return result;
 }

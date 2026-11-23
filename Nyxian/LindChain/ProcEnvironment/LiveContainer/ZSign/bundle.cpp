@@ -1,3 +1,8 @@
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-22): App Store signing (m_bAppStore: each bundle signed with its own profile from m_mapAssets, its embedded.mobileprovision and a generated _CodeSignature/CodeResources).
+*/
 #include "bundle.h"
 #include "base64.h"
 #include "common.h"
@@ -10,6 +15,7 @@ ZBundle::ZBundle()
 	m_pSignAsset = NULL;
 	m_bForceSign = false;
 	m_bWeakInject = false;
+	m_bAppStore = false;
     signFailedFiles = "";
 }
 
@@ -296,6 +302,26 @@ bool ZBundle::SignNode(jvalue& jvNode)
 		strBaseFolder += strFolder;
 	}
 
+	/* fork: App Store signing picks this bundle's own profile */
+	ZSignAsset* pAsset = m_pSignAsset;
+	if (m_bAppStore) {
+		std::map<string, ZSignAsset*>::iterator it = m_mapAssets.find(strBundleId);
+		if (it != m_mapAssets.end()) {
+			pAsset = it->second;
+		} else if ("/" != strFolder) {
+			ZLog::ErrorV(">>> No App Store provisioning profile for %s\n", strBundleId.c_str());
+			return false;
+		}
+		if ("/" != strFolder) {
+			ZFile::RemoveFileV("%s/embedded.mobileprovision", strBaseFolder.c_str());
+			if (!pAsset->m_strProvData.empty() &&
+				!ZFile::WriteFileV(pAsset->m_strProvData, "%s/embedded.mobileprovision", strBaseFolder.c_str())) {
+				ZLog::ErrorV(">>> Can't write embedded.mobileprovision! %s\n", strBaseFolder.c_str());
+				return false;
+			}
+		}
+	}
+
 	string strExePath = strBaseFolder + "/" + strBundleExe;
 	ZLog::PrintV(">>> SignFolder: %s, (%s)\n", ("/" == strFolder) ? ZUtil::GetBaseName(m_strAppFolder.c_str()) : strFolder.c_str(), strBundleExe.c_str());
 
@@ -317,6 +343,11 @@ bool ZBundle::SignNode(jvalue& jvNode)
 	}
 
 	if (m_bForceSign || jvCodeRes.is_null()) { // create
+		/* fork: the App Store needs the sealed resources */
+		if (m_bAppStore && !GenerateCodeResources(strBaseFolder, jvCodeRes)) {
+			ZLog::ErrorV(">>> Create CodeResources failed! %s\n", strBaseFolder.c_str());
+			return false;
+		}
         // LiveContainer don't need CodeResources
 //		if (!GenerateCodeResources(strBaseFolder, jvCodeRes)) {
 //			ZLog::ErrorV(">>> Create CodeResources failed! %s\n", strBaseFolder.c_str());
@@ -363,7 +394,7 @@ bool ZBundle::SignNode(jvalue& jvNode)
 		}
 	}
 
-	if (!macho.Sign(m_pSignAsset, bForceSign, strBundleId, strInfoSHA1, strInfoSHA256, strCodeResData)) {
+	if (!macho.Sign(pAsset, bForceSign, strBundleId, strInfoSHA1, strInfoSHA256, strCodeResData)) {
 		return false;
 	}
 

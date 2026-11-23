@@ -21,8 +21,16 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-22): automatic signing with the API key: the bundle IDs of the
+    app and of each extension are registered, App Groups turned on, and one App
+    Store profile made per bundle ID with the distribution certificate (imported
+    .p12, or one created here from a key made on the device). zsign signs each
+    bundle with its own profile, with CodeResources and embedded profiles
+    (ZSigner signAppStore). App Icon: Config/AppIcon.png goes to Apple's actool
+    on a Mac (iOS Asset Catalog workflow) and Assets.car comes back into
+    Config/AssetCatalog, which Export puts in the app.
   - 1.0.0 (2026-11-22): Settings › App Store Connect. Your App Store Connect
     API key (Issuer ID, Key ID, .p8) signs the requests (ES256 JWT, CryptoKit);
     "Test Connection" lists your apps. Your Apple Distribution certificate
@@ -337,35 +345,41 @@ enum ForkASCPipeline {
                               extensions: exts)
     }
 
-    /// What is missing to sign this app for the App Store, or nil when it can be signed
-    static func signingProblem(_ info: ForkASCIPAInfo) -> String? {
-        if ForkASCAccount.p12 == nil { return "Import your Apple Distribution certificate (.p12) first." }
-        if !info.extensions.isEmpty {
-            return "This app has extensions (\(info.extensions.joined(separator: ", "))). Signing apps with widgets for the App Store needs a profile for each one and is not ready yet; upload an .ipa already signed for the App Store, or one without them."
+    /// Every bundle ID to sign: the app first, then its extensions
+    static func bundleIDs(_ info: ForkASCIPAInfo) -> [String] { [info.bundleID] + info.extensions }
+
+    /// The imported App Store profiles for the app and each extension, or what is missing
+    static func importedProfiles(_ info: ForkASCIPAInfo) -> (profiles: [String: Data], missing: [String]) {
+        var found: [String: Data] = [:]
+        var missing: [String] = []
+        for id in bundleIDs(info) {
+            if let p = ForkASCProfile.best(for: id) { found[id] = p.data } else { missing.append(id) }
         }
-        if ForkASCProfile.best(for: info.bundleID) == nil {
-            return "No App Store provisioning profile for \(info.bundleID). Create one at developer.apple.com (Profiles › App Store Connect) and import it."
-        }
-        return nil
+        return (found, missing)
     }
 
-    /// Signs Payload/<App>.app with the distribution certificate and its App Store profile; returns the new .ipa
-    static func signForAppStore(_ info: ForkASCIPAInfo) async throws -> URL {
-        if let problem = signingProblem(info) { throw ForkASCError.message(problem) }
-        guard let profile = ForkASCProfile.best(for: info.bundleID), let p12 = ForkASCAccount.p12 else {
-            throw ForkASCError.message("Missing certificate or profile.")
-        }
+    /// Signs Payload/<App>.app and each .appex with its own App Store profile; returns the new .ipa
+    static func signForAppStore(_ info: ForkASCIPAInfo, profiles: [String: Data]) async throws -> URL {
+        guard let p12 = ForkASCAccount.p12 else { throw ForkASCError.message("No distribution certificate: import a .p12 or create one.") }
+        let missing = bundleIDs(info).filter { profiles[$0] == nil }
+        if !missing.isEmpty { throw ForkASCError.message("No App Store profile for \(missing.joined(separator: ", ")).") }
         let fm = FileManager.default
-        /* the old signature and profile go; zsign writes the App Store ones (entitlements from the profile) */
-        try? fm.removeItem(at: info.appFolder.appendingPathComponent("_CodeSignature"))
-        try? fm.removeItem(at: info.appFolder.appendingPathComponent("embedded.mobileprovision"))
+        /* the old signatures and profiles go; zsign writes the App Store ones
+           (entitlements from each profile, CodeResources, embedded.mobileprovision) */
+        var bundles: [URL] = [info.appFolder]
+        let plugIns = info.appFolder.appendingPathComponent("PlugIns")
+        bundles += ((try? fm.contentsOfDirectory(at: plugIns, includingPropertiesForKeys: nil)) ?? []).filter { $0.pathExtension == "appex" }
+        for bundle in bundles {
+            try? fm.removeItem(at: bundle.appendingPathComponent("_CodeSignature"))
+            try? fm.removeItem(at: bundle.appendingPathComponent("embedded.mobileprovision"))
+        }
         let password = ForkASCAccount.p12Password
         let ok: Bool = try await withCheckedThrowingContinuation { cont in
-            _ = ZSigner.sign(withAppPath: info.appFolder.path, prov: profile.data, key: p12, pass: password) { success, error in
+            _ = ZSigner.signAppStore(withAppPath: info.appFolder.path, profiles: profiles, key: p12, pass: password) { success, error in
                 if let error, !success { cont.resume(throwing: error) } else { cont.resume(returning: success) }
             }
         }
-        guard ok else { throw ForkASCError.message("Signing failed: check the .p12 password and that the profile was made for this certificate.") }
+        guard ok else { throw ForkASCError.message("Signing failed: check the .p12 password and that the profiles were made for this certificate.") }
         let out = workRoot().appendingPathComponent("\(info.name)-AppStore-\(info.build).ipa")
         try? fm.removeItem(at: out)
         zipDirectoryAtPath(info.workFolder.appendingPathComponent("Payload").path, out.path, true)
@@ -476,6 +490,317 @@ enum ForkASCPipeline {
     }
 }
 
+
+// MARK: - Automatic signing: certificate, bundle IDs and App Store profiles from the API
+
+enum ForkASCProvisioning {
+    static let certIDKey = "fork.asc.certificateID"
+
+    static func normalizedSerial(_ s: String) -> String {
+        var t = s.uppercased().filter { $0.isHexDigit }
+        while t.hasPrefix("0") && t.count > 1 { t.removeFirst() }
+        return t
+    }
+
+    /// The serial number of the imported .p12's certificate (hex)
+    static func serialOfImportedP12() -> String? {
+        guard let p12 = ForkASCAccount.p12 else { return nil }
+        let options: [String: Any] = [kSecImportExportPassphrase as String: ForkASCAccount.p12Password]
+        var items: CFArray?
+        guard SecPKCS12Import(p12 as CFData, options as CFDictionary, &items) == errSecSuccess,
+              let list = items as? [[String: Any]], let first = list.first,
+              let identityRef = first[kSecImportItemIdentity as String] else { return nil }
+        let identity = identityRef as! SecIdentity
+        var cert: SecCertificate?
+        guard SecIdentityCopyCertificate(identity, &cert) == errSecSuccess, let cert,
+              let serial = SecCertificateCopySerialNumberData(cert, nil) as Data? else { return nil }
+        return normalizedSerial(serial.map { String(format: "%02X", $0) }.joined())
+    }
+
+    /// The App Store Connect ID of the distribution certificate Nyxian signs with
+    static func certificateID() async throws -> String {
+        guard ForkASCAccount.p12 != nil else {
+            throw ForkASCError.message("No distribution certificate: import your .p12 or tap Create Distribution Certificate.")
+        }
+        let json = try await ForkASCAPI.request("GET", "/v1/certificates?filter[certificateType]=DISTRIBUTION,IOS_DISTRIBUTION&limit=200&fields[certificates]=serialNumber,name,certificateType")
+        let data = json["data"] as? [[String: Any]] ?? []
+        if let serial = serialOfImportedP12() {
+            for c in data {
+                let attrs = c["attributes"] as? [String: Any] ?? [:]
+                if normalizedSerial(attrs["serialNumber"] as? String ?? "") == serial, let id = c["id"] as? String {
+                    UserDefaults.standard.set(id, forKey: certIDKey)
+                    return id
+                }
+            }
+            throw ForkASCError.message("Your .p12 is not one of this account's distribution certificates (it may be revoked, or from another team).")
+        }
+        /* a .p12 Nyxian made itself (iOS cannot read its serial back): the ID kept when it was created */
+        if let saved = UserDefaults.standard.string(forKey: certIDKey), data.contains(where: { ($0["id"] as? String) == saved }) {
+            return saved
+        }
+        throw ForkASCError.message("The certificate in the Keychain could not be matched to App Store Connect; check the .p12 password.")
+    }
+
+    /// A new Apple Distribution certificate: the key is made here and never leaves the device
+    static func createCertificate() async throws -> String {
+        guard let csr = ZSigner.makeCSR(withCommonName: "Apple Distribution") as? [String: Any],
+              let csrText = csr["csr"] as? String, let keyPEM = csr["key"] as? Data else {
+            throw ForkASCError.message("Could not make the key and its signing request.")
+        }
+        let json = try await ForkASCAPI.request("POST", "/v1/certificates", body: [
+            "data": ["type": "certificates", "attributes": ["csrContent": csrText, "certificateType": "DISTRIBUTION"]]
+        ])
+        guard let item = json["data"] as? [String: Any], let id = item["id"] as? String,
+              let attrs = item["attributes"] as? [String: Any],
+              let content = attrs["certificateContent"] as? String, let der = Data(base64Encoded: content) else {
+            throw ForkASCError.message("App Store Connect did not return the certificate.")
+        }
+        let password = UUID().uuidString
+        guard let p12 = ZSigner.makeP12(withCertificate: der, privateKey: keyPEM, password: password, name: "Apple Distribution") else {
+            throw ForkASCError.message("Could not package the certificate as .p12.")
+        }
+        ForkASCKeychain.set(p12, for: "p12")
+        ForkASCAccount.p12Password = password
+        UserDefaults.standard.set(id, forKey: certIDKey)
+        return id
+    }
+
+    /// The bundle ID resource (registered when it does not exist yet)
+    static func bundleIDResource(_ identifier: String, name: String) async throws -> String {
+        let q = identifier.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? identifier
+        let json = try await ForkASCAPI.request("GET", "/v1/bundleIds?filter[identifier]=\(q)&limit=200&fields[bundleIds]=identifier,name,platform")
+        for item in json["data"] as? [[String: Any]] ?? [] {
+            let attrs = item["attributes"] as? [String: Any] ?? [:]
+            if (attrs["identifier"] as? String) == identifier, let id = item["id"] as? String { return id }
+        }
+        let safeName = name.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == " " }.map(String.init).joined()
+        let created = try await ForkASCAPI.request("POST", "/v1/bundleIds", body: [
+            "data": ["type": "bundleIds", "attributes": ["identifier": identifier, "name": safeName.isEmpty ? "App" : safeName, "platform": "IOS"]]
+        ])
+        guard let id = (created["data"] as? [String: Any])?["id"] as? String else {
+            throw ForkASCError.message("Could not register \(identifier).")
+        }
+        return id
+    }
+
+    /// Turns on App Groups for a bundle ID (already on: fine)
+    static func enableAppGroups(_ bundleResourceID: String) async {
+        _ = try? await ForkASCAPI.request("POST", "/v1/bundleIdCapabilities", body: [
+            "data": [
+                "type": "bundleIdCapabilities",
+                "attributes": ["capabilityType": "APP_GROUPS"],
+                "relationships": ["bundleId": ["data": ["type": "bundleIds", "id": bundleResourceID]]]
+            ]
+        ])
+    }
+
+    /// A fresh App Store profile for the bundle ID with the certificate (replaces the one Nyxian made before)
+    static func profile(identifier: String, bundleResourceID: String, certificateID: String) async throws -> Data {
+        let name = "App Store \(identifier)"
+        let q = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? name
+        let existing = try await ForkASCAPI.request("GET", "/v1/profiles?filter[name]=\(q)&limit=50&fields[profiles]=name")
+        for item in existing["data"] as? [[String: Any]] ?? [] {
+            if let id = item["id"] as? String, ((item["attributes"] as? [String: Any])?["name"] as? String) == name {
+                _ = try? await ForkASCAPI.request("DELETE", "/v1/profiles/\(id)")
+            }
+        }
+        let json = try await ForkASCAPI.request("POST", "/v1/profiles", body: [
+            "data": [
+                "type": "profiles",
+                "attributes": ["name": name, "profileType": "IOS_APP_STORE"],
+                "relationships": [
+                    "bundleId": ["data": ["type": "bundleIds", "id": bundleResourceID]],
+                    "certificates": ["data": [["type": "certificates", "id": certificateID]]]
+                ]
+            ]
+        ])
+        guard let attrs = (json["data"] as? [String: Any])?["attributes"] as? [String: Any],
+              let content = attrs["profileContent"] as? String, let data = Data(base64Encoded: content) else {
+            throw ForkASCError.message("App Store Connect did not return the profile for \(identifier).")
+        }
+        try? FileManager.default.createDirectory(at: ForkASCProfile.folder, withIntermediateDirectories: true)
+        try? data.write(to: ForkASCProfile.folder.appendingPathComponent("\(identifier).mobileprovision"), options: .atomic)
+        return data
+    }
+
+    /// App Groups the app declares (Nyxian writes them into its Info.plist)
+    static func appGroups(_ info: ForkASCIPAInfo) -> [String] {
+        guard let d = try? Data(contentsOf: info.appFolder.appendingPathComponent("Info.plist")),
+              let p = (try? PropertyListSerialization.propertyList(from: d, format: nil)) as? [String: Any] else { return [] }
+        return p["NXApplicationGroups"] as? [String] ?? []
+    }
+
+    /// Bundle IDs, App Groups and one App Store profile per bundle (app and each extension)
+    static func prepare(_ info: ForkASCIPAInfo, progress: @escaping (String) -> Void) async throws -> (profiles: [String: Data], notes: [String]) {
+        progress("Checking the distribution certificate…")
+        let certID = try await certificateID()
+        let groups = appGroups(info)
+        var profiles: [String: Data] = [:]
+        var notes: [String] = []
+        for identifier in ForkASCPipeline.bundleIDs(info) {
+            progress("Bundle ID \(identifier)…")
+            let label = identifier == info.bundleID ? info.name : "\(info.name) \(identifier.components(separatedBy: ".").last ?? "")"
+            let resource = try await bundleIDResource(identifier, name: label)
+            if !groups.isEmpty { await enableAppGroups(resource) }
+            progress("App Store profile for \(identifier)…")
+            let data = try await profile(identifier: identifier, bundleResourceID: resource, certificateID: certID)
+            profiles[identifier] = data
+            let ent = (ForkASCProfile.plist(from: data)?["Entitlements"] as? [String: Any]) ?? [:]
+            let inProfile = ent["com.apple.security.application-groups"] as? [String] ?? []
+            let missing = groups.filter { !inProfile.contains($0) }
+            if !missing.isEmpty {
+                notes.append("\(identifier): the profile has no App Group \(missing.joined(separator: ", ")). At developer.apple.com › Identifiers › App Groups create it (once), then open \(identifier) › App Groups › Configure and tick it; tap Upload again so Nyxian makes the profile anew. Until then the app and its widget cannot share data.")
+            }
+        }
+        return (profiles, notes)
+    }
+}
+
+// MARK: - App icon: Assets.car from Apple's actool on a Mac (GitHub Actions)
+
+enum ForkASCIconCompiler {
+    static let releaseTag = "asset-catalog"
+    static let workflow = "ios-assets.yml"
+    /* the workflow file is on the fork's main branch once merged; until then on this branch */
+    static let refs: [String] = [ForkWheelBuilder.branch, "app-intents-2.4.0"]
+
+    struct ProjectIcon {
+        let project: NXProject
+        let name: String
+        var compiled: Bool { ForkAssetCatalog.isCurrent(project.url as URL) }
+    }
+
+    static func projects() -> [ProjectIcon] {
+        let fm = FileManager.default
+        let root = ForkEmbeddedExtensions.projectsURL
+        let items = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+        return items.compactMap { url -> ProjectIcon? in
+            guard fm.fileExists(atPath: ForkAssetCatalog.iconURL(url).path),
+                  fm.fileExists(atPath: url.appendingPathComponent("Config/Project.plist").path),
+                  let project = NXProject(url: url) else { return nil }
+            return ProjectIcon(project: project, name: project.projectConfig.displayName ?? url.lastPathComponent)
+        }.sorted { $0.name < $1.name }
+    }
+
+    private static func github(_ urlText: String, method: String = "GET", body: Data? = nil, contentType: String = "application/json") async throws -> (Data, Int) {
+        guard let token = ForkWheelBuilder.token else {
+            throw ForkASCError.message("Add your GitHub token in Settings › Toolchain › iOS Builds (it also needs \"Contents: Read and write\" on \(ForkWheelBuilder.repository)).")
+        }
+        guard let url = URL(string: urlText) else { throw ForkASCError.message("Bad URL") }
+        var req = URLRequest(url: url)
+        req.httpMethod = method
+        req.timeoutInterval = 120
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+        if let body {
+            req.httpBody = body
+            req.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await URLSession.shared.data(for: req)
+        return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
+    }
+
+    private static func json(_ data: Data) -> [String: Any] {
+        ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? [:]
+    }
+
+    private static func explain(_ status: Int, _ data: Data, _ what: String) -> ForkASCError {
+        var text = "\(what) (GitHub \(status))"
+        if status == 401 { text += ": the token is not valid (or expired)." }
+        if status == 403 || status == 404 { text += ": the token needs \"Contents: Read and write\" and \"Actions: Read and write\" on \(ForkWheelBuilder.repository)." }
+        if let m = json(data)["message"] as? String { text += "\n\(m)" }
+        return ForkASCError.message(text)
+    }
+
+    private static func releaseID() async throws -> Int {
+        let api = "https://api.github.com/repos/\(ForkWheelBuilder.repository)/releases"
+        let (data, status) = try await github("\(api)/tags/\(releaseTag)")
+        if status == 200, let id = json(data)["id"] as? Int { return id }
+        let body = try JSONSerialization.data(withJSONObject: [
+            "tag_name": releaseTag, "name": "Asset catalogs", "prerelease": true,
+            "target_commitish": ForkWheelBuilder.branch,
+            "body": "Temporary files of Settings › App Store Connect › App Icon: an icon goes up as <request>.png, comes back compiled by actool as <request>.zip, and both are removed."
+        ])
+        let (created, createdStatus) = try await github(api, method: "POST", body: body)
+        guard createdStatus == 201, let id = json(created)["id"] as? Int else { throw explain(createdStatus, created, "Could not create the asset-catalog release") }
+        return id
+    }
+
+    /// Sends Config/AppIcon.png to the Mac, waits for Assets.car and keeps it in Config/AssetCatalog
+    static func compile(_ item: ProjectIcon, progress: @escaping (String) -> Void) async throws {
+        let projectURL = item.project.url as URL
+        let iconURL = ForkAssetCatalog.iconURL(projectURL)
+        guard let png = try? Data(contentsOf: iconURL), let hash = ForkAssetCatalog.sha256(of: iconURL) else {
+            throw ForkASCError.message("\(item.name) has no Config/AppIcon.png.")
+        }
+        let request = UUID().uuidString
+        progress("Uploading the icon…")
+        let release = try await releaseID()
+        let upload = "https://uploads.github.com/repos/\(ForkWheelBuilder.repository)/releases/\(release)/assets?name=\(request).png"
+        let (upData, upStatus) = try await github(upload, method: "POST", body: png, contentType: "image/png")
+        guard upStatus == 201 else { throw explain(upStatus, upData, "Could not upload the icon") }
+
+        let minimum = (item.project.projectConfig.infoDictionary?["MinimumOSVersion"] as? String) ?? "17.0"
+        progress("Starting actool on the Mac…")
+        var started = false
+        var lastError: ForkASCError?
+        for ref in refs {
+            let body = try JSONSerialization.data(withJSONObject: ["ref": ref, "inputs": ["request": request, "minimum": minimum]])
+            let (d, st) = try await github("https://api.github.com/repos/\(ForkWheelBuilder.repository)/actions/workflows/\(workflow)/dispatches", method: "POST", body: body)
+            if st == 204 { started = true; break }
+            if st == 404 || st == 422 {
+                /* GitHub dispatches a workflow only when its file is on the default branch */
+                lastError = ForkASCError.message("GitHub did not find the iOS Asset Catalog workflow (\(st)). It has to be on the repository's default branch (\(ForkWheelBuilder.branch)): merge the branch that adds .github/workflows/\(workflow) there, then try again. (A token without \"Actions: Read and write\" gets the same answer.)")
+                continue
+            }
+            lastError = explain(st, d, "Could not start the iOS Asset Catalog workflow")
+        }
+        guard started else { throw lastError ?? ForkASCError.message("Could not start the workflow.") }
+
+        /* the answer: <request>.zip on the same release (a Mac takes a few minutes) */
+        let deadline = Date().addingTimeInterval(20 * 60)
+        var download: URL?
+        var assetID: Int?
+        while download == nil && Date() < deadline {
+            try await Task.sleep(nanoseconds: 15_000_000_000)
+            progress("Waiting for actool on the Mac…")
+            let (d, st) = try await github("https://api.github.com/repos/\(ForkWheelBuilder.repository)/releases/\(release)/assets?per_page=100")
+            guard st == 200, let assets = try? JSONSerialization.jsonObject(with: d) as? [[String: Any]] else { continue }
+            if let a = assets.first(where: { ($0["name"] as? String) == "\(request).zip" }),
+               let u = a["browser_download_url"] as? String {
+                download = URL(string: u)
+                assetID = a["id"] as? Int
+            }
+        }
+        guard let download else {
+            throw ForkASCError.message("actool did not answer in 20 minutes: see the iOS Asset Catalog workflow on GitHub.")
+        }
+        progress("Downloading Assets.car…")
+        let (zipData, zipResponse) = try await URLSession.shared.data(from: download)
+        guard (zipResponse as? HTTPURLResponse)?.statusCode == 200 else { throw ForkASCError.message("Could not download the compiled catalog.") }
+        let fm = FileManager.default
+        let tmp = ForkASCPipeline.workRoot().appendingPathComponent("icon-\(request)", isDirectory: true)
+        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let zipURL = tmp.appendingPathComponent("catalog.zip")
+        try zipData.write(to: zipURL)
+        let out = tmp.appendingPathComponent("out", isDirectory: true)
+        guard unzipArchiveAtPath(zipURL.path, out.path),
+              fm.fileExists(atPath: out.appendingPathComponent("Assets.car").path) else {
+            throw ForkASCError.message("The answer from the Mac has no Assets.car.")
+        }
+        let dest = ForkAssetCatalog.folder(projectURL)
+        try? fm.removeItem(at: dest)
+        try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.copyItem(at: out, to: dest)
+        try Data((hash + "\n").utf8).write(to: dest.appendingPathComponent("source.sha256"))
+        try? fm.removeItem(at: tmp)
+        if let assetID {
+            _ = try? await github("https://api.github.com/repos/\(ForkWheelBuilder.repository)/releases/assets/\(assetID)", method: "DELETE")
+        }
+    }
+}
+
 // MARK: - Settings › App Store Connect
 
 @objc(ForkAppStoreConnectViewController)
@@ -489,11 +814,23 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
     private var lastUploadID: String? = UserDefaults.standard.string(forKey: "fork.asc.lastUpload")
     private var busy = false
     private var pollTask: Task<Void, Never>?
+    private var icons: [ForkASCIconCompiler.ProjectIcon] = []
+    private var iconBusy: String?
+
+    /// Sections
+    private let sAccount = 0, sSigning = 1, sIcon = 2, sUpload = 3, sStatus = 4
 
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "App Store Connect"
         tableView.keyboardDismissMode = .onDrag
+        icons = ForkASCIconCompiler.projects()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        icons = ForkASCIconCompiler.projects()
+        tableView.reloadData()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -503,29 +840,32 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
 
     // MARK: table
 
-    override func numberOfSections(in tableView: UITableView) -> Int { 4 }
+    override func numberOfSections(in tableView: UITableView) -> Int { 5 }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch section {
-        case 0: return 4
-        case 1: return 3 + ForkASCProfile.all().count
-        case 2: return 1
+        case sAccount: return 4
+        case sSigning: return 4 + ForkASCProfile.all().count
+        case sIcon: return max(icons.count, 1)
+        case sUpload: return 1
         default: return 2 + statusMessages.count
         }
     }
 
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        ["API Key", "Distribution Signing", "Upload", "Last Upload"][section]
+        ["API Key", "Distribution Signing", "App Icon (Assets.car)", "Upload", "Last Upload"][section]
     }
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
         switch section {
-        case 0:
-            return "Make the key in App Store Connect › Users and Access › Integrations › App Store Connect API (role App Manager or Admin). The .p8 can be downloaded once; its file name AuthKey_<Key ID>.p8 fills the Key ID. The key stays in this device's Keychain."
-        case 1:
-            return "Your Apple Distribution certificate as .p12 (export it with its private key from a Mac's Keychain Access, or from a signing tool) and an App Store provisioning profile for each bundle ID (developer.apple.com › Profiles › App Store Connect). Apps with widgets need one per extension and are not signed here yet."
-        case 2:
-            return "Pick an .ipa (an Export from Nyxian, saved to Files). Nyxian signs it for the App Store when you have the certificate and profile, then uploads it with Apple's Build Uploads API. The build shows in App Store Connect and TestFlight after Apple processes it (minutes)."
+        case sAccount:
+            return "Make the key in App Store Connect › Users and Access › Integrations › App Store Connect API (role Admin: it also makes certificates and profiles). The .p8 can be downloaded once; its file name AuthKey_<Key ID>.p8 fills the Key ID. The key stays in this device's Keychain."
+        case sSigning:
+            return "Automatic: with the API key Nyxian registers the bundle IDs (the app and each widget), turns on App Groups and makes one App Store profile per bundle ID with your distribution certificate, each time you upload. Import your Apple Distribution .p12, or create a certificate here (its private key is made on this device and stays in the Keychain). App Groups themselves are created once at developer.apple.com; Nyxian says when a profile lacks one. Imported profiles are used when you choose to."
+        case sIcon:
+            return "The App Store wants the icon in an asset catalog, which only Apple's actool writes, on a Mac. Nyxian sends the project's Config/AppIcon.png to the iOS Asset Catalog workflow (your Mac, or GitHub's) and keeps Assets.car in Config/AssetCatalog; every Export then puts it in the app. Needs the GitHub token of Settings › Toolchain › iOS Builds with \"Contents: Read and write\" too. The PNG is on the fork's public release for a few minutes, then removed."
+        case sUpload:
+            return "Pick an .ipa (an Export from Nyxian, saved to Files). Nyxian signs it for the App Store, the app and each widget with its own profile, then uploads it with Apple's Build Uploads API. The build shows in App Store Connect and TestFlight after Apple processes it (minutes)."
         default:
             return nil
         }
@@ -538,6 +878,12 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
         cell.imageView?.image = UIImage(systemName: symbol)
         cell.accessoryType = accessory ? .disclosureIndicator : .none
         return cell
+    }
+
+    private func actionCell(_ title: String, symbol: String, enabled: Bool = true) -> UITableViewCell {
+        let c = valueCell(title, "", symbol: symbol, accessory: false)
+        c.textLabel?.textColor = enabled ? .systemBlue : .secondaryLabel
+        return c
     }
 
     private func fieldCell(_ placeholder: String, text: String, tag: Int, secure: Bool = false) -> UITableViewCell {
@@ -565,73 +911,94 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        switch (indexPath.section, indexPath.row) {
-        case (0, 0): return fieldCell("Issuer ID", text: ForkASCAccount.issuerID, tag: 1)
-        case (0, 1): return fieldCell("Key ID", text: ForkASCAccount.keyID, tag: 2)
-        case (0, 2): return valueCell("Private Key (.p8)", ForkASCAccount.privateKeyPEM == nil ? "Import" : "In Keychain", symbol: "key.fill")
-        case (0, 3):
-            let c = valueCell("Test Connection", "", symbol: "checkmark.icloud", accessory: false)
-            c.textLabel?.textColor = .systemBlue
+        let row = indexPath.row
+        switch indexPath.section {
+        case sAccount:
+            switch row {
+            case 0: return fieldCell("Issuer ID", text: ForkASCAccount.issuerID, tag: 1)
+            case 1: return fieldCell("Key ID", text: ForkASCAccount.keyID, tag: 2)
+            case 2: return valueCell("Private Key (.p8)", ForkASCAccount.privateKeyPEM == nil ? "Import" : "In Keychain", symbol: "key.fill")
+            default: return actionCell("Test Connection", symbol: "checkmark.icloud")
+            }
+        case sSigning:
+            switch row {
+            case 0: return valueCell("Certificate (.p12)", ForkASCAccount.p12 == nil ? "Import" : "In Keychain", symbol: "person.badge.key.fill")
+            case 1: return fieldCell("Certificate password", text: ForkASCAccount.p12Password, tag: 3, secure: true)
+            case 2: return actionCell("Create Distribution Certificate", symbol: "plus.seal", enabled: !busy)
+            case 3: return actionCell("Import Provisioning Profile", symbol: "doc.badge.plus")
+            default:
+                let p = ForkASCProfile.all()[row - 4]
+                let kind = p.isAppStore ? "App Store" : "not App Store"
+                let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+                cell.textLabel?.text = p.name
+                cell.detailTextLabel?.text = "\(p.appIDPattern) · \(kind)\(p.expired ? " · expired" : "")"
+                cell.detailTextLabel?.textColor = (p.isAppStore && !p.expired) ? .secondaryLabel : .systemOrange
+                cell.imageView?.image = UIImage(systemName: "doc.text.fill")
+                return cell
+            }
+        case sIcon:
+            guard !icons.isEmpty else {
+                let c = valueCell("No project with Config/AppIcon.png", "", symbol: "app.dashed", accessory: false)
+                c.textLabel?.textColor = .secondaryLabel
+                c.selectionStyle = .none
+                return c
+            }
+            let item = icons[row]
+            let state: String
+            if iconBusy == item.name { state = "Compiling…" } else { state = item.compiled ? "Compiled" : "Compile" }
+            let c = valueCell(item.name, state, symbol: item.compiled ? "checkmark.seal.fill" : "app.badge", accessory: false)
+            c.detailTextLabel?.textColor = item.compiled ? .systemGreen : .systemBlue
             return c
-        case (1, 0): return valueCell("Certificate (.p12)", ForkASCAccount.p12 == nil ? "Import" : "In Keychain", symbol: "person.badge.key.fill")
-        case (1, 1): return fieldCell("Certificate password", text: ForkASCAccount.p12Password, tag: 3, secure: true)
-        case (1, 2):
-            let c = valueCell("Import Provisioning Profile", "", symbol: "doc.badge.plus", accessory: false)
-            c.textLabel?.textColor = .systemBlue
-            return c
-        case (1, let row):
-            let p = ForkASCProfile.all()[row - 3]
-            let kind = p.isAppStore ? "App Store" : "not App Store"
-            let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
-            cell.textLabel?.text = p.name
-            cell.detailTextLabel?.text = "\(p.appIDPattern) · \(kind)\(p.expired ? " · expired" : "")"
-            cell.detailTextLabel?.textColor = (p.isAppStore && !p.expired) ? .secondaryLabel : .systemOrange
-            cell.imageView?.image = UIImage(systemName: "doc.text.fill")
-            return cell
-        case (2, _):
-            let c = valueCell(busy ? "Working…" : "Upload .ipa to App Store Connect", "", symbol: "icloud.and.arrow.up.fill", accessory: false)
-            c.textLabel?.textColor = busy ? .secondaryLabel : .systemBlue
-            return c
-        case (3, 0):
-            let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
-            cell.textLabel?.text = status.isEmpty ? (lastUploadID == nil ? "No upload yet" : "Upload \(lastUploadID ?? "")") : status
-            cell.textLabel?.numberOfLines = 0
-            cell.selectionStyle = .none
-            return cell
-        case (3, 1):
-            let c = valueCell("Refresh State", "", symbol: "arrow.clockwise", accessory: false)
-            c.textLabel?.textColor = lastUploadID == nil ? .secondaryLabel : .systemBlue
-            return c
+        case sUpload:
+            return actionCell(busy ? "Working…" : "Upload .ipa to App Store Connect", symbol: "icloud.and.arrow.up.fill", enabled: !busy)
         default:
-            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-            cell.textLabel?.text = statusMessages[indexPath.row - 2]
-            cell.textLabel?.numberOfLines = 0
-            cell.textLabel?.font = .preferredFont(forTextStyle: .footnote)
-            cell.selectionStyle = .none
-            return cell
+            switch row {
+            case 0:
+                let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+                cell.textLabel?.text = status.isEmpty ? (lastUploadID == nil ? "No upload yet" : "Upload \(lastUploadID ?? "")") : status
+                cell.textLabel?.numberOfLines = 0
+                cell.selectionStyle = .none
+                return cell
+            case 1:
+                return actionCell("Refresh State", symbol: "arrow.clockwise", enabled: lastUploadID != nil)
+            default:
+                let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+                cell.textLabel?.text = statusMessages[row - 2]
+                cell.textLabel?.numberOfLines = 0
+                cell.textLabel?.font = .preferredFont(forTextStyle: .footnote)
+                cell.selectionStyle = .none
+                return cell
+            }
         }
     }
 
     override func tableView(_ tableView: UITableView, canEditRowAt indexPath: IndexPath) -> Bool {
-        indexPath.section == 1 && indexPath.row >= 3
+        indexPath.section == sSigning && indexPath.row >= 4
     }
 
     override func tableView(_ tableView: UITableView, commit editingStyle: UITableViewCell.EditingStyle, forRowAt indexPath: IndexPath) {
-        guard editingStyle == .delete, indexPath.section == 1, indexPath.row >= 3 else { return }
-        try? FileManager.default.removeItem(at: ForkASCProfile.all()[indexPath.row - 3].url)
+        guard editingStyle == .delete, indexPath.section == sSigning, indexPath.row >= 4 else { return }
+        try? FileManager.default.removeItem(at: ForkASCProfile.all()[indexPath.row - 4].url)
         tableView.reloadData()
     }
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        switch (indexPath.section, indexPath.row) {
-        case (0, 2): pick(.p8)
-        case (0, 3): testConnection()
-        case (1, 0): pick(.p12)
-        case (1, 2): pick(.profile)
-        case (2, _): if !busy { pick(.ipa) }
-        case (3, 1): if let id = lastUploadID { follow(id, once: true) }
-        default: break
+        let row = indexPath.row
+        switch indexPath.section {
+        case sAccount:
+            if row == 2 { pick(.p8) }
+            if row == 3 { testConnection() }
+        case sSigning:
+            if row == 0 { pick(.p12) }
+            if row == 2 && !busy { createCertificate() }
+            if row == 3 { pick(.profile) }
+        case sIcon:
+            if !icons.isEmpty && iconBusy == nil { compileIcon(icons[row]) }
+        case sUpload:
+            if !busy { pick(.ipa) }
+        default:
+            if row == 1, let id = lastUploadID { follow(id, once: true) }
         }
     }
 
@@ -655,7 +1022,7 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
     private func setStatus(_ text: String, messages: [String]? = nil) {
         status = text
         if let messages { statusMessages = messages }
-        tableView.reloadSections(IndexSet(integersIn: 2...3), with: .none)
+        tableView.reloadData()
     }
 
     private func alert(_ title: String, _ message: String) {
@@ -704,6 +1071,7 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
                 return
             }
             ForkASCKeychain.set(data, for: "p12")
+            UserDefaults.standard.removeObject(forKey: ForkASCProvisioning.certIDKey)
             tableView.reloadData()
         case .profile:
             guard ext == "mobileprovision", let data, ForkASCProfile.plist(from: data) != nil else {
@@ -747,6 +1115,50 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
         }
     }
 
+    private func createCertificate() {
+        guard ForkASCAccount.isConfigured else {
+            alert("API key needed", "Add your Issuer ID, Key ID and .p8 key first.")
+            return
+        }
+        let ask = UIAlertController(title: "Create a Distribution Certificate?",
+                                    message: "Apple allows a few distribution certificates per team. The new one replaces the .p12 in Nyxian's Keychain; its private key is made on this device and only exists here.",
+                                    preferredStyle: .alert)
+        ask.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        ask.addAction(UIAlertAction(title: "Create", style: .default) { _ in
+            self.busy = true
+            self.setStatus("Creating the distribution certificate…", messages: [])
+            Task { @MainActor in
+                do {
+                    let id = try await ForkASCProvisioning.createCertificate()
+                    self.busy = false
+                    self.setStatus("Distribution certificate created (\(id)) and kept in the Keychain.")
+                } catch {
+                    self.busy = false
+                    self.setStatus("Could not create the certificate: \(error.localizedDescription)")
+                }
+            }
+        })
+        present(ask, animated: true)
+    }
+
+    private func compileIcon(_ item: ForkASCIconCompiler.ProjectIcon) {
+        iconBusy = item.name
+        setStatus("App icon of \(item.name)…", messages: [])
+        Task { @MainActor in
+            do {
+                try await ForkASCIconCompiler.compile(item) { text in
+                    Task { @MainActor in self.setStatus("\(item.name): \(text)") }
+                }
+                self.iconBusy = nil
+                self.icons = ForkASCIconCompiler.projects()
+                self.setStatus("\(item.name): Assets.car ready in Config/AssetCatalog. Export the app again to include it.")
+            } catch {
+                self.iconBusy = nil
+                self.setStatus("App icon of \(item.name): \(error.localizedDescription)")
+            }
+        }
+    }
+
     private func prepareUpload(_ ipa: URL) {
         guard ForkASCAccount.isConfigured else {
             alert("API key needed", "Add your Issuer ID, Key ID and .p8 key first.")
@@ -757,47 +1169,72 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
             alert("Cannot read the .ipa", error.localizedDescription)
             return
         }
-        let problem = ForkASCPipeline.signingProblem(info)
+        var lines: [String] = [info.bundleID]
+        if !info.extensions.isEmpty { lines.append("Extensions: \(info.extensions.joined(separator: ", "))") }
+        let hasCar = FileManager.default.fileExists(atPath: info.appFolder.appendingPathComponent("Assets.car").path)
+        if !hasCar { lines.append("No Assets.car: the App Store will likely refuse the icon (App Icon section above, then Export again).") }
+        if ForkASCAccount.p12 == nil { lines.append("No distribution certificate yet: import a .p12 or create one.") }
+        let imported = ForkASCPipeline.importedProfiles(info)
+
         let sheet = UIAlertController(title: "\(info.name) \(info.version) (\(info.build))",
-                                      message: info.bundleID + (problem.map { "\n\n" + $0 } ?? ""),
-                                      preferredStyle: .actionSheet)
-        if problem == nil {
-            sheet.addAction(UIAlertAction(title: "Sign for App Store and Upload", style: .default) { _ in self.run(info, sign: true) })
+                                      message: lines.joined(separator: "\n\n"), preferredStyle: .actionSheet)
+        if ForkASCAccount.p12 != nil {
+            sheet.addAction(UIAlertAction(title: "Sign (Automatic Profiles) and Upload", style: .default) { _ in self.run(info, mode: .automatic) })
+            if imported.missing.isEmpty {
+                sheet.addAction(UIAlertAction(title: "Sign (Imported Profiles) and Upload", style: .default) { _ in self.run(info, mode: .imported) })
+            }
         }
-        sheet.addAction(UIAlertAction(title: "Upload As Is (already signed)", style: .default) { _ in self.run(info, sign: false) })
+        sheet.addAction(UIAlertAction(title: "Upload As Is (already signed)", style: .default) { _ in self.run(info, mode: .asIs) })
         sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         if let pop = sheet.popoverPresentationController {
             pop.sourceView = tableView
-            pop.sourceRect = tableView.rectForRow(at: IndexPath(row: 0, section: 2))
+            pop.sourceRect = tableView.rectForRow(at: IndexPath(row: 0, section: sUpload))
         }
         present(sheet, animated: true)
     }
 
-    private func run(_ info: ForkASCIPAInfo, sign: Bool) {
+    private enum Mode { case automatic, imported, asIs }
+
+    private func run(_ info: ForkASCIPAInfo, mode: Mode) {
         busy = true
         pollTask?.cancel()
-        setStatus(sign ? "Signing for the App Store…" : "Starting…", messages: [])
+        setStatus("Starting…", messages: [])
         Task { @MainActor in
+            var notes: [String] = []
             do {
-                let ipa = sign ? try await ForkASCPipeline.signForAppStore(info) : info.ipa
+                let ipa: URL
+                switch mode {
+                case .asIs:
+                    ipa = info.ipa
+                case .imported:
+                    setStatus("Signing for the App Store…")
+                    ipa = try await ForkASCPipeline.signForAppStore(info, profiles: ForkASCPipeline.importedProfiles(info).profiles)
+                case .automatic:
+                    let prepared = try await ForkASCProvisioning.prepare(info) { text in
+                        Task { @MainActor in self.setStatus(text) }
+                    }
+                    notes = prepared.notes
+                    setStatus("Signing for the App Store…", messages: notes)
+                    ipa = try await ForkASCPipeline.signForAppStore(info, profiles: prepared.profiles)
+                }
                 let id = try await ForkASCPipeline.upload(ipa, info: info) { fraction, text in
                     Task { @MainActor in self.setStatus("\(text) \(Int(fraction * 100))%") }
                 }
                 lastUploadID = id
                 UserDefaults.standard.set(id, forKey: "fork.asc.lastUpload")
                 busy = false
-                setStatus("Uploaded. Apple is processing the build…")
-                follow(id, once: false)
+                setStatus("Uploaded. Apple is processing the build…", messages: notes)
+                follow(id, once: false, extra: notes)
             } catch {
                 busy = false
-                setStatus("Upload failed: \(error.localizedDescription)", messages: [])
+                setStatus("Upload failed: \(error.localizedDescription)", messages: notes)
             }
             try? FileManager.default.removeItem(at: info.workFolder)
         }
     }
 
     /// Reads the upload's state (every 20 s until COMPLETE or FAILED, for up to 30 min)
-    private func follow(_ id: String, once: Bool) {
+    private func follow(_ id: String, once: Bool, extra: [String] = []) {
         pollTask?.cancel()
         pollTask = Task { @MainActor in
             let deadline = Date().addingTimeInterval(30 * 60)
@@ -810,7 +1247,7 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
                     case "FAILED": text = "Apple did not accept the build:"
                     default: text = "Apple's state: \(s.state)"
                     }
-                    setStatus(text, messages: s.messages)
+                    setStatus(text, messages: s.messages + extra)
                     if s.finished || once { return }
                 } catch {
                     setStatus("Could not read the state: \(error.localizedDescription)")

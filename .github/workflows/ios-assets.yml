@@ -1,0 +1,95 @@
+# fork doctoralvarez/Nyxian — version 1.0.0
+# Changelog:
+#  - 1.0.0 (2026-11-22): compiles an app icon into Assets.car with Apple's own
+#    actool, which only exists on a Mac. Nyxian (Settings › App Store Connect ›
+#    App Icon) uploads Config/AppIcon.png as <request>.png to the
+#    "asset-catalog" release and starts this workflow; it answers with
+#    <request>.zip on the same release (Assets.car, the AppIcon PNGs actool
+#    writes and partial.plist with CFBundleIcons / CFBundleIconName) and removes
+#    the PNG. The App Store asks for the icon in an asset catalog.
+
+name: iOS Asset Catalog
+
+on:
+  workflow_dispatch:
+    inputs:
+      request:
+        description: "Request ID (<request>.png on the asset-catalog release)"
+        required: true
+      minimum:
+        description: "Minimum iOS version"
+        required: false
+        default: "17.0"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-assets-${{ github.event.inputs.request }}
+
+jobs:
+  compile:
+    name: Compile the asset catalog
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REQUEST: ${{ github.event.inputs.request }}
+      MINIMUM: ${{ github.event.inputs.minimum }}
+    steps:
+      - name: Check the request ID
+        run: |
+          if ! printf '%s' "$REQUEST" | grep -Eq '^[A-Za-z0-9-]{8,64}$'; then
+            echo "::error::Bad request ID"; exit 1
+          fi
+          if ! printf '%s' "$MINIMUM" | grep -Eq '^[0-9]+(\.[0-9]+){0,2}$'; then
+            echo "::error::Bad minimum iOS version"; exit 1
+          fi
+
+      - name: Download the icon
+        run: |
+          mkdir -p work/Assets.xcassets/AppIcon.appiconset out
+          gh release download asset-catalog -R "$GITHUB_REPOSITORY" -p "$REQUEST.png" -D work
+          mv "work/$REQUEST.png" work/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+          sips -g pixelWidth -g pixelHeight work/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+
+      - name: Write the asset catalog
+        run: |
+          cat > work/Assets.xcassets/Contents.json <<'JSON'
+          { "info" : { "author" : "xcode", "version" : 1 } }
+          JSON
+          cat > work/Assets.xcassets/AppIcon.appiconset/Contents.json <<'JSON'
+          {
+            "images" : [
+              { "filename" : "AppIcon.png", "idiom" : "universal", "platform" : "ios", "size" : "1024x1024" }
+            ],
+            "info" : { "author" : "xcode", "version" : 1 }
+          }
+          JSON
+
+      - name: Compile with actool
+        run: |
+          xcodebuild -version
+          xcrun actool work/Assets.xcassets \
+            --compile out \
+            --platform iphoneos \
+            --minimum-deployment-target "$MINIMUM" \
+            --app-icon AppIcon \
+            --target-device iphone --target-device ipad \
+            --output-partial-info-plist out/partial.plist \
+            --output-format human-readable-text --notices --warnings --errors
+          ls -la out
+          test -f out/Assets.car
+          plutil -p out/partial.plist
+          xcrun --sdk iphoneos --show-sdk-version > out/sdk-version.txt
+          xcodebuild -version | head -1 > out/xcode-version.txt
+
+      - name: Return the result
+        run: |
+          (cd out && zip -q -r "../$REQUEST.zip" .)
+          gh release upload asset-catalog -R "$GITHUB_REPOSITORY" "$REQUEST.zip" --clobber
+
+      - name: Remove the icon from the release
+        if: always()
+        run: |
+          gh release delete-asset asset-catalog "$REQUEST.png" -R "$GITHUB_REPOSITORY" -y || true

@@ -1,8 +1,14 @@
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-22): App Store signing (m_bAppStore and m_mapAssets).
+*/
 #pragma once
 #include "common.h"
 #include "json.h"
 #include "openssl.h"
 #include <vector>
+#include <map>
 
 class ZBundle
 {
@@ -46,6 +52,13 @@ private:
 	ZSignAsset*		m_pSignAsset;
 	vector<string>	m_arrInjectDylibs;
     jvalue config;
+
+public:
+	/* fork doctoralvarez/Nyxian: App Store signing — each bundle (the app and
+	   every .appex) with its own profile, its embedded.mobileprovision and a
+	   _CodeSignature/CodeResources (LiveContainer leaves those out) */
+	bool			m_bAppStore;
+	std::map<string, ZSignAsset*> m_mapAssets;
 
 public:
 	string			m_strAppFolder;

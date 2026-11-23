@@ -4,6 +4,27 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.6.0 — 2026-11-22
+
+- App Store signing for apps with widgets. Settings › App Store Connect signs
+  the app and each extension with its own App Store profile, and now writes
+  what the App Store checks and LiveContainer's zsign left out: each bundle's
+  embedded.mobileprovision and its _CodeSignature/CodeResources
+  (ZSigner signAppStore).
+- Automatic signing with the API key: the bundle IDs of the app and of each
+  extension are registered, App Groups turned on, and one App Store profile
+  is made per bundle ID with your distribution certificate, at every upload.
+  Create Distribution Certificate makes one from an RSA key generated on the
+  device (CSR to App Store Connect, the answer packed as .p12 in the
+  Keychain). App Groups themselves are created once at developer.apple.com;
+  Nyxian says which profile lacks one.
+- App Icon (Assets.car): the App Store wants the icon in an asset catalog,
+  which only Apple's actool writes. Nyxian sends the project's
+  Config/AppIcon.png to the new "iOS Asset Catalog" workflow
+  (ios-assets.yml, on a Mac), keeps the answer in Config/AssetCatalog, and
+  Export puts Assets.car, the AppIcon PNGs and CFBundleIconName in the app.
+  The GitHub token needs "Contents: Read and write" too.
+
 ## 2.5.0 — 2026-11-22
 
 - Settings › App Store Connect: upload your apps to App Store Connect from

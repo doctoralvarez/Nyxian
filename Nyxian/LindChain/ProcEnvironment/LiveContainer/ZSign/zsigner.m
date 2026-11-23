@@ -1,3 +1,8 @@
+/*
+ Fork doctoralvarez/Nyxian — version 1.0.0
+ Changelog:
+  - 1.0.0 (2026-11-22): App Store signing (signAppStoreWithAppPath, makeCSRWithCommonName, makeP12WithCertificate).
+*/
 //
 //  zsigner.m
 //  LiveContainer
@@ -36,6 +41,22 @@ NSProgress* currentZSignProgress;
 
 + (int)checkCertWithProv:(NSData *)prov key:(NSData *)key pass:(NSString *)pass completionHandler:(void(^)(int status, NSString *error))completionHandler {
     return checkCert(prov, key, pass, completionHandler);
+}
+
++ (NSProgress*)signAppStoreWithAppPath:(NSString *)appPath profiles:(NSDictionary<NSString *, NSData *> *)profiles key:(NSData *)key pass:(NSString *)pass completionHandler:(void (^)(BOOL success, NSError *error))completionHandler {
+    NSProgress* ans = [NSProgress progressWithTotalUnitCount:1000];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        zsignAppStore(appPath, profiles, key, pass, ans, completionHandler);
+    });
+    return ans;
+}
+
++ (NSDictionary *)makeCSRWithCommonName:(NSString *)commonName {
+    return zsignMakeCSR(commonName);
+}
+
++ (NSData *)makeP12WithCertificate:(NSData *)certificateDER privateKey:(NSData *)privateKeyPEM password:(NSString *)password name:(NSString *)name {
+    return zsignMakeP12(certificateDER, privateKeyPEM, password, name);
 }
 @end
 

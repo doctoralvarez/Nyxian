@@ -21,8 +21,13 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.17.0
+ Fork doctoralvarez/Nyxian — version 1.18.0
  Changelog:
+  - 1.18.0 (2026-11-22): Export puts the project's compiled asset catalog into
+    the app (Config/AssetCatalog: Assets.car + AppIcon PNGs + CFBundleIcons with
+    CFBundleIconName, from Apple's actool on a Mac, see ForkAssetCatalog) when
+    it was made from the current Config/AppIcon.png; the App Store asks for the
+    icon in an asset catalog. Otherwise the Issue Navigator says so.
   - 1.17.0 (2026-11-22): Export writes Metadata.appintents (extract.actionsdata +
     version.json) into the app and each embedded extension, as Xcode's
     appintentsmetadataprocessor does, from the App Intents in the project's
@@ -500,6 +505,10 @@ final class NXBuilder: NSObject {
                         if !ZSigner.adhocSignMachO(atPath: self.project.machoURL.path, bundleId: bundleID, entitlementData: xml) {
                             throw NSError(domain: "com.cr4zy.nyxian.builder.export", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not write the app's entitlements (Config/AppEntitlements.plist) into the app"])
                         }
+                    }
+                    /* fork 1.18: the icon compiled by actool (App Store) */
+                    for note in ForkAssetCatalog.install(project: self.project, bundleURL: self.project.bundleURL) {
+                        self.database.addMessage(message: note, severity: note.hasPrefix("App icon: not") ? .warning : .note)
                     }
                     /* fork 1.15: its widget extensions, in PlugIns */
                     try self.forkEmbedExtensions()
@@ -2063,5 +2072,58 @@ enum ForkAppIntentsMetadata {
             notes.append("App Intents: \(missing.joined(separator: ", ")) not found by that name in the binary; their buttons may not respond")
         }
         return notes
+    }
+}
+
+// MARK: - fork 1.18: compiled asset catalog (Assets.car) in the exported app
+
+/// The App Store wants the app icon inside an asset catalog (Assets.car +
+/// CFBundleIconName), which only Apple's actool writes, on a Mac. Settings ›
+/// App Store Connect › App Icon sends Config/AppIcon.png to the "iOS Asset
+/// Catalog" workflow and keeps its answer in Config/AssetCatalog; Export copies
+/// it into the app while it matches the current icon.
+enum ForkAssetCatalog {
+    static func folder(_ projectURL: URL) -> URL { projectURL.appendingPathComponent("Config/AssetCatalog", isDirectory: true) }
+    static func iconURL(_ projectURL: URL) -> URL { projectURL.appendingPathComponent("Config/AppIcon.png") }
+
+    static func sha256(of url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// True when Config/AssetCatalog was compiled from the current Config/AppIcon.png
+    static func isCurrent(_ projectURL: URL) -> Bool {
+        let dir = folder(projectURL)
+        guard let hash = sha256(of: iconURL(projectURL)),
+              let saved = try? String(contentsOf: dir.appendingPathComponent("source.sha256"), encoding: .utf8),
+              FileManager.default.fileExists(atPath: dir.appendingPathComponent("Assets.car").path) else { return false }
+        return saved.trimmingCharacters(in: .whitespacesAndNewlines) == hash
+    }
+
+    static func install(project: NXProject, bundleURL: URL) -> [String] {
+        let projectURL = project.url as URL
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: iconURL(projectURL).path) else { return [] }
+        guard isCurrent(projectURL) else {
+            return ["App icon: not in an asset catalog yet (the App Store asks for one): Settings › App Store Connect › App Icon compiles it."]
+        }
+        let dir = folder(projectURL)
+        let items = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        for item in items where item.lastPathComponent == "Assets.car" || (item.pathExtension == "png" && item.lastPathComponent.hasPrefix("AppIcon")) {
+            let target = bundleURL.appendingPathComponent(item.lastPathComponent)
+            try? fm.removeItem(at: target)
+            try? fm.copyItem(at: item, to: target)
+        }
+        let infoURL = bundleURL.appendingPathComponent("Info.plist")
+        if let partialData = try? Data(contentsOf: dir.appendingPathComponent("partial.plist")),
+           let partial = (try? PropertyListSerialization.propertyList(from: partialData, format: nil)) as? [String: Any],
+           let infoData = try? Data(contentsOf: infoURL),
+           var info = (try? PropertyListSerialization.propertyList(from: infoData, format: nil)) as? [String: Any] {
+            for (key, value) in partial { info[key] = value }
+            if let out = try? PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0) {
+                try? out.write(to: infoURL, options: .atomic)
+            }
+        }
+        return ["App icon: Assets.car from Config/AssetCatalog (compiled by actool)"]
     }
 }
