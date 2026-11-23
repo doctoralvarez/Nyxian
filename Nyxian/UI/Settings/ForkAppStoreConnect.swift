@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.2.0
+ Fork doctoralvarez/Nyxian — version 1.3.0
  Changelog:
+  - 1.3.0 (2026-11-22): iCloud and Push Notifications through your Apple
+    Developer account, only for the app and widgets that ask for them (Export ›
+    Capabilities of each project): Nyxian turns ICLOUD / PUSH_NOTIFICATIONS on
+    for their bundle IDs (and App Groups), before the App Store profiles are
+    made and before Xcode on Mac signs. iCloud containers cannot be made with
+    the API: Nyxian says which one to create and assign, once.
   - 1.2.0 (2026-11-22): "Xcode on Mac (recommended)": Preflight of each app
     project (ForkAppStorePreflight.swift) with fixes, then the projects go to
     Xcode on your Mac (GitHub's when it is off), which builds, signs and
@@ -350,6 +356,15 @@ enum ForkASCPipeline {
                               extensions: exts)
     }
 
+    /// Payload/<App>.app or its PlugIns/<X>.appex with this bundle ID
+    static func bundleURL(_ info: ForkASCIPAInfo, identifier: String) -> URL? {
+        if identifier == info.bundleID { return info.appFolder }
+        let plugIns = info.appFolder.appendingPathComponent("PlugIns")
+        return ((try? FileManager.default.contentsOfDirectory(at: plugIns, includingPropertiesForKeys: nil)) ?? []).first {
+            ForkPreflight.readPlist($0.appendingPathComponent("Info.plist"))["CFBundleIdentifier"] as? String == identifier
+        }
+    }
+
     /// Every bundle ID to sign: the app first, then its extensions
     static func bundleIDs(_ info: ForkASCIPAInfo) -> [String] { [info.bundleID] + info.extensions }
 
@@ -599,6 +614,97 @@ enum ForkASCProvisioning {
         ])
     }
 
+    /// What a bundle asks for in its entitlements: iCloud, Push Notifications, App Groups
+    struct Requested {
+        var iCloud = false
+        var containers: [String] = []
+        var push = false
+        var groups: [String] = []
+        var names: [String] {
+            (iCloud ? ["iCloud"] : []) + (push ? ["Push Notifications"] : []) + (groups.isEmpty ? [] : ["App Groups"])
+        }
+    }
+
+    static func requested(_ entitlements: [String: Any]) -> Requested {
+        var r = Requested()
+        r.containers = entitlements["com.apple.developer.icloud-container-identifiers"] as? [String] ?? []
+        r.iCloud = !r.containers.isEmpty || entitlements["com.apple.developer.icloud-services"] != nil || entitlements["com.apple.developer.ubiquity-kvstore-identifier"] != nil
+        r.push = entitlements["aps-environment"] != nil
+        r.groups = entitlements["com.apple.security.application-groups"] as? [String] ?? []
+        return r
+    }
+
+    /// Turns on, at Apple, only what this bundle asks for (already on: fine)
+    static func enableRequested(_ bundleResourceID: String, _ r: Requested) async -> [String] {
+        var notes: [String] = []
+        func enable(_ type: String, settings: [[String: Any]]? = nil) async {
+            var attributes: [String: Any] = ["capabilityType": type]
+            if let settings { attributes["settings"] = settings }
+            do {
+                _ = try await ForkASCAPI.request("POST", "/v1/bundleIdCapabilities", body: [
+                    "data": [
+                        "type": "bundleIdCapabilities",
+                        "attributes": attributes,
+                        "relationships": ["bundleId": ["data": ["type": "bundleIds", "id": bundleResourceID]]]
+                    ]
+                ])
+            } catch {
+                let text = error.localizedDescription
+                /* "already enabled" comes back as a conflict: that is what we want */
+                if !text.contains("409") && !text.localizedCaseInsensitiveContains("already") {
+                    notes.append("\(type): \(text)")
+                }
+            }
+        }
+        if !r.groups.isEmpty { await enable("APP_GROUPS") }
+        if r.iCloud { await enable("ICLOUD", settings: [["key": "ICLOUD_VERSION", "options": [["key": "XCODE_6"]]]]) }
+        if r.push { await enable("PUSH_NOTIFICATIONS") }
+        return notes
+    }
+
+    /// What the profile lacks of what the bundle asks for, said the way to fix it
+    static func missingInProfile(_ identifier: String, _ r: Requested, profile: Data) -> [String] {
+        let ent = (ForkASCProfile.plist(from: profile)?["Entitlements"] as? [String: Any]) ?? [:]
+        var notes: [String] = []
+        if r.push && ent["aps-environment"] == nil {
+            notes.append("\(identifier): the profile has no Push Notifications yet; tap Upload again in a minute (Apple turns it on for the App ID first).")
+        }
+        if r.iCloud {
+            let have = ent["com.apple.developer.icloud-container-identifiers"] as? [String] ?? []
+            let missing = r.containers.filter { !have.contains($0) }
+            if !missing.isEmpty {
+                notes.append("\(identifier): iCloud is on, but the container \(missing.joined(separator: ", ")) is not assigned. The API cannot make containers: at developer.apple.com › Identifiers › iCloud Containers create it (once), then \(identifier) › iCloud › Configure › tick it; Upload again.")
+            }
+        }
+        return notes
+    }
+
+    /// Bundle IDs registered and their capabilities on, for Xcode on Mac (Xcode then makes the profiles)
+    static func prepareForXcode(app: NXProject, appEntitlements: [String: Any], extensions: [(id: String, name: String, entitlements: [String: Any])],
+                                progress: @escaping (String) -> Void) async -> [String] {
+        var notes: [String] = []
+        let appID = app.projectConfig.bundleid ?? ""
+        let appName = app.projectConfig.displayName ?? appID
+        var all: [(id: String, name: String, entitlements: [String: Any])] = [(appID, appName, appEntitlements)]
+        all += extensions
+        for b in all {
+            let r = requested(b.entitlements)
+            if r.names.isEmpty { continue }
+            progress("Turning on \(r.names.joined(separator: ", ")) for \(b.id)…")
+            do {
+                let resource = try await bundleIDResource(b.id, name: b.name)
+                notes += await enableRequested(resource, r)
+                notes.append("\(b.id): \(r.names.joined(separator: ", ")) on at Apple.")
+                if r.iCloud && !r.containers.isEmpty {
+                    notes.append("\(b.id): iCloud container \(r.containers.joined(separator: ", ")) — if it does not exist yet, create it at developer.apple.com › Identifiers › iCloud Containers (the API cannot); Xcode assigns it.")
+                }
+            } catch {
+                notes.append("\(b.id): \(error.localizedDescription)")
+            }
+        }
+        return notes
+    }
+
     /// A fresh App Store profile for the bundle ID with the certificate (replaces the one Nyxian made before)
     static func profile(identifier: String, bundleResourceID: String, certificateID: String) async throws -> Data {
         let name = "App Store \(identifier)"
@@ -647,9 +753,22 @@ enum ForkASCProvisioning {
             let label = identifier == info.bundleID ? info.name : "\(info.name) \(identifier.components(separatedBy: ".").last ?? "")"
             let resource = try await bundleIDResource(identifier, name: label)
             if !groups.isEmpty { await enableAppGroups(resource) }
+            /* 1.3.0: iCloud and Push only for the bundles whose signature asks for them */
+            var asked = Requested()
+            if let bundle = ForkASCPipeline.bundleURL(info, identifier: identifier),
+               let exe = ForkPreflight.readPlist(bundle.appendingPathComponent("Info.plist"))["CFBundleExecutable"] as? String,
+               let mach = ForkMachO(url: bundle.appendingPathComponent(exe)) {
+                asked = requested(mach.entitlements)
+                asked.groups = []
+                if !asked.names.isEmpty {
+                    progress("Turning on \(asked.names.joined(separator: ", ")) for \(identifier)…")
+                    notes += await enableRequested(resource, asked)
+                }
+            }
             progress("App Store profile for \(identifier)…")
             let data = try await profile(identifier: identifier, bundleResourceID: resource, certificateID: certID)
             profiles[identifier] = data
+            notes += missingInProfile(identifier, asked, profile: data)
             let ent = (ForkASCProfile.plist(from: data)?["Entitlements"] as? [String: Any]) ?? [:]
             let inProfile = ent["com.apple.security.application-groups"] as? [String] ?? []
             let missing = groups.filter { !inProfile.contains($0) }

@@ -21,8 +21,14 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.0.0
+ Fork doctoralvarez/Nyxian — version 1.1.0
  Changelog:
+  - 1.1.0 (2026-11-22): iCloud and Push Notifications only where asked for:
+    Preflight lists what each project (app or widget) asks for in Export ›
+    Capabilities and whether its App ID has it at Apple; Xcode on Mac turns
+    those on for exactly those bundle IDs before Xcode signs. A widget's iCloud
+    uses its app's container. The entitlements of an .ipa are read from each
+    bundle's signature.
   - 1.0.0 (2026-11-22): App Store preflight and "Xcode on Mac".
     Preflight looks at what would go to App Store Connect, before a build
     number is spent: for a project (the app and the extensions its Export
@@ -329,6 +335,27 @@ enum ForkPreflight {
             }
         }
 
+        // iCloud, Push Notifications: only where Export › Capabilities asks for them
+        for project in [app] + extensions {
+            let isApp = project === app
+            let label = isApp ? name : (project.projectConfig.displayName ?? (project.url as URL).lastPathComponent)
+            let id = isApp ? bundleID : "\(bundleID).\(ForkEmbeddedExtensions.suffix(of: project))"
+            let asked = ForkASCProvisioning.requested(ForkAppEntitlements.read(project))
+            let names = (asked.iCloud ? ["iCloud"] : []) + (asked.push ? ["Push Notifications"] : [])
+            guard !names.isEmpty else { continue }
+            var atApple = "Xcode on Mac turns it on for \(id) before signing."
+            if ForkASCAccount.isConfigured, let have = try? await ForkPreflight.capabilities(of: id) {
+                let missing = (asked.iCloud && !have.contains("ICLOUD") ? ["iCloud"] : []) + (asked.push && !have.contains("PUSH_NOTIFICATIONS") ? ["Push Notifications"] : [])
+                atApple = missing.isEmpty ? "On for \(id) at Apple." : "Not on yet for \(id) at Apple (\(missing.joined(separator: ", "))): Xcode on Mac and the .ipa upload turn it on."
+            }
+            var detail = "Asked for in Export › Capabilities of \(label). \(atApple)"
+            if asked.iCloud {
+                detail += " iCloud container: \(isApp ? asked.containers.joined(separator: ", ") : "the app's") — create it once at developer.apple.com › Identifiers › iCloud Containers if it is new (the API cannot)."
+            }
+            if asked.push { detail += " Your server still needs an APNs key (developer.apple.com › Keys) to send notifications." }
+            out.append(.init(level: .info, code: nil, title: "\(label): \(names.joined(separator: " and "))", detail: detail))
+        }
+
         // extensions
         for ext in extensions {
             let extName = ext.projectConfig.displayName ?? (ext.url as URL).lastPathComponent
@@ -445,6 +472,19 @@ enum ForkPreflight {
         return out.sorted { $0.level.rawValue < $1.level.rawValue }
     }
 
+    /// The capabilities on for a bundle ID at Apple (ICLOUD, PUSH_NOTIFICATIONS, APP_GROUPS…); nil when it is not registered
+    static func capabilities(of identifier: String) async throws -> Set<String>? {
+        let q = identifier.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? identifier
+        let json = try await ForkASCAPI.request("GET", "/v1/bundleIds?filter[identifier]=\(q)&include=bundleIdCapabilities&fields[bundleIds]=identifier&fields[bundleIdCapabilities]=capabilityType&limit=10")
+        guard let item = (json["data"] as? [[String: Any]])?.first(where: { (($0["attributes"] as? [String: Any])?["identifier"] as? String) == identifier }) else { return nil }
+        let ids = Set(((item["relationships"] as? [String: Any])?["bundleIdCapabilities"] as? [String: Any])?["data"] as? [[String: Any]] ?? [] ).compactMap { $0["id"] as? String }
+        var out = Set<String>()
+        for inc in json["included"] as? [[String: Any]] ?? [] where ids.contains(inc["id"] as? String ?? "") {
+            if let t = (inc["attributes"] as? [String: Any])?["capabilityType"] as? String { out.insert(t) }
+        }
+        return out
+    }
+
     // MARK: fixes
 
     static func apply(_ fix: ForkPreflightFix) throws {
@@ -492,6 +532,8 @@ struct ForkMachO {
     let architectures: [String]
     let sdk: String?
     let dylibs: [String]
+    /// The entitlements signed into it (the 0xFADE7171 blob of its code signature)
+    let entitlements: [String: Any]
     private let data: Data
 
     init?(url: URL) {
@@ -523,6 +565,7 @@ struct ForkMachO {
         var offset = start + 32
         var libs: [String] = []
         var sdkText: String?
+        var signature: (Int, Int)?
         for _ in 0..<min(ncmds, 512) {
             let cmd = u32(offset), size = Int(u32(offset + 4))
             guard size > 0, offset + size <= data.count else { break }
@@ -535,6 +578,8 @@ struct ForkMachO {
             } else if cmd == 0x32 {   // LC_BUILD_VERSION
                 let v = u32(offset + 16)
                 sdkText = "\(v >> 16).\((v >> 8) & 0xFF)"
+            } else if cmd == 0x1D {   // LC_CODE_SIGNATURE
+                signature = (start + Int(u32(offset + 8)), Int(u32(offset + 12)))
             } else if cmd == 0x25 && sdkText == nil {   // LC_VERSION_MIN_IPHONEOS
                 let v = u32(offset + 12)
                 sdkText = "\(v >> 16).\((v >> 8) & 0xFF)"
@@ -543,6 +588,23 @@ struct ForkMachO {
         }
         dylibs = libs
         sdk = sdkText
+        var ents: [String: Any] = [:]
+        if let sig = signature, sig.0 + 12 <= data.count, u32(sig.0, big: true) == 0xFADE0CC0 {
+            let (sigStart, sigSize) = sig
+            let count = Int(u32(sigStart + 8, big: true))
+            for i in 0..<min(count, 32) {
+                let entry = sigStart + 12 + i * 8
+                let blob = sigStart + Int(u32(entry + 4, big: true))
+                guard blob + 8 <= min(data.count, sigStart + sigSize), u32(blob, big: true) == 0xFADE7171 else { continue }
+                let length = Int(u32(blob + 4, big: true))
+                guard length > 8, blob + length <= data.count else { continue }
+                if let p = (try? PropertyListSerialization.propertyList(from: data.subdata(in: blob + 8..<blob + length), format: nil)) as? [String: Any] {
+                    ents = p
+                }
+                break
+            }
+        }
+        entitlements = ents
     }
 
     func contains(_ text: String) -> Bool { data.range(of: Data(text.utf8)) != nil }
@@ -703,11 +765,24 @@ enum ForkXcodeOnMac {
             entry["point"] = ForkEmbeddedExtensions.extensionPoint(of: ext) ?? ForkEmbeddedExtensions.widgetPoint
             /* an extension shares the app's App Groups, as Export gives them */
             var ent = entry["entitlements"] as? [String: Any] ?? [:]
-            if let groups = (appEntry["entitlements"] as? [String: Any])?["com.apple.security.application-groups"] {
+            let appEnt = appEntry["entitlements"] as? [String: Any] ?? [:]
+            if let groups = appEnt["com.apple.security.application-groups"] {
                 ent["com.apple.security.application-groups"] = groups
+            }
+            /* 1.1.0: a widget's iCloud is its app's container (iCloud.<app ID>), not one of its own */
+            if ent["com.apple.developer.icloud-container-identifiers"] != nil {
+                let containers = appEnt["com.apple.developer.icloud-container-identifiers"] as? [String] ?? ["iCloud.\(app.projectConfig.bundleid ?? "")"]
+                ent["com.apple.developer.icloud-container-identifiers"] = containers
+                if ent["com.apple.developer.ubiquity-container-identifiers"] != nil { ent["com.apple.developer.ubiquity-container-identifiers"] = containers }
             }
             entry["entitlements"] = ent
             extensions.append(entry)
+        }
+        /* 1.1.0: iCloud, Push and App Groups on at Apple, only for the bundles that ask for them */
+        var notes: [String] = []
+        if mode == .upload && ForkASCAccount.isConfigured {
+            let exts = extensions.map { (id: $0["bundleID"] as? String ?? "", name: $0["name"] as? String ?? "", entitlements: $0["entitlements"] as? [String: Any] ?? [:]) }
+            notes = await ForkASCProvisioning.prepareForXcode(app: app, appEntitlements: appEntry["entitlements"] as? [String: Any] ?? [:], extensions: exts, progress: progress)
         }
         let manifest: [String: Any] = ["format": 1, "teamID": teamID, "app": appEntry, "extensions": extensions]
         guard JSONSerialization.isValidJSONObject(manifest) else { throw ForkASCError.message("The project's settings could not be written as JSON.") }
@@ -760,7 +835,7 @@ enum ForkXcodeOnMac {
             return Result(ok: result["ok"] as? Bool ?? false,
                           stage: result["stage"] as? String ?? "",
                           xcode: result["xcode"] as? String ?? "",
-                          issues: result["issues"] as? [String] ?? [],
+                          issues: notes + (result["issues"] as? [String] ?? []),
                           log: logURL)
         }
         throw ForkASCError.message("No answer from the Mac in 75 minutes: see the App Store (Xcode) workflow on GitHub.")

@@ -4,6 +4,20 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.7.1 — 2026-11-22
+
+- iCloud and Push Notifications through your Apple Developer account, only
+  for the apps and widgets that ask for them. Export › Capabilities has Push
+  Notifications now (aps-environment), next to iCloud and App Groups, in each
+  project (a widget in its own). Settings › App Store Connect then turns on
+  ICLOUD / PUSH_NOTIFICATIONS (and App Groups) for exactly those bundle IDs at
+  Apple: before Xcode on Mac signs, and before the .ipa upload makes its App
+  Store profiles (there it reads what each bundle's signature asks for).
+  A widget's iCloud uses its app's container. The API cannot create iCloud
+  containers: Nyxian says which one to create and assign once at
+  developer.apple.com. Preflight lists, per app and widget, what it asks for
+  and whether its App ID already has it.
+
 ## 2.7.0 — 2026-11-22
 
 - Settings › App Store Connect › **Xcode on Mac (recommended)**: tap an app,
