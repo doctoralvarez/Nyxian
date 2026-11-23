@@ -484,7 +484,8 @@ enum ForkPreflight {
         let q = identifier.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? identifier
         let json = try await ForkASCAPI.request("GET", "/v1/bundleIds?filter[identifier]=\(q)&include=bundleIdCapabilities&fields[bundleIds]=identifier&fields[bundleIdCapabilities]=capabilityType&limit=10")
         guard let item = (json["data"] as? [[String: Any]])?.first(where: { (($0["attributes"] as? [String: Any])?["identifier"] as? String) == identifier }) else { return nil }
-        let ids = Set(((item["relationships"] as? [String: Any])?["bundleIdCapabilities"] as? [String: Any])?["data"] as? [[String: Any]] ?? [] ).compactMap { $0["id"] as? String }
+        let related = (((item["relationships"] as? [String: Any])?["bundleIdCapabilities"] as? [String: Any])?["data"] as? [[String: Any]]) ?? []
+        let ids = Set(related.compactMap { $0["id"] as? String })
         var out = Set<String>()
         for inc in json["included"] as? [[String: Any]] ?? [] where ids.contains(inc["id"] as? String ?? "") {
             if let t = (inc["attributes"] as? [String: Any])?["capabilityType"] as? String { out.insert(t) }
