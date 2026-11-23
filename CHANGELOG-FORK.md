@@ -4,6 +4,16 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## Tools — App Store (Xcode) workflow 1.2.0 (2026-11-23)
+
+- Fixed "exportArchive: The archive contains nothing that can be signed":
+  no Swift file was compiled, because the Xcode project's source paths started
+  with "../" and the rule leaving hidden files out ("**/.*") matched "..". The
+  Xcode project is now made inside the request folder (make_project.py 1.1.0),
+  and the archive step stops with a plain error when the archive has no
+  executable, instead of "ARCHIVE SUCCEEDED" on an empty app. No Nyxian
+  update needed.
+
 ## 2.7.7 — 2026-11-23
 
 - Xcode on Mac: Settings › App Store Connect scrolls down to Last Upload when

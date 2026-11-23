@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
-# fork doctoralvarez/Nyxian — version 1.0.0
+# fork doctoralvarez/Nyxian — version 1.1.0
 # Changelog:
+#  - 1.1.0 (2026-11-23): the archive had no executable ("The archive contains
+#    nothing that can be signed"): the source paths started with "../" and the
+#    exclusion of hidden files ("**/.*") also matched "..", so no Swift file was
+#    compiled. The Xcode project is now written next to the projects (paths
+#    without ".."), and only named hidden files are left out.
 #  - 1.0.0 (2026-11-22): turns the Nyxian projects that Settings › App Store
 #    Connect › Xcode on Mac sends (an app and the extensions its Export embeds,
 #    plus manifest.json) into an XcodeGen spec, so Apple's Xcode builds, signs
@@ -130,12 +135,13 @@ def target_sources(folder, rel):
     """the sources of a Nyxian project, and its Resources copied into the bundle like Nyxian does"""
     sources = [{
         "path": rel,
-        "excludes": ["Config/**", "Resources/**", "**/.*", "**/*.xcodeproj/**", "**/Info.plist", "**/*.entitlements"],
+        "excludes": ["Config/**", "Resources/**", ".nyxian/**", "**/.DS_Store", "**/.git/**", "**/*.xcodeproj/**",
+                     "**/Info.plist", "**/*.entitlements"],
     }]
     res = os.path.join(folder, "Resources")
     if os.path.isdir(res) and any(not n.startswith(".") for n in os.listdir(res)):
         sources.append({"path": os.path.join(rel, "Resources"), "buildPhase": "resources",
-                        "excludes": ["**/.*", "Info.plist", "*.car"]})
+                        "excludes": ["**/.DS_Store", "Info.plist", "*.car"]})
     return sources
 
 
@@ -146,6 +152,9 @@ def write_plist(path, value):
 
 def main():
     request, out = sys.argv[1], sys.argv[2]
+    # 1.1.0: no "../" in the source paths (see the changelog)
+    if os.path.relpath(request, out).startswith(".."):
+        sys.exit("make_project.py: the output folder has to be the request folder or inside it")
     with open(os.path.join(request, "manifest.json")) as f:
         m = json.load(f)
     os.makedirs(out, exist_ok=True)

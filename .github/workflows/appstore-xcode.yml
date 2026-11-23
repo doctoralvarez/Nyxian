@@ -1,5 +1,9 @@
-# fork doctoralvarez/Nyxian — version 1.1.0
+# fork doctoralvarez/Nyxian — version 1.2.0
 # Changelog:
+#  - 1.2.0 (2026-11-23): the Xcode project is made inside the request folder
+#    (make_project.py 1.1.0: no "../" paths, which had left every source out),
+#    and the archive step fails with a plain message when the archive has no
+#    executable instead of passing empty ("nothing that can be signed").
 #  - 1.1.0 (2026-11-23): the result carries Xcode's own lines on how it went
 #    (** ARCHIVE SUCCEEDED **, ** EXPORT FAILED **, Upload succeeded…) as
 #    "summary", shown in Nyxian's Last Upload.
@@ -132,7 +136,7 @@ jobs:
         run: |
           WORK="$RUNNER_TEMP/appstore-$REQUEST"
           echo "WORK=$WORK" >> "$GITHUB_ENV"
-          rm -rf "$WORK"; mkdir -p "$WORK/request" "$WORK/xcode" "$WORK/out"
+          rm -rf "$WORK"; mkdir -p "$WORK/request" "$WORK/out"
           case "$REQUEST" in selftest-*)
             mkdir -p "$WORK/request/ProbeApp/Config" "$WORK/request/ProbeWidget/Config"
             cp nyxian/tools/fork/widget-probe/App/*.swift "$WORK/request/ProbeApp/"
@@ -153,8 +157,8 @@ jobs:
           set -o pipefail
           printf '{"ok":false,"stage":"project"}' > "$WORK/out/result.json"
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen >/dev/null 2>&1
-          python3 nyxian/tools/fork/appstore/make_project.py "$WORK/request" "$WORK/xcode" > "$WORK/scheme.txt" 2> "$WORK/out/log.txt"
-          (cd "$WORK/xcode" && xcodegen generate --spec project.yml) >> "$WORK/out/log.txt" 2>&1
+          python3 nyxian/tools/fork/appstore/make_project.py "$WORK/request" "$WORK/request" > "$WORK/scheme.txt" 2> "$WORK/out/log.txt"
+          (cd "$WORK/request" && xcodegen generate --spec project.yml) >> "$WORK/out/log.txt" 2>&1
           echo "Xcode project ready"
 
       - name: Archive
@@ -165,7 +169,7 @@ jobs:
         run: |
           printf '{"ok":false,"stage":"archive"}' > "$WORK/out/result.json"
           SCHEME=$(cat "$WORK/scheme.txt")
-          cd "$WORK/xcode"
+          cd "$WORK/request"
           xcodebuild -version > "$WORK/out/xcode-version.txt"
           ARGS=(-project "$SCHEME.xcodeproj" -scheme "$SCHEME" -configuration Release -destination "generic/platform=iOS" -archivePath "$WORK/App.xcarchive")
           if [ "$MODE" = "check" ]; then
@@ -180,6 +184,14 @@ jobs:
               -authenticationKeyPath "$WORK/key/AuthKey_$ASC_KEY_ID.p8" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
               >> "$WORK/out/log.txt" 2>&1
           fi
+          # the archive has to hold the app's executable, or there is nothing to sign
+          APP=$(ls -d "$WORK/App.xcarchive/Products/Applications/"*.app 2>/dev/null | head -1)
+          EXE=$( [ -n "$APP" ] && /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist" 2>/dev/null )
+          if [ -z "$APP" ] || [ -z "$EXE" ] || [ ! -f "$APP/$EXE" ]; then
+            echo "error: the archive has no executable: no Swift file was compiled. Check that the project's .swift files are outside Config/ and Resources/." >> "$WORK/out/log.txt"
+            exit 1
+          fi
+          echo "SWIFT_FILES=$(grep -c '^SwiftCompile\|^CompileSwift' "$WORK/out/log.txt" || true)" >> "$GITHUB_ENV"
           echo "Archived"
 
       - name: Upload to App Store Connect
@@ -190,7 +202,7 @@ jobs:
         run: |
           printf '{"ok":false,"stage":"upload"}' > "$WORK/out/result.json"
           xcodebuild -exportArchive -archivePath "$WORK/App.xcarchive" -exportPath "$WORK/export" \
-            -exportOptionsPlist "$WORK/xcode/ExportOptions-upload.plist" -allowProvisioningUpdates \
+            -exportOptionsPlist "$WORK/request/ExportOptions-upload.plist" -allowProvisioningUpdates \
             -authenticationKeyPath "$WORK/key/AuthKey_$ASC_KEY_ID.p8" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             >> "$WORK/out/log.txt" 2>&1
           echo "Uploaded"
@@ -219,7 +231,7 @@ jobs:
           except Exception:
               pass
           request = os.path.join(work, "request")
-          for root in (os.path.join(work, "request"), os.path.join(work, "xcode")):
+          for root in (os.path.join(work, "request"),):
               log = log.replace(root + "/", "")
           issues = []
           for line in log.splitlines():
@@ -243,7 +255,7 @@ jobs:
           open(os.path.join(out, "log.txt"), "w").write(log)
           PY
           case "$REQUEST" in selftest-*)
-            cat "$WORK/out/result.json"; tail -n 80 "$WORK/out/log.txt"; exit 0 ;;
+            cat "$WORK/out/result.json"; echo "Swift compile steps: $SWIFT_FILES"; grep -E '^(SwiftCompile|CompileSwift|Ld )' "$WORK/out/log.txt" | cut -c1-160 | head -20; tail -n 30 "$WORK/out/log.txt"; exit 0 ;;
           esac
           gh release view "$RELEASE" -R "$SDK_REPO" >/dev/null 2>&1 || \
             gh release create "$RELEASE" -R "$SDK_REPO" --prerelease --title "App Store requests" \
