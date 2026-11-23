@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.3.0
+ Fork doctoralvarez/Nyxian — version 1.4.0
  Changelog:
+  - 1.4.0 (2026-11-23): an app asking for iCloud gets a ⓘ in Preflight that
+    copies its container's name (iCloud.<bundle id>) and opens
+    developer.apple.com › Identifiers › iCloud Containers, where + makes it
+    (Apple's API cannot); Xcode on Mac then assigns it to the App ID.
   - 1.3.0 (2026-11-23): your rule for all your apps: export compliance is
     declared ITSAppUsesNonExemptEncryption = NO (Info-extra.plist) wherever an
     app project lacks it (a YES you wrote stays). TestFlight: after Xcode on
@@ -89,6 +93,8 @@ enum ForkPreflightFix {
     case build(project: URL, value: String)
     /// registers the bundle ID, copies it and opens App Store Connect › Apps (the record itself is made there)
     case appRecord(bundleID: String, name: String)
+    /// copies the iCloud container's name and opens developer.apple.com › iCloud Containers
+    case iCloudContainer(ids: [String])
 
     var label: String {
         switch self {
@@ -97,6 +103,7 @@ enum ForkPreflightFix {
         case .privacyManifest: return "Add to PrivacyInfo.xcprivacy"
         case .build(_, let value): return "Set the build to \(value)"
         case .appRecord: return "Register the bundle ID, copy it and open App Store Connect › Apps"
+        case .iCloudContainer: return "Copy the container's name and open iCloud Containers at developer.apple.com"
         }
     }
 }
@@ -386,7 +393,8 @@ enum ForkPreflight {
                 detail += " iCloud container: \(isApp ? asked.containers.joined(separator: ", ") : "the app's") — create it once at developer.apple.com › Identifiers › iCloud Containers if it is new (the API cannot)."
             }
             if asked.push { detail += " Your server still needs an APNs key (developer.apple.com › Keys) to send notifications." }
-            out.append(.init(level: .info, code: nil, title: "\(label): \(names.joined(separator: " and "))", detail: detail))
+            out.append(.init(level: .info, code: nil, title: "\(label): \(names.joined(separator: " and "))", detail: detail,
+                             fix: asked.iCloud && isApp && !asked.containers.isEmpty ? .iCloudContainer(ids: asked.containers) : nil))
         }
 
         // extensions
@@ -560,8 +568,8 @@ enum ForkPreflight {
             if plist["NSPrivacyTrackingDomains"] == nil { plist["NSPrivacyTrackingDomains"] = [String]() }
             if plist["NSPrivacyCollectedDataTypes"] == nil { plist["NSPrivacyCollectedDataTypes"] = [[String: Any]]() }
             try writePlist(plist, to: url)
-        case .appRecord:
-            break   // async: ForkPreflightViewController does it
+        case .appRecord, .iCloudContainer:
+            break   // ForkPreflightViewController does these (pasteboard, web page)
         case .build(let project, let value):
             let url = project.appendingPathComponent("Config/Project.plist")
             var plist = readPlist(url)
@@ -1063,6 +1071,19 @@ final class ForkPreflightViewController: UITableViewController {
                 done.addAction(UIAlertAction(title: "Cancel", style: .cancel))
                 self.present(done, animated: true)
             }
+            return
+        }
+        if case .iCloudContainer(let ids) = fix {
+            UIPasteboard.general.string = ids.first
+            let more = ids.count > 1 ? " (then the others: \(ids.dropFirst().joined(separator: ", ")))" : ""
+            let steps = UIAlertController(title: "iCloud container",
+                                          message: "\(ids.first ?? "") is copied\(more). At developer.apple.com › Identifiers: + › iCloud Containers › Continue › Description (any name), Identifier: paste › Continue › Register. Once per container; if it already exists, nothing to do. Xcode on Mac assigns it to the app when it signs (for an .ipa upload: Identifiers › the App ID › iCloud › Configure › tick it).",
+                                          preferredStyle: .alert)
+            steps.addAction(UIAlertAction(title: "Open iCloud Containers", style: .default) { _ in
+                if let url = URL(string: "https://developer.apple.com/account/resources/identifiers/list/cloudContainer") { UIApplication.shared.open(url) }
+            })
+            steps.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            present(steps, animated: true)
             return
         }
         if case .encryptionExempt = fix {

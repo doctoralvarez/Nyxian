@@ -4,6 +4,13 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.8.1 — 2026-11-23
+
+- Preflight: an app that asks for iCloud gets a ⓘ that copies its container's
+  name (iCloud.<bundle id>) and opens developer.apple.com › Identifiers ›
+  iCloud Containers, where + › iCloud Containers makes it (paste the name).
+  Apple's API cannot create containers; Xcode on Mac assigns it to the App ID.
+
 ## 2.8.0 — 2026-11-23
 
 - Export compliance everywhere: Settings › App Store Connect, Preflight and
