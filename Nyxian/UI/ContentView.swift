@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.51.0
+ Fork doctoralvarez/Nyxian — version 1.52.0
  Changelog:
+  - 1.52.0 (2026-11-23): projects list › hold a project › "Export .ipa": opens the
+    same Export .ipa window as the box button inside the project (checks,
+    version, extensions, Export), without opening the project first.
   - 1.51.0 (2026-11-22): Swift Playgrounds export (and the Playgrounds sync)
     takes Preflight's fixes along. Info-extra.plist goes to the package's root
     and Package.swift points to it (additionalInfoPlistContentFilePath), so its
@@ -1146,6 +1149,12 @@ import Network
                 self.forkExportZip(project)
             }
             
+            /* fork: Export .ipa, the window of the box button inside the project (checks, version, Export) */
+            let exportIPA: UIAction = UIAction(title: "Export .ipa", image: UIImage(systemName: "archivebox.fill")) { _ in
+                guard let project = self.forkProject(at: indexPath) else { return }
+                ForkExportAssistant.present(from: self, project: project)
+            }
+            
             /* fork */
             let exportSwiftPM: UIAction = UIAction(title: "Export as Swift Playgrounds App", image: UIImage(systemName: "swift")) { _ in
                 guard let project = self.forkProject(at: indexPath) else { return }
@@ -1187,7 +1196,7 @@ import Network
                 ForkFilesApp.open(project.url, from: self)
             }
             
-            return UIMenu(children: [export, exportSwiftPM, updateSwiftPM, setIcon, rename, showInFiles, item])
+            return UIMenu(children: [exportIPA, export, exportSwiftPM, updateSwiftPM, setIcon, rename, showInFiles, item])
         }
     }
     

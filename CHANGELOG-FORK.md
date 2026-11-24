@@ -4,6 +4,13 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.8.2 — 2026-11-23
+
+- Projects list › hold a project › **Export .ipa**: opens the same Export .ipa
+  window as the box button inside the project (checks, version and build,
+  extensions, Export), without opening the project first. "Export" (the
+  project as a .zip) and "Export as Swift Playgrounds App" stay as they were.
+
 ## 2.8.1 — 2026-11-23
 
 - Preflight: an app that asks for iCloud gets a ⓘ that copies its container's
