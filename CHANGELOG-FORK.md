@@ -4,6 +4,15 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.8.3 — 2026-11-23
+
+- App Store (Xcode) workflow 1.3.0: before archiving it checks the App Store
+  Connect key itself. It trims spaces and line breaks from `ASC_KEY_ID` and
+  `ASC_ISSUER_ID`, rebuilds `ASC_KEY_P8` when it was pasted on one line (the
+  GitHub app on iPhone does that), and asks App Store Connect whether the key
+  works; when it does not, Last Upload says so plainly (HTTP code and Apple's
+  reason) instead of Xcode's "Authentication failed".
+
 ## 2.8.2 — 2026-11-23
 
 - Projects list › hold a project › **Export .ipa**: opens the same Export .ipa

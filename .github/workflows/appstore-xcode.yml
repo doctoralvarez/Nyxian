@@ -1,5 +1,11 @@
-# fork doctoralvarez/Nyxian — version 1.2.0
+# fork doctoralvarez/Nyxian — version 1.3.0
 # Changelog:
+#  - 1.3.0 (2026-11-23): new step "Check the App Store Connect key" before
+#    archiving (mode upload): trims spaces / line breaks from ASC_KEY_ID and
+#    ASC_ISSUER_ID, rebuilds ASC_KEY_P8 when it was pasted on one line (as the
+#    GitHub app on iPhone tends to do), and asks App Store Connect itself
+#    whether the key works. When it does not, it stops with a plain error
+#    (shown in Last Upload) instead of Xcode's "Authentication failed".
 #  - 1.2.0 (2026-11-23): the Xcode project is made inside the request folder
 #    (make_project.py 1.1.0: no "../" paths, which had left every source out),
 #    and the archive step fails with a plain message when the archive has no
@@ -161,11 +167,64 @@ jobs:
           (cd "$WORK/request" && xcodegen generate --spec project.yml) >> "$WORK/out/log.txt" 2>&1
           echo "Xcode project ready"
 
-      - name: Archive
+      - name: Check the App Store Connect key
+        if: github.event.inputs.mode != 'check'
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          printf '{"ok":false,"stage":"key"}' > "$WORK/out/result.json"
+          KID=$(printf '%s' "$ASC_KEY_ID" | tr -d '[:space:]')
+          ISS=$(printf '%s' "$ASC_ISSUER_ID" | tr -d '[:space:]')
+          if [ -z "$KID" ] || [ -z "$ISS" ] || [ -z "$ASC_KEY_P8" ]; then
+            echo "error: Missing secrets ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8" >> "$WORK/out/log.txt"; exit 1
+          fi
+          echo "::add-mask::$KID"; echo "::add-mask::$ISS"
+          mkdir -p "$WORK/key"; chmod 700 "$WORK/key"
+          # the key's base64 body, whatever line breaks or spaces it was pasted with
+          BODY=$(printf '%s' "$ASC_KEY_P8" | tr -d '\r' | sed -e 's/-----BEGIN PRIVATE KEY-----//' -e 's/-----END PRIVATE KEY-----//' | tr -d '[:space:]')
+          { echo "-----BEGIN PRIVATE KEY-----"; printf '%s' "$BODY" | fold -w 64; echo; echo "-----END PRIVATE KEY-----"; } > "$WORK/key/AuthKey_$KID.p8"
+          echo "ASC_KID=$KID" >> "$GITHUB_ENV"
+          echo "ASC_ISS=$ISS" >> "$GITHUB_ENV"
+          if ! command -v ruby >/dev/null 2>&1; then
+            echo "warning: ruby not found on this Mac; key not checked" >> "$WORK/out/log.txt"; echo "Key not checked"; exit 0
+          fi
+          KEYFILE="$WORK/key/AuthKey_$KID.p8" KID="$KID" ISS="$ISS" ruby -ropenssl -rjson -rbase64 -rnet/http -e '
+            def b64(s) = Base64.urlsafe_encode64(s, padding: false)
+            log = ->(m) { File.open(ENV["WORK"] + "/out/log.txt", "a") { |f| f.puts m } }
+            kid = ENV["KID"]; iss = ENV["ISS"]
+            log.("Key check: Key ID #{kid.length} characters (" + (kid =~ /\A[A-Z0-9]{10}\z/ ? "ok" : "expected 10 letters/digits") + "), Issuer ID " + (iss =~ /\A\h{8}-\h{4}-\h{4}-\h{4}-\h{12}\z/ ? "ok" : "not a UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)"))
+            begin
+              key = OpenSSL::PKey.read(File.read(ENV["KEYFILE"]))
+            rescue => e
+              log.("error: App Store Connect key: ASC_KEY_P8 is not a readable .p8 key (#{e.class}). Paste the whole AuthKey_#{kid}.p8 again.")
+              exit 1
+            end
+            now = Time.now.to_i
+            input = b64({alg: "ES256", kid: kid, typ: "JWT"}.to_json) + "." + b64({iss: iss, iat: now, exp: now + 600, aud: "appstoreconnect-v1"}.to_json)
+            der = key.sign(OpenSSL::Digest::SHA256.new, input)
+            rs = OpenSSL::ASN1.decode(der).value.map { |i| i.value.to_s(2).rjust(32, "\0")[-32..] }.join
+            jwt = input + "." + b64(rs)
+            uri = URI("https://api.appstoreconnect.apple.com/v1/apps?limit=1")
+            req = Net::HTTP::Get.new(uri); req["Authorization"] = "Bearer " + jwt
+            begin
+              res = Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: 15, read_timeout: 20) { |h| h.request(req) }
+            rescue => e
+              log.("warning: could not reach App Store Connect to check the key (#{e.class}); going on")
+              exit 0
+            end
+            if res.code == "200"
+              log.("Key check: App Store Connect accepts the key (HTTP 200)")
+            else
+              detail = (JSON.parse(res.body)["errors"] || []).map { |x| x["detail"] || x["title"] }.join(" ") rescue res.body.to_s[0, 200]
+              log.("error: App Store Connect rejects the key (HTTP #{res.code}): #{detail} Check ASC_KEY_ID, ASC_ISSUER_ID (team key, not an individual key) and ASC_KEY_P8 in the repository secrets.")
+              exit 1
+            end
+          '
+          echo "Key checked"
+
+      - name: Archive
         run: |
           printf '{"ok":false,"stage":"archive"}' > "$WORK/out/result.json"
           SCHEME=$(cat "$WORK/scheme.txt")
@@ -175,13 +234,9 @@ jobs:
           if [ "$MODE" = "check" ]; then
             xcodebuild archive "${ARGS[@]}" CODE_SIGNING_ALLOWED=NO >> "$WORK/out/log.txt" 2>&1
           else
-            if [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ] || [ -z "$ASC_KEY_P8" ]; then
-              echo "Missing secrets ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8" >> "$WORK/out/log.txt"; exit 1
-            fi
-            mkdir -p "$WORK/key"; chmod 700 "$WORK/key"
-            printf '%s\n' "$ASC_KEY_P8" > "$WORK/key/AuthKey_$ASC_KEY_ID.p8"
+            # key written and checked by the previous step (ASC_KID / ASC_ISS)
             xcodebuild archive "${ARGS[@]}" -allowProvisioningUpdates \
-              -authenticationKeyPath "$WORK/key/AuthKey_$ASC_KEY_ID.p8" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+              -authenticationKeyPath "$WORK/key/AuthKey_$ASC_KID.p8" -authenticationKeyID "$ASC_KID" -authenticationKeyIssuerID "$ASC_ISS" \
               >> "$WORK/out/log.txt" 2>&1
           fi
           # the archive has to hold the app's executable, or there is nothing to sign
@@ -196,14 +251,11 @@ jobs:
 
       - name: Upload to App Store Connect
         if: github.event.inputs.mode != 'check'
-        env:
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           printf '{"ok":false,"stage":"upload"}' > "$WORK/out/result.json"
           xcodebuild -exportArchive -archivePath "$WORK/App.xcarchive" -exportPath "$WORK/export" \
             -exportOptionsPlist "$WORK/request/ExportOptions-upload.plist" -allowProvisioningUpdates \
-            -authenticationKeyPath "$WORK/key/AuthKey_$ASC_KEY_ID.p8" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            -authenticationKeyPath "$WORK/key/AuthKey_$ASC_KID.p8" -authenticationKeyID "$ASC_KID" -authenticationKeyIssuerID "$ASC_ISS" \
             >> "$WORK/out/log.txt" 2>&1
           echo "Uploaded"
 
