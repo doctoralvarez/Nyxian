@@ -21,8 +21,12 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.5.0
+ Fork doctoralvarez/Nyxian — version 1.5.1
  Changelog:
+  - 1.5.1 (2026-11-23): when Apple finishes processing the build (VALID),
+    Nyxian puts you in the TestFlight group "Yo" again if that failed right
+    after the upload (409 "Tester(s) cannot be assigned" while no build is
+    ready yet).
   - 1.5.0 (2026-11-23): opening App Store Connect declares
     ITSAppUsesNonExemptEncryption = NO in every app project that lacks it (your
     rule); after Xcode on Mac uploads, the app gets the internal TestFlight
@@ -1543,6 +1547,10 @@ class ForkAppStoreConnectViewController: UITableViewController, UIDocumentPicker
                     guard let state = try? await ForkXcodeOnMac.processingState(bundleID: fresh.projectConfig.bundleid ?? "", version: version, build: build) else { continue }
                     switch state {
                     case "VALID":
+                        /* 1.5.1: Apple refuses testers while no build is ready; try again now */
+                        if messages.contains(where: { $0.hasPrefix("TestFlight:") && ($0.contains("409") || $0.contains("cannot be assigned") || $0.contains("once the build is ready")) }) {
+                            messages += await ForkTestFlight.ensureInternalGroup(bundleID: fresh.projectConfig.bundleid ?? "")
+                        }
                         self.setStatus("\(name) \(version) (\(build)): ✅ ready in App Store Connect and TestFlight.", messages: messages, follow: true)
                         return
                     case "INVALID", "FAILED":

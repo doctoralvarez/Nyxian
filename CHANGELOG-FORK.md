@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.8.7 — 2026-11-23
+
+- TestFlight after Xcode on Mac: Apple answers 409 "Tester(s) cannot be
+  assigned" while the app has no processed build yet. Nyxian now says so
+  plainly and adds you to the internal group "Yo" again as soon as Apple
+  marks the build VALID (ForkAppStoreConnect 1.5.1, ForkAppStorePreflight
+  1.4.1).
+
 ## 2.8.6 — 2026-11-23
 
 - App Store (Xcode) workflow 1.6.0: the export signs **manually**. A new

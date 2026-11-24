@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.4.0
+ Fork doctoralvarez/Nyxian — version 1.4.1
  Changelog:
+  - 1.4.1 (2026-11-23): TestFlight: Apple answers 409 "Tester(s) cannot be
+    assigned" while the app has no processed build yet; Nyxian says it will
+    add you once the build is ready (and does, see ForkAppStoreConnect 1.5.1).
   - 1.4.0 (2026-11-23): an app asking for iCloud gets a ⓘ in Preflight that
     copies its container's name (iCloud.<bundle id>) and opens
     developer.apple.com › Identifiers › iCloud Containers, where + makes it
@@ -969,7 +972,12 @@ enum ForkTestFlight {
             }
             notes.append("TestFlight: \(email) added to \"\(groupName)\". For a new app, accept its invitation e-mail once; after that each build appears in TestFlight by itself.")
         } catch {
-            notes.append("TestFlight: \(error.localizedDescription)")
+            let text = error.localizedDescription
+            if text.contains("409") || text.localizedCaseInsensitiveContains("cannot be assigned") {
+                notes.append("TestFlight: Apple adds testers once the build is ready; Nyxian will add you then (409 for now).")
+            } else {
+                notes.append("TestFlight: \(text)")
+            }
         }
         return notes
     }
