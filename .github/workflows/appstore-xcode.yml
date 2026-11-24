@@ -255,6 +255,40 @@ jobs:
           '
           echo "Key checked"
 
+      - name: Profile test (selftest-prof only)
+        if: startsWith(github.event.inputs.request, 'selftest-prof-')
+        run: |
+          KEYFILE="$WORK/key/AuthKey_$ASC_KID.p8" ruby -ropenssl -rjson -rbase64 -rnet/http -e '
+            def b64(s) = Base64.urlsafe_encode64(s, padding: false)
+            key = OpenSSL::PKey.read(File.read(ENV["KEYFILE"])); now = Time.now.to_i
+            input = b64({alg: "ES256", kid: ENV["ASC_KID"], typ: "JWT"}.to_json) + "." + b64({iss: ENV["ASC_ISS"], iat: now, exp: now + 600, aud: "appstoreconnect-v1"}.to_json)
+            der = key.sign(OpenSSL::Digest::SHA256.new, input)
+            jwt = input + "." + b64(OpenSSL::ASN1.decode(der).value.map { |i| i.value.to_s(2).rjust(32, "\0")[-32..] }.join)
+            call = lambda do |method, path, body = nil|
+              uri = URI("https://api.appstoreconnect.apple.com" + path)
+              req = (method == :post ? Net::HTTP::Post : method == :delete ? Net::HTTP::Delete : Net::HTTP::Get).new(uri)
+              req["Authorization"] = "Bearer " + jwt; req["Content-Type"] = "application/json"
+              req.body = body.to_json if body
+              res = Net::HTTP.start(uri.host, uri.port, use_ssl: true) { |h| h.request(req) }
+              [res.code, (JSON.parse(res.body) rescue {})]
+            end
+            c, certs = call.(:get, "/v1/certificates?filter[certificateType]=DISTRIBUTION,IOS_DISTRIBUTION&limit=20")
+            puts "certificates GET #{c}: " + (certs["data"] || []).map { |x| "#{x["attributes"]["certificateType"]} #{x["attributes"]["displayName"]} exp #{x["attributes"]["expirationDate"].to_s[0,10]}" }.join(" | ")
+            c, b = call.(:get, "/v1/bundleIds?filter[identifier]=com.mioftalmologo.FocusPocus&limit=5")
+            bid = (b["data"] || []).find { |x| x["attributes"]["identifier"] == "com.mioftalmologo.FocusPocus" }
+            puts "bundleId GET #{c}: #{bid ? "found" : "missing"}"
+            exit 0 unless bid && certs["data"] && !certs["data"].empty?
+            body = {data: {type: "profiles", attributes: {name: "Nyxian test #{now}", profileType: "IOS_APP_STORE"},
+                    relationships: {bundleId: {data: {type: "bundleIds", id: bid["id"]}},
+                                    certificates: {data: [{type: "certificates", id: certs["data"][0]["id"]}]}}}}
+            c, r = call.(:post, "/v1/profiles", body)
+            puts "profile POST #{c}: " + ((r["errors"] || []).map { |x| "#{x["code"]}: #{x["detail"]}" }.join(" | "))
+            if c == "201"
+              c2, _ = call.(:delete, "/v1/profiles/#{r["data"]["id"]}")
+              puts "profile DELETE #{c2}"
+            end
+          '
+
       - name: Archive
         run: |
           printf '{"ok":false,"stage":"archive"}' > "$WORK/out/result.json"
