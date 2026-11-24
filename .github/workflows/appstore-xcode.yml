@@ -1,5 +1,11 @@
-# fork doctoralvarez/Nyxian — version 1.5.0
+# fork doctoralvarez/Nyxian — version 1.6.0
 # Changelog:
+#  - 1.6.0 (2026-11-23): the export signs MANUALLY with an Apple Distribution
+#    certificate and App Store profiles made for this upload through the App
+#    Store Connect API (tools/fork/appstore/api_signing.rb), removed again at
+#    the end. Xcode's automatic signing with the key failed at export too
+#    ("exportArchive Authentication failed" / "No profiles"), while the API
+#    creates them fine. aps-environment is set to production for the export.
 #  - 1.5.0 (2026-11-23): upload archives UNSIGNED and signs the archive
 #    locally without a certificate (codesign -s -) with each target's
 #    entitlements; the export then signs for the App Store with the key.
@@ -315,6 +321,10 @@ jobs:
               [ -d "$B" ] || continue
               N=$(basename "$B"); N="${N%.*}"
               ENT="$WORK/request/$N.entitlements"
+              if [ -f "$ENT" ] && /usr/libexec/PlistBuddy -c "Print :aps-environment" "$ENT" >/dev/null 2>&1; then
+                # App Store builds carry the production push environment
+                /usr/libexec/PlistBuddy -c "Set :aps-environment production" "$ENT"
+              fi
               if [ -f "$ENT" ]; then
                 codesign --force --sign - --entitlements "$ENT" --generate-entitlement-der "$B" >> "$WORK/out/log.txt" 2>&1
               else
@@ -326,12 +336,43 @@ jobs:
           fi
           echo "Archived"
 
+      - name: Sign for the App Store (API)
+        if: github.event.inputs.mode != 'check'
+        run: |
+          printf '{"ok":false,"stage":"signing"}' > "$WORK/out/result.json"
+          APP=$(ls -d "$WORK/App.xcarchive/Products/Applications/"*.app | head -1)
+          BUNDLES=()
+          for B in "$APP" "$APP"/PlugIns/*.appex "$APP"/Extensions/*.appex; do
+            [ -d "$B" ] || continue
+            BUNDLES+=("$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$B/Info.plist")")
+          done
+          TEAM=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("teamID") or "")' "$WORK/request/manifest.json")
+          ruby nyxian/tools/fork/appstore/api_signing.rb setup "$WORK" "$TEAM" "${BUNDLES[@]}"
+          # a keychain of its own with that certificate
+          KC="$WORK/sign/upload.keychain-db"; KCPASS=$(openssl rand -hex 16)
+          security create-keychain -p "$KCPASS" "$KC"
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p "$KCPASS" "$KC"
+          if ! security import "$WORK/sign/dist.p12" -k "$KC" -P "$(cat "$WORK/sign/dist.pass")" -T /usr/bin/codesign -T /usr/bin/xcodebuild >/dev/null 2>&1; then
+            security import "$WORK/sign/dist.key" -k "$KC" -T /usr/bin/codesign -T /usr/bin/xcodebuild >/dev/null
+            security import "$WORK/sign/dist.cer" -k "$KC" >/dev/null
+          fi
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPASS" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          echo "KC=$KC" >> "$GITHUB_ENV"
+          IDS=$(security find-identity -v -p codesigning "$KC" | grep -c "Apple Distribution" || true)
+          echo "API signing: $IDS Apple Distribution identity in the keychain" >> "$WORK/out/log.txt"
+          [ "$IDS" -ge 1 ] || { echo "error: the Apple Distribution certificate could not be added to the keychain" >> "$WORK/out/log.txt"; exit 1; }
+          echo "Signing ready"
+
       - name: Upload to App Store Connect
         if: github.event.inputs.mode != 'check'
         run: |
           printf '{"ok":false,"stage":"upload"}' > "$WORK/out/result.json"
+          # manual signature with the certificate and profiles of the previous step;
+          # the key only authenticates the upload
           xcodebuild -exportArchive -archivePath "$WORK/App.xcarchive" -exportPath "$WORK/export" \
-            -exportOptionsPlist "$WORK/request/ExportOptions-upload.plist" -allowProvisioningUpdates \
+            -exportOptionsPlist "$WORK/sign/ExportOptions-manual.plist" \
             -authenticationKeyPath "$WORK/key/AuthKey_$ASC_KID.p8" -authenticationKeyID "$ASC_KID" -authenticationKeyIssuerID "$ASC_ISS" \
             >> "$WORK/out/log.txt" 2>&1
           echo "Uploaded"
@@ -398,5 +439,10 @@ jobs:
         if: always()
         run: |
           case "$REQUEST" in selftest-*) ;; *) gh release delete-asset "$RELEASE" "$REQUEST.zip" -R "$SDK_REPO" -y >/dev/null 2>&1 || true ;; esac
+          # the certificate and profiles made for this upload go away again
+          if [ -n "$WORK" ] && [ -f "$WORK/sign/cleanup.json" ] && [ -f nyxian/tools/fork/appstore/api_signing.rb ]; then
+            ruby nyxian/tools/fork/appstore/api_signing.rb cleanup "$WORK" || true
+          fi
+          [ -n "$KC" ] && security delete-keychain "$KC" >/dev/null 2>&1 || true
           [ -n "$WORK" ] && rm -rf "$WORK"
           echo "Cleaned"

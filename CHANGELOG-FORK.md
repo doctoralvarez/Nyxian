@@ -4,6 +4,18 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.8.6 — 2026-11-23
+
+- App Store (Xcode) workflow 1.6.0: the export signs **manually**. A new
+  script, `tools/fork/appstore/api_signing.rb`, creates for each upload an
+  Apple Distribution certificate and an App Store profile per bundle ID
+  through the App Store Connect API, puts them in a keychain of its own, and
+  removes them at the end (already uploaded builds are not affected). Xcode's
+  automatic signing with the key failed at export as well ("exportArchive
+  Authentication failed" / "No profiles"), while the API itself creates
+  certificates and profiles fine (checked with a self-test). Push builds get
+  `aps-environment = production`.
+
 ## 2.8.5 — 2026-11-23
 
 - App Store (Xcode) workflow 1.5.0: uploads archive **unsigned**, then sign the
