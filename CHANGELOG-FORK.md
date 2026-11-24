@@ -4,6 +4,14 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.8.4 — 2026-11-23
+
+- App Store (Xcode) workflow 1.4.0: self-test request IDs
+  `selftest-sign-<TEAMID>-...` archive the widget probe signed with the App
+  Store Connect key for that team, to tell a signing problem of one app from
+  one of the whole account. (The key check also covers bundle IDs,
+  certificates and profiles since 1.3.1.)
+
 ## 2.8.3 — 2026-11-23
 
 - App Store (Xcode) workflow 1.3.0: before archiving it checks the App Store

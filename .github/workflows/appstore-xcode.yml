@@ -1,5 +1,8 @@
-# fork doctoralvarez/Nyxian — version 1.3.1
+# fork doctoralvarez/Nyxian — version 1.4.0
 # Changelog:
+#  - 1.4.0 (2026-11-23): request IDs "selftest-sign-<TEAMID>-..." build the
+#    probe SIGNED (archive with the key, as a real upload) for that team, to
+#    tell whether a signing failure is about one app or about the account.
 #  - 1.3.1 (2026-11-23): the key check also asks for bundle IDs, certificates
 #    and profiles (what Xcode needs to sign) and prints each answer.
 #  - 1.3.0 (2026-11-23): new step "Check the App Store Connect key" before
@@ -150,8 +153,23 @@ jobs:
             cp nyxian/tools/fork/widget-probe/App/*.swift "$WORK/request/ProbeApp/"
             cp nyxian/tools/fork/widget-probe/Widget/*.swift "$WORK/request/ProbeWidget/"
             cp nyxian/tools/fork/appstore/selftest-manifest.json "$WORK/request/manifest.json"
-            echo "MODE=check" >> "$GITHUB_ENV"
-            echo "Self-test request"; exit 0 ;;
+            case "$REQUEST" in
+              selftest-sign-*)
+                # signed probe for the team in the request ID (selftest-sign-TEAMID-...)
+                TEAM=$(printf '%s' "$REQUEST" | cut -d- -f3)
+                python3 - "$WORK/request/manifest.json" "$TEAM" <<'PY'
+          import json, sys
+          p, team = sys.argv[1], sys.argv[2]
+          m = json.load(open(p)); m["teamID"] = team
+          m["app"]["entitlements"].pop("get-task-allow", None)
+          json.dump(m, open(p, "w"))
+          PY
+                echo "Self-test request (signed, team $TEAM)" ;;
+              *)
+                echo "MODE=check" >> "$GITHUB_ENV"
+                echo "Self-test request" ;;
+            esac
+            exit 0 ;;
           esac
           gh release download "$RELEASE" -R "$SDK_REPO" -p "$REQUEST.zip" -D "$WORK" >/dev/null
           ditto -x -k "$WORK/$REQUEST.zip" "$WORK/request"
