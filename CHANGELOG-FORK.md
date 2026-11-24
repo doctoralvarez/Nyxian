@@ -4,6 +4,16 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.8.5 — 2026-11-23
+
+- App Store (Xcode) workflow 1.5.0: uploads archive **unsigned**, then sign the
+  archive locally without a certificate (`codesign -s -`) with each target's
+  entitlements, and the export signs for the App Store with the key. Archiving
+  signed made Xcode create iOS App Development profiles with the API key,
+  which Apple refuses ("Authentication failed … bearer token" + "No profiles …
+  iOS App Development"), so every upload failed. The export does not need
+  development profiles.
+
 ## 2.8.4 — 2026-11-23
 
 - App Store (Xcode) workflow 1.4.0: self-test request IDs

@@ -1,5 +1,12 @@
-# fork doctoralvarez/Nyxian — version 1.4.0
+# fork doctoralvarez/Nyxian — version 1.5.0
 # Changelog:
+#  - 1.5.0 (2026-11-23): upload archives UNSIGNED and signs the archive
+#    locally without a certificate (codesign -s -) with each target's
+#    entitlements; the export then signs for the App Store with the key.
+#    Archiving signed made Xcode create iOS App Development profiles with the
+#    API key, which Apple refuses ("Authentication failed ... bearer token"
+#    and "No profiles ... iOS App Development"); the export does not need
+#    them. Fixes uploads failing for every app since 2026-11-23.
 #  - 1.4.0 (2026-11-23): request IDs "selftest-sign-<TEAMID>-..." build the
 #    probe SIGNED (archive with the key, as a real upload) for that team, to
 #    tell whether a signing failure is about one app or about the account.
@@ -255,14 +262,9 @@ jobs:
           cd "$WORK/request"
           xcodebuild -version > "$WORK/out/xcode-version.txt"
           ARGS=(-project "$SCHEME.xcodeproj" -scheme "$SCHEME" -configuration Release -destination "generic/platform=iOS" -archivePath "$WORK/App.xcarchive")
-          if [ "$MODE" = "check" ]; then
-            xcodebuild archive "${ARGS[@]}" CODE_SIGNING_ALLOWED=NO >> "$WORK/out/log.txt" 2>&1
-          else
-            # key written and checked by the previous step (ASC_KID / ASC_ISS)
-            xcodebuild archive "${ARGS[@]}" -allowProvisioningUpdates \
-              -authenticationKeyPath "$WORK/key/AuthKey_$ASC_KID.p8" -authenticationKeyID "$ASC_KID" -authenticationKeyIssuerID "$ASC_ISS" \
-              >> "$WORK/out/log.txt" 2>&1
-          fi
+          # unsigned in both modes: signing at archive time would make Xcode create
+          # iOS App Development profiles with the key, which Apple refuses
+          xcodebuild archive "${ARGS[@]}" CODE_SIGNING_ALLOWED=NO >> "$WORK/out/log.txt" 2>&1
           # the archive has to hold the app's executable, or there is nothing to sign
           APP=$(ls -d "$WORK/App.xcarchive/Products/Applications/"*.app 2>/dev/null | head -1)
           EXE=$( [ -n "$APP" ] && /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist" 2>/dev/null )
@@ -271,6 +273,23 @@ jobs:
             exit 1
           fi
           echo "SWIFT_FILES=$(grep -c '^SwiftCompile\|^CompileSwift' "$WORK/out/log.txt" || true)" >> "$GITHUB_ENV"
+          if [ "$MODE" != "check" ]; then
+            # the export keeps the entitlements of the archive's signature: sign
+            # each extension, then the app, without a certificate, with its own
+            # entitlements (the export re-signs everything for the App Store)
+            for B in "$APP"/PlugIns/*.appex "$APP"/Extensions/*.appex "$APP"; do
+              [ -d "$B" ] || continue
+              N=$(basename "$B"); N="${N%.*}"
+              ENT="$WORK/request/$N.entitlements"
+              if [ -f "$ENT" ]; then
+                codesign --force --sign - --entitlements "$ENT" --generate-entitlement-der "$B" >> "$WORK/out/log.txt" 2>&1
+              else
+                codesign --force --sign - "$B" >> "$WORK/out/log.txt" 2>&1
+              fi
+              echo "Signed for export: $N.$( [ "$B" = "$APP" ] && echo app || echo appex ) $( [ -f "$ENT" ] && echo "with $N.entitlements" || echo "(no entitlements)")" >> "$WORK/out/log.txt"
+              codesign -d --entitlements - --xml "$B" 2>/dev/null | plutil -convert json -o - - 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print("  entitlements:", ", ".join(sorted(d)))' >> "$WORK/out/log.txt" 2>&1 || true
+            done
+          fi
           echo "Archived"
 
       - name: Upload to App Store Connect
