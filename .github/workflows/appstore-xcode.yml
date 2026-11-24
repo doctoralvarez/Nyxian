@@ -1,5 +1,7 @@
-# fork doctoralvarez/Nyxian — version 1.3.0
+# fork doctoralvarez/Nyxian — version 1.3.1
 # Changelog:
+#  - 1.3.1 (2026-11-23): the key check also asks for bundle IDs, certificates
+#    and profiles (what Xcode needs to sign) and prints each answer.
 #  - 1.3.0 (2026-11-23): new step "Check the App Store Connect key" before
 #    archiving (mode upload): trims spaces / line breaks from ASC_KEY_ID and
 #    ASC_ISSUER_ID, rebuilds ASC_KEY_P8 when it was pasted on one line (as the
@@ -206,20 +208,24 @@ jobs:
             der = key.sign(OpenSSL::Digest::SHA256.new, input)
             rs = OpenSSL::ASN1.decode(der).value.map { |i| i.value.to_s(2).rjust(32, "\0")[-32..] }.join
             jwt = input + "." + b64(rs)
-            uri = URI("https://api.appstoreconnect.apple.com/v1/apps?limit=1")
-            req = Net::HTTP::Get.new(uri); req["Authorization"] = "Bearer " + jwt
-            begin
-              res = Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: 15, read_timeout: 20) { |h| h.request(req) }
-            rescue => e
-              log.("warning: could not reach App Store Connect to check the key (#{e.class}); going on")
-              exit 0
-            end
-            if res.code == "200"
-              log.("Key check: App Store Connect accepts the key (HTTP 200)")
-            else
-              detail = (JSON.parse(res.body)["errors"] || []).map { |x| x["detail"] || x["title"] }.join(" ") rescue res.body.to_s[0, 200]
-              log.("error: App Store Connect rejects the key (HTTP #{res.code}): #{detail} Check ASC_KEY_ID, ASC_ISSUER_ID (team key, not an individual key) and ASC_KEY_P8 in the repository secrets.")
-              exit 1
+            # the same kinds of things Xcode needs to sign: apps, bundle IDs, certificates, profiles
+            ["apps", "bundleIds", "certificates", "profiles"].each do |what|
+              uri = URI("https://api.appstoreconnect.apple.com/v1/#{what}?limit=1")
+              req = Net::HTTP::Get.new(uri); req["Authorization"] = "Bearer " + jwt
+              begin
+                res = Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: 15, read_timeout: 20) { |h| h.request(req) }
+              rescue => e
+                log.("warning: could not reach App Store Connect to check the key (#{e.class}); going on")
+                exit 0
+              end
+              if res.code == "200"
+                log.("Key check: #{what} HTTP 200"); puts "Key check: #{what} HTTP 200"
+              else
+                detail = (JSON.parse(res.body)["errors"] || []).map { |x| [x["code"], x["detail"] || x["title"]].compact.join(": ") }.join(" | ") rescue res.body.to_s[0, 300]
+                log.("error: App Store Connect rejects the key for #{what} (HTTP #{res.code}): #{detail}")
+                puts "Key check: #{what} HTTP #{res.code}: #{detail}"
+                exit 1
+              end
             end
           '
           echo "Key checked"
