@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-# fork doctoralvarez/Nyxian — version 1.2.0
+# fork doctoralvarez/Nyxian — version 1.3.0
 # Changelog:
+#  - 1.3.0 (2026-11-26): UIRequiresFullScreen = NO is left out (it is the
+#    default, and iOS 26 deprecates the key: Xcode warned about it in every
+#    target); a YES stays.
 #  - 1.2.0 (2026-11-26): a folder inside Resources stays a folder in the app
 #    (Resources/Sub/data.json is Sub/data.json, as Nyxian copies it; before it
 #    was flattened to data.json), and Info-extra.plist is no longer copied
@@ -78,6 +81,8 @@ def clean_info(info):
     for key, value in (info or {}).items():
         if key in IDENTITY_KEYS or key.startswith("NX") or key.startswith("DT") or key.startswith("LDE"):
             continue
+        if key == "UIRequiresFullScreen" and value is False:
+            continue  # the default; iOS 26 deprecates the key
         value = translate(value)
         if value is not None:
             out[key] = value

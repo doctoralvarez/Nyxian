@@ -4,6 +4,12 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+
+## 2.8.9 — 2026-11-26
+
+- App Store (Xcode): make_project.py 1.3.0 leaves out `UIRequiresFullScreen = NO`
+  (the default; iOS 26 deprecates the key and Xcode warned in every target).
+
 ## 2.8.8 — 2026-11-26
 
 - Closing an app within 15 s of Run (close button or switcher swipe) no longer
