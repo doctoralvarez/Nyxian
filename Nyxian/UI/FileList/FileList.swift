@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.23.0
+ Fork doctoralvarez/Nyxian — version 1.23.1
  Changelog:
+  - 1.23.1 (2026-11-26): closing an app soon after Run (close button, switcher)
+    really shows no SIGKILL notice now: the window session says you closed
+    it (the window lookup of 1.22.1 did not find it, so the notice stayed).
   - 1.23.0 (2026-11-22): Export › Capabilities: Push Notifications
     (Increased Memory Limit / Extended Virtual Addressing: Xcode on Mac).
     (aps-environment). With iCloud and App Groups, Settings › App Store Connect
@@ -4253,7 +4256,15 @@ final class ForkLaunchWatch: NSObject, PEProcessObserver {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.lookForWindow() }
     }
 
+    /* fork 1.23.1: pids whose window you closed (NXWindowSessionApplication posts it before ending them) */
+    private static var closedByUser = Set<pid_t>()
+    private static let closedObserver: NSObjectProtocol = NotificationCenter.default.addObserver(
+        forName: Notification.Name("ForkProcessClosedByUser"), object: nil, queue: .main) { note in
+        if let pid = (note.object as? NSNumber)?.int32Value { closedByUser.insert(pid) }
+    }
+
     static func watch(_ pid: pid_t, name: String) {
+        _ = closedObserver
         guard pid > 0, let process = PEProcessManager.shared().process(forProcessIdentifier: pid) else {
             NXAlertDiagnosticPresenter.notifyUser(with: .error, withMessage: "\(name) could not be started. Settings › Management › Kernel Log says why.", withDelay: 0.0)
             return
@@ -4284,7 +4295,8 @@ final class ForkLaunchWatch: NSObject, PEProcessObserver {
         let pid = self.pid
         let name = self.name
         DispatchQueue.main.async {
-            guard ForkLaunchWatch.watching.removeValue(forKey: pid) != nil, seconds < 15 else { return }
+            let closedByYou = ForkLaunchWatch.closedByUser.remove(pid) != nil
+            guard ForkLaunchWatch.watching.removeValue(forKey: pid) != nil, seconds < 15, !closedByYou else { return }
             let signal = code & 0x7f
             /* fork 1.22.1: closed by you (switcher, close button, Stop) after its window showed: nothing to tell */
             if self.sawWindow && (signal == SIGKILL || signal == SIGTERM) { return }

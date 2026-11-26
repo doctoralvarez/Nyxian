@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-# fork doctoralvarez/Nyxian — version 1.1.0
+# fork doctoralvarez/Nyxian — version 1.2.0
 # Changelog:
+#  - 1.2.0 (2026-11-26): a folder inside Resources stays a folder in the app
+#    (Resources/Sub/data.json is Sub/data.json, as Nyxian copies it; before it
+#    was flattened to data.json), and Info-extra.plist is no longer copied
+#    into the app as a file (its keys already go to Info.plist).
 #  - 1.1.0 (2026-11-23): the archive had no executable ("The archive contains
 #    nothing that can be signed"): the source paths started with "../" and the
 #    exclusion of hidden files ("**/.*") also matched "..", so no Swift file was
@@ -136,12 +140,19 @@ def target_sources(folder, rel):
     sources = [{
         "path": rel,
         "excludes": ["Config/**", "Resources/**", ".nyxian/**", "**/.DS_Store", "**/.git/**", "**/*.xcodeproj/**",
-                     "**/Info.plist", "**/*.entitlements"],
+                     "**/Info.plist", "**/*.entitlements", "Info-extra.plist"],
     }]
     res = os.path.join(folder, "Resources")
-    if os.path.isdir(res) and any(not n.startswith(".") for n in os.listdir(res)):
-        sources.append({"path": os.path.join(rel, "Resources"), "buildPhase": "resources",
-                        "excludes": ["**/.DS_Store", "Info.plist", "*.car"]})
+    if os.path.isdir(res):
+        # 1.2.0: files go to the bundle's root; a folder stays a folder (Resources/Sub/x.json -> Sub/x.json), as Nyxian copies them
+        for name in sorted(os.listdir(res)):
+            if name.startswith(".") or name in ("Info.plist",) or name.endswith(".car"):
+                continue
+            path = os.path.join(rel, "Resources", name)
+            if os.path.isdir(os.path.join(res, name)) and not name.endswith((".xcassets", ".lproj", ".bundle", ".storyboard", ".xib")):
+                sources.append({"path": path, "type": "folder", "buildPhase": "resources"})
+            else:
+                sources.append({"path": path, "buildPhase": "resources"})
     return sources
 
 

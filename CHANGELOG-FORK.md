@@ -4,6 +4,16 @@ Fork version is tracked here and in each modified file's header.
 The app's `VERSION` in `Config.xcconfig` is intentionally left untouched:
 Nyxian uses it to check compatibility with emexLabs OTA updates.
 
+## 2.8.8 — 2026-11-26
+
+- Closing an app within 15 s of Run (close button or switcher swipe) no longer
+  shows "closed … s after starting: SIGKILL". The window session now says it
+  was you before ending the app; the window lookup of 2.3.4 could miss it.
+- Xcode on Mac (make_project.py 1.2.0): a folder inside Resources stays a
+  folder in the app (Resources/Sub/data.json → Sub/data.json, as Nyxian's own
+  build copies it; it was flattened), and Info-extra.plist is no longer copied
+  into the app as a stray file.
+
 ## 2.8.7 — 2026-11-23
 
 - TestFlight after Xcode on Mac: Apple answers 409 "Tester(s) cannot be

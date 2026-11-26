@@ -21,8 +21,11 @@
 */
 
 /*
- Fork doctoralvarez/Nyxian — version 1.1.0
+ Fork doctoralvarez/Nyxian — version 1.2.0
  Changelog:
+  - 1.2.0 (2026-11-26): closing an app's window (close button, switcher
+    swipe) posts "ForkProcessClosedByUser" with its pid before ending it, so
+    the launch watch does not report that SIGKILL as a crash.
   - 1.1.0 (2026-11-18): NXForkIsPadLayout and the iPhone Duo checks; the
     iPad-only window behavior here also applies to iPhone Duo's inner screen.
   - 1.0.0 (2026-11-15): apps run inside Nyxian follow light / dark mode. Their
@@ -434,6 +437,11 @@ UIUserInterfaceStyle NXForkAppearanceStyle(void)
     {
         /* bye bye presenter */
         [_scenePresenter invalidate];
+    }
+    /* fork 1.2.0: you closed it; the launch watch must not call that a crash */
+    if(_process != nil)
+    {
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"ForkProcessClosedByUser" object:@(_process.pid)];
     }
     [_process forceTerminate];
     
